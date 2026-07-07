@@ -1,9 +1,10 @@
 """Data models and configurations for the Market Structure Engine."""
 
 from dataclasses import dataclass, field
-from enum import Enum
-import pandas as pd
+from datetime import datetime
+from enum import Enum, auto
 
+from core.models import Bar, Timeframe
 from market_structure.swing_models import Swing
 
 
@@ -76,7 +77,7 @@ class MarketStructure:
         sequence_number: Sequential update index (0-indexed).
     """
     structure_id: str
-    timestamp: pd.Timestamp
+    timestamp: datetime
     trend: StructureTrend
     last_major_high: Swing | None = None
     last_major_low: Swing | None = None
@@ -90,3 +91,106 @@ class MarketStructure:
     external_structure: dict = field(default_factory=dict)
     confidence: float = 0.0
     sequence_number: int = 0
+
+
+class BreakType(Enum):
+    """Types of market structure breaks."""
+    BOS = "BOS"
+    CHoCH = "CHoCH"
+
+
+@dataclass(frozen=True)
+class StructureBreak:
+    """Represents a validated structure break (BOS or CHoCH)."""
+    break_id: str
+    break_type: BreakType
+    broken_swing: Swing
+    breaking_bar: Bar
+    timestamp: datetime
+
+
+@dataclass
+class StructureState:
+    """Active structural trend configuration and historical breaks tracker."""
+    trend: StructureTrend = StructureTrend.UNKNOWN
+    confidence: float = 0.0
+    active_major_high: Swing | None = None
+    active_major_low: Swing | None = None
+    breaks_history: list[StructureBreak] = field(default_factory=list)
+
+
+@dataclass
+class SwingGraph:
+    """Direct, queryable network of swing high and low pivots."""
+    _nodes: list[Swing] = field(default_factory=list, repr=False)
+    edges: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def nodes(self) -> list[Swing]:
+        """Exposes a read-only copy of the swing graph nodes."""
+        return list(self._nodes)
+
+    def add_swing(self, swing: Swing) -> None:
+        """Adds a swing node to the graph."""
+        self._nodes.append(swing)
+        if swing.previous_id:
+            self.edges.setdefault(swing.previous_id, []).append(swing.id)
+
+    def get_latest_high(self) -> Swing | None:
+        """Returns the most recent confirmed swing high."""
+        highs = [s for s in self._nodes if s.type.name == "HIGH"]
+        return highs[-1] if highs else None
+
+    def get_latest_low(self) -> Swing | None:
+        """Returns the most recent confirmed swing low."""
+        lows = [s for s in self._nodes if s.type.name == "LOW"]
+        return lows[-1] if lows else None
+
+    def find_equal_highs(self, tolerance: float = 0.0001) -> list[Swing]:
+        """Finds groups of swing highs close in price (potential double/triple highs)."""
+        highs = [s for s in self._nodes if s.type.name == "HIGH"]
+        equal_highs = []
+        for i, s1 in enumerate(highs):
+            for s2 in highs[i + 1:]:
+                if abs(s1.price - s2.price) <= tolerance:
+                    if s1 not in equal_highs:
+                        equal_highs.append(s1)
+                    if s2 not in equal_highs:
+                        equal_highs.append(s2)
+        return equal_highs
+
+    def find_equal_lows(self, tolerance: float = 0.0001) -> list[Swing]:
+        """Finds groups of swing lows close in price (potential double/triple lows)."""
+        lows = [s for s in self._nodes if s.type.name == "LOW"]
+        equal_lows = []
+        for i, s1 in enumerate(lows):
+            for s2 in lows[i + 1:]:
+                if abs(s1.price - s2.price) <= tolerance:
+                    if s1 not in equal_lows:
+                        equal_lows.append(s1)
+                    if s2 not in equal_lows:
+                        equal_lows.append(s2)
+        return equal_lows
+
+
+@dataclass
+class MarketState:
+    """Domain aggregate root container representing instrument market timeline state."""
+    symbol: str
+    timeframe: Timeframe
+    _bars: list[Bar] = field(default_factory=list, repr=False)
+    swing_graph: SwingGraph = field(default_factory=SwingGraph)
+    structure_state: StructureState = field(default_factory=StructureState)
+
+    @property
+    def bars(self) -> list[Bar]:
+        """Exposes a read-only copy of the price bars."""
+        return list(self._bars)
+
+    def append_bar(self, bar: Bar) -> None:
+        """Appends a new bar to the timeframe timeline."""
+        self._bars.append(bar)
+
+    def get_latest_bar(self) -> Bar | None:
+        """Returns the most recently closed bar."""
+        return self._bars[-1] if self._bars else None

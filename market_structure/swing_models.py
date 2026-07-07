@@ -1,6 +1,7 @@
 """Data models and parameters for the Swing Detection Engine."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 import pandas as pd
 
@@ -97,7 +98,7 @@ class Swing:
         price_distance: Price distance to the chronologically preceding swing in the graph.
     """
     id: str
-    timestamp: pd.Timestamp
+    timestamp: datetime
     index: int
     price: float
     type: SwingType

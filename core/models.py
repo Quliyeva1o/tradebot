@@ -97,3 +97,32 @@ class AccountInfo:
     free_margin: float
     margin_level: float = 0.0
     currency: str = "USD"
+
+
+class SignalDirection(Enum):
+    """Supported signal execution directions."""
+    BUY = auto()
+    SELL = auto()
+
+
+@dataclass(frozen=True)
+class ConfluenceMetadata:
+    """Carries structured technical confluence parameters justifying a trade signal."""
+    setup_type: str  # e.g., "OrderBlockMitigation", "LiquiditySweep", "FVGRefill"
+    invalidation_type: str  # e.g., "Structural", "ATROffset"
+    risk_reward_ratio: float = 0.0
+    metrics: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TradeSignal:
+    """Represents a generated signal validation opportunity."""
+    signal_id: str
+    symbol: str
+    timeframe: Timeframe
+    direction: SignalDirection
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    confluence: ConfluenceMetadata = field(default_factory=lambda: ConfluenceMetadata("Unknown", "None"))
+    timestamp: datetime = field(default_factory=datetime.now)
