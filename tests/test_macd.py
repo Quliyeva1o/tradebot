@@ -3,7 +3,6 @@
 import pandas as pd
 import pytest
 
-from indicators.exceptions import DataValidationError, EmptyDataError
 from indicators.ema import ema
 from indicators.macd import macd
 
@@ -49,12 +48,12 @@ def test_macd_fast_ge_slow() -> None:
     series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], name="close")
 
     # fast_period == slow_period
-    with pytest.raises(DataValidationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         macd(series, fast_period=12, slow_period=12)
     assert "must be less than slow_period" in str(exc_info.value)
 
     # fast_period > slow_period
-    with pytest.raises(DataValidationError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         macd(series, fast_period=15, slow_period=10)
     assert "must be less than slow_period" in str(exc_info.value)
 
@@ -64,15 +63,15 @@ def test_macd_invalid_period() -> None:
     series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], name="close")
 
     # fast_period <= 0
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         macd(series, fast_period=0, slow_period=26, signal_period=9)
 
     # slow_period <= 0
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         macd(series, fast_period=12, slow_period=-5, signal_period=9)
 
     # signal_period <= 0
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         macd(series, fast_period=12, slow_period=26, signal_period=0)
 
 
@@ -80,5 +79,5 @@ def test_macd_empty_series() -> None:
     """Verifies that EmptyDataError is raised when the input series is empty."""
     series = pd.Series([], dtype=float)
 
-    with pytest.raises(EmptyDataError):
+    with pytest.raises(ValueError):
         macd(series, fast_period=12, slow_period=26, signal_period=9)

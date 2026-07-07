@@ -3,7 +3,6 @@
 import pandas as pd
 import pytest
 
-from indicators.exceptions import DataValidationError, EmptyDataError
 from indicators.rsi import rsi
 
 
@@ -79,10 +78,10 @@ def test_rsi_invalid_period() -> None:
     """Verifies that DataValidationError is raised when period <= 0."""
     series = pd.Series([1.0, 2.0, 3.0, 4.0])
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         rsi(series, period=0)
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         rsi(series, period=-5)
 
 
@@ -90,7 +89,7 @@ def test_rsi_short_series() -> None:
     """Verifies that DataValidationError is raised when series length < period."""
     series = pd.Series([1.0, 2.0, 3.0])
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         rsi(series, period=4)
 
 
@@ -98,5 +97,5 @@ def test_rsi_empty_series() -> None:
     """Verifies that EmptyDataError is raised when series is empty."""
     series = pd.Series([], dtype=float)
 
-    with pytest.raises(EmptyDataError):
+    with pytest.raises(ValueError):
         rsi(series, period=3)

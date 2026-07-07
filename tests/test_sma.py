@@ -3,7 +3,6 @@
 import pandas as pd
 import pytest
 
-from indicators.exceptions import DataValidationError, EmptyDataError
 from indicators.sma import sma
 
 
@@ -47,10 +46,10 @@ def test_sma_invalid_period() -> None:
     """Verifies that DataValidationError is raised when period <= 0."""
     series = pd.Series([1.0, 2.0, 3.0])
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         sma(series, period=0)
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         sma(series, period=-5)
 
 
@@ -58,5 +57,5 @@ def test_sma_empty_series() -> None:
     """Verifies that EmptyDataError is raised when series is empty."""
     series = pd.Series([], dtype=float)
 
-    with pytest.raises(EmptyDataError):
+    with pytest.raises(ValueError):
         sma(series, period=3)

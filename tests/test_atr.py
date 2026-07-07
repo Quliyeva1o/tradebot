@@ -3,7 +3,6 @@
 import pandas as pd
 import pytest
 
-from indicators.exceptions import DataValidationError, EmptyDataError, MissingColumnError
 from indicators.atr import atr
 
 
@@ -57,19 +56,19 @@ def test_atr_missing_columns() -> None:
     })
 
     # Then
-    with pytest.raises(MissingColumnError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         atr(df_missing_close, period=3)
-    assert "close" in exc_info.value.missing_cols
+    assert "close" in str(exc_info.value)
 
     # Given: missing multiple columns
     df_missing_all = pd.DataFrame({
         "open": [10.0, 11.0]
     })
-    with pytest.raises(MissingColumnError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         atr(df_missing_all, period=3)
-    assert "high" in exc_info.value.missing_cols
-    assert "low" in exc_info.value.missing_cols
-    assert "close" in exc_info.value.missing_cols
+    assert "high" in str(exc_info.value)
+    assert "low" in str(exc_info.value)
+    assert "close" in str(exc_info.value)
 
 
 def test_atr_empty_dataframe() -> None:
@@ -78,7 +77,7 @@ def test_atr_empty_dataframe() -> None:
     df_empty = pd.DataFrame(columns=["open", "high", "low", "close"])
 
     # Then
-    with pytest.raises(EmptyDataError):
+    with pytest.raises(ValueError):
         atr(df_empty, period=3)
 
 
@@ -93,8 +92,8 @@ def test_atr_invalid_period() -> None:
     })
 
     # Then
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         atr(df, period=0)
 
-    with pytest.raises(DataValidationError):
+    with pytest.raises(ValueError):
         atr(df, period=-5)

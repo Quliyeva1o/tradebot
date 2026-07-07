@@ -19,21 +19,15 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
             or if the series length is less than the period.
     """
     if series.empty:
-        from indicators.exceptions import EmptyDataError
-
-        raise EmptyDataError()
+        raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        from indicators.exceptions import DataValidationError
-
-        raise DataValidationError(
+        raise ValueError(
             f"Invalid period {period} for RSI. Period must be greater than 0."
         )
 
     if len(series) < period:
-        from indicators.exceptions import DataValidationError
-
-        raise DataValidationError(
+        raise ValueError(
             f"Series length {len(series)} is less than period {period}."
         )
 

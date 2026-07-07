@@ -18,14 +18,10 @@ def sma(series: pd.Series, period: int = 20) -> pd.Series:
         DataValidationError: If the period is less than or equal to 0.
     """
     if series.empty:
-        from indicators.exceptions import EmptyDataError
-
-        raise EmptyDataError()
+        raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        from indicators.exceptions import DataValidationError
-
-        raise DataValidationError(
+        raise ValueError(
             f"Invalid period {period} for SMA. Period must be greater than 0."
         )
 

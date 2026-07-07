@@ -28,22 +28,16 @@ def macd(
             fast_period is greater than or equal to slow_period.
     """
     if series.empty:
-        from indicators.exceptions import EmptyDataError
-
-        raise EmptyDataError()
+        raise ValueError("The provided dataset is empty and contains no records.")
 
     if fast_period <= 0 or slow_period <= 0 or signal_period <= 0:
-        from indicators.exceptions import DataValidationError
-
-        raise DataValidationError(
+        raise ValueError(
             f"Periods must be greater than 0. Got fast_period={fast_period}, "
             f"slow_period={slow_period}, signal_period={signal_period}."
         )
 
     if fast_period >= slow_period:
-        from indicators.exceptions import DataValidationError
-
-        raise DataValidationError(
+        raise ValueError(
             f"fast_period ({fast_period}) must be less than slow_period ({slow_period})."
         )
 

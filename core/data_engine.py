@@ -7,6 +7,7 @@ runs structured check suite validations, and exposes sanitized dataframes.
 import pandas as pd
 
 from core.exceptions import (
+    DataValidationError,
     DuplicateTimestampError,
     EmptyDataError,
     InvalidNumericDataError,
@@ -16,11 +17,6 @@ from core.exceptions import (
 from core.market_data_provider import IMarketDataProvider
 from utils.logging import setup_logger
 from utils.validators import (
-    ColumnsMissingError,
-    DuplicateTimeError,
-    EmptyDataFrameError,
-    InvalidNumericError,
-    UnorderedTimeError,
     validate_no_duplicate_timestamps,
     validate_no_missing_values,
     validate_non_empty,
@@ -71,38 +67,51 @@ class DataEngine:
 
         try:
             # 2. Perform framework validation checks
-            validate_non_empty(df)
+            try:
+                validate_non_empty(df)
+            except ValueError as e:
+                logger.error("Data validation check failed: Empty dataset.")
+                raise EmptyDataError() from e
 
             required_cols = ["time", "open", "high", "low", "close", "volume"]
-            validate_required_columns(df, required_cols)
+            try:
+                validate_required_columns(df, required_cols)
+            except ValueError as e:
+                missing = [col for col in required_cols if col not in df.columns]
+                logger.error("Data validation check failed: Missing columns: %s", missing)
+                raise MissingColumnError(missing) from e
 
             numeric_cols = ["open", "high", "low", "close", "volume"]
-            validate_numeric_data(df, numeric_cols)
+            try:
+                validate_numeric_data(df, numeric_cols)
+            except ValueError as e:
+                logger.error("Data validation check failed: Invalid numeric values.")
+                raise InvalidNumericDataError(str(e)) from e
 
-            validate_no_missing_values(df, numeric_cols)
-            validate_no_duplicate_timestamps(df)
-            validate_ordered_timestamps(df)
+            try:
+                validate_no_missing_values(df, numeric_cols)
+            except ValueError as e:
+                logger.error("Data validation check failed: Missing values in numeric columns.")
+                raise InvalidNumericDataError(str(e)) from e
+
+            try:
+                validate_no_duplicate_timestamps(df)
+            except ValueError as e:
+                logger.error("Data validation check failed: Duplicate timestamps.")
+                raise DuplicateTimestampError(str(e)) from e
+
+            try:
+                validate_ordered_timestamps(df)
+            except ValueError as e:
+                logger.error("Data validation check failed: Unordered timestamps.")
+                raise InvalidTimestampError(str(e)) from e
 
             # 3. Perform provider-specific validations
             self.provider.validate(df)
 
-        except EmptyDataFrameError as e:
-            logger.error("Data validation check failed: Empty dataset.")
-            raise EmptyDataError() from e
-        except ColumnsMissingError as e:
-            logger.error("Data validation check failed: Missing columns: %s", e.missing_cols)
-            raise MissingColumnError(e.missing_cols) from e
-        except DuplicateTimeError as e:
-            logger.error("Data validation check failed: Duplicate timestamps.")
-            raise DuplicateTimestampError(str(e)) from e
-        except UnorderedTimeError as e:
-            logger.error("Data validation check failed: Unordered timestamps.")
-            raise InvalidTimestampError(str(e)) from e
-        except InvalidNumericError as e:
-            logger.error("Data validation check failed: Invalid numeric values.")
-            raise InvalidNumericDataError(str(e)) from e
         except Exception as e:
-            logger.error("Data validation check failed: Unknown error: %s", e)
+            if not isinstance(e, DataValidationError):
+                logger.error("Data validation check failed: Unknown error: %s", e)
             raise
 
         logger.info("Data validations passed. Clean dataset ready for framework consumption.")
