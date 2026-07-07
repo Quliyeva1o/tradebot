@@ -19,20 +19,23 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         DataValidationError: If the period is less than or equal to 0.
     """
     if df.empty:
-        from core.exceptions import EmptyDataError
+        from indicators.exceptions import EmptyDataError
 
         raise EmptyDataError()
 
     if period <= 0:
-        from core.exceptions import DataValidationError
+        from indicators.exceptions import DataValidationError
 
         raise DataValidationError(
             f"Invalid period {period} for ATR. Period must be greater than 0."
         )
 
-    from utils.validators import validate_required_columns
+    required_cols = ["open", "high", "low", "close"]
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        from indicators.exceptions import MissingColumnError
 
-    validate_required_columns(df, ["open", "high", "low", "close"])
+        raise MissingColumnError(missing)
 
     high = df["high"]
     low = df["low"]

@@ -6,9 +6,21 @@ runs structured check suite validations, and exposes sanitized dataframes.
 
 import pandas as pd
 
+from core.exceptions import (
+    DuplicateTimestampError,
+    EmptyDataError,
+    InvalidNumericDataError,
+    InvalidTimestampError,
+    MissingColumnError,
+)
 from core.market_data_provider import IMarketDataProvider
 from utils.logging import setup_logger
 from utils.validators import (
+    ColumnsMissingError,
+    DuplicateTimeError,
+    EmptyDataFrameError,
+    InvalidNumericError,
+    UnorderedTimeError,
     validate_no_duplicate_timestamps,
     validate_no_missing_values,
     validate_non_empty,
@@ -74,8 +86,23 @@ class DataEngine:
             # 3. Perform provider-specific validations
             self.provider.validate(df)
 
+        except EmptyDataFrameError as e:
+            logger.error("Data validation check failed: Empty dataset.")
+            raise EmptyDataError() from e
+        except ColumnsMissingError as e:
+            logger.error("Data validation check failed: Missing columns: %s", e.missing_cols)
+            raise MissingColumnError(e.missing_cols) from e
+        except DuplicateTimeError as e:
+            logger.error("Data validation check failed: Duplicate timestamps.")
+            raise DuplicateTimestampError(str(e)) from e
+        except UnorderedTimeError as e:
+            logger.error("Data validation check failed: Unordered timestamps.")
+            raise InvalidTimestampError(str(e)) from e
+        except InvalidNumericError as e:
+            logger.error("Data validation check failed: Invalid numeric values.")
+            raise InvalidNumericDataError(str(e)) from e
         except Exception as e:
-            logger.error("Data validation check failed: %s", e)
+            logger.error("Data validation check failed: Unknown error: %s", e)
             raise
 
         logger.info("Data validations passed. Clean dataset ready for framework consumption.")

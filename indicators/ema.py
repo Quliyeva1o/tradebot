@@ -18,12 +18,12 @@ def ema(series: pd.Series, period: int = 20) -> pd.Series:
         DataValidationError: If the period is less than or equal to 0.
     """
     if series.empty:
-        from core.exceptions import EmptyDataError
+        from indicators.exceptions import EmptyDataError
 
         raise EmptyDataError()
 
     if period <= 0:
-        from core.exceptions import DataValidationError
+        from indicators.exceptions import DataValidationError
 
         raise DataValidationError(
             f"Invalid period {period} for EMA. Period must be greater than 0."

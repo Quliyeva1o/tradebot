@@ -28,12 +28,12 @@ def macd(
             fast_period is greater than or equal to slow_period.
     """
     if series.empty:
-        from core.exceptions import EmptyDataError
+        from indicators.exceptions import EmptyDataError
 
         raise EmptyDataError()
 
     if fast_period <= 0 or slow_period <= 0 or signal_period <= 0:
-        from core.exceptions import DataValidationError
+        from indicators.exceptions import DataValidationError
 
         raise DataValidationError(
             f"Periods must be greater than 0. Got fast_period={fast_period}, "
@@ -41,7 +41,7 @@ def macd(
         )
 
     if fast_period >= slow_period:
-        from core.exceptions import DataValidationError
+        from indicators.exceptions import DataValidationError
 
         raise DataValidationError(
             f"fast_period ({fast_period}) must be less than slow_period ({slow_period})."

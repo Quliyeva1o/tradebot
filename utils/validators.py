@@ -6,13 +6,43 @@ Ensures that price DataFrames adhere to structural and semantic parameters.
 import numpy as np
 import pandas as pd
 
-from core.exceptions import (
-    DuplicateTimestampError,
-    EmptyDataError,
-    InvalidNumericDataError,
-    InvalidTimestampError,
-    MissingColumnError,
-)
+
+class ValidatorError(Exception):
+    """Base exception for all utility validation failures."""
+    pass
+
+
+class EmptyDataFrameError(ValidatorError):
+    """Raised when the dataset contains no records."""
+    pass
+
+
+class ColumnsMissingError(ValidatorError):
+    """Raised when one or more required columns are missing."""
+
+    def __init__(self, missing_cols: list[str]) -> None:
+        """Initializes the exception.
+
+        Args:
+            missing_cols: List of column names that were expected but missing.
+        """
+        super().__init__(f"Required column(s) missing: {missing_cols}")
+        self.missing_cols = missing_cols
+
+
+class DuplicateTimeError(ValidatorError):
+    """Raised when duplicate timestamps are found."""
+    pass
+
+
+class UnorderedTimeError(ValidatorError):
+    """Raised when timestamps are out of chronological order."""
+    pass
+
+
+class InvalidNumericError(ValidatorError):
+    """Raised when numeric data columns contain invalid or non-numeric values."""
+    pass
 
 
 def validate_non_empty(df: pd.DataFrame) -> None:
@@ -22,10 +52,10 @@ def validate_non_empty(df: pd.DataFrame) -> None:
         df: The market rates DataFrame to validate.
 
     Raises:
-        EmptyDataError: If the DataFrame is empty.
+        EmptyDataFrameError: If the DataFrame is empty.
     """
     if df.empty:
-        raise EmptyDataError()
+        raise EmptyDataFrameError()
 
 
 def validate_required_columns(df: pd.DataFrame, required_cols: list[str]) -> None:
@@ -36,11 +66,11 @@ def validate_required_columns(df: pd.DataFrame, required_cols: list[str]) -> Non
         required_cols: List of column names expected to be present.
 
     Raises:
-        MissingColumnError: If any of the required columns are missing.
+        ColumnsMissingError: If any of the required columns are missing.
     """
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
-        raise MissingColumnError(missing)
+        raise ColumnsMissingError(missing)
 
 
 def validate_no_duplicate_timestamps(df: pd.DataFrame) -> None:
@@ -52,20 +82,20 @@ def validate_no_duplicate_timestamps(df: pd.DataFrame) -> None:
         df: The market rates DataFrame to validate.
 
     Raises:
-        DuplicateTimestampError: If duplicate timestamps are detected.
+        DuplicateTimeError: If duplicate timestamps are detected.
     """
     if isinstance(df.index, pd.DatetimeIndex):
         duplicates = df.index.duplicated()
         if duplicates.any():
             duplicate_vals = df.index[duplicates].unique().tolist()
-            raise DuplicateTimestampError(
+            raise DuplicateTimeError(
                 f"Duplicate timestamps detected in index: {duplicate_vals}"
             )
     elif "time" in df.columns:
         duplicates = df["time"].duplicated()
         if duplicates.any():
             duplicate_vals = df.loc[duplicates, "time"].unique().tolist()
-            raise DuplicateTimestampError(
+            raise DuplicateTimeError(
                 f"Duplicate timestamps detected in 'time' column: {duplicate_vals}"
             )
 
@@ -77,12 +107,12 @@ def validate_ordered_timestamps(df: pd.DataFrame) -> None:
         df: The market rates DataFrame to validate.
 
     Raises:
-        InvalidTimestampError: If timestamps are out of chronological order.
+        UnorderedTimeError: If timestamps are out of chronological order.
     """
     index_to_check = df.index if isinstance(df.index, pd.DatetimeIndex) else df["time"]
     # Check if index is monotonically increasing
     if not index_to_check.is_monotonic_increasing:
-        raise InvalidTimestampError(
+        raise UnorderedTimeError(
             "Timestamps are not strictly sorted in ascending chronological order."
         )
 
@@ -97,7 +127,7 @@ def validate_numeric_data(df: pd.DataFrame, cols: list[str]) -> None:
         cols: List of columns to check.
 
     Raises:
-        InvalidNumericDataError: If non-numeric data or infinite values are present.
+        InvalidNumericError: If non-numeric data or infinite values are present.
     """
     for col in cols:
         if col not in df.columns:
@@ -111,14 +141,13 @@ def validate_numeric_data(df: pd.DataFrame, cols: list[str]) -> None:
                 if converted.isna().any() and not df[col].isna().any():
                     raise ValueError()
             except (ValueError, TypeError):
-                raise InvalidNumericDataError(
+                raise InvalidNumericError(
                     f"Column '{col}' contains non-numeric values or cannot be parsed as numeric."
                 ) from None
 
-
         # Check for infinite values (inf / -inf)
         if np.isinf(df[col]).any():
-            raise InvalidNumericDataError(
+            raise InvalidNumericError(
                 f"Column '{col}' contains infinite values (inf/-inf)."
             )
 
@@ -131,10 +160,10 @@ def validate_no_missing_values(df: pd.DataFrame, cols: list[str]) -> None:
         cols: List of columns to check.
 
     Raises:
-        InvalidNumericDataError: If missing or NaN values are found.
+        InvalidNumericError: If missing or NaN values are found.
     """
     for col in cols:
         if col in df.columns and df[col].isna().any():
-            raise InvalidNumericDataError(
+            raise InvalidNumericError(
                 f"Column '{col}' contains missing or NaN values."
             )

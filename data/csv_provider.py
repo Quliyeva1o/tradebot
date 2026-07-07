@@ -14,6 +14,7 @@ from core.exceptions import InvalidTimestampError, MissingColumnError
 from core.market_data_provider import IMarketDataProvider
 from utils.logging import setup_logger
 from utils.validators import (
+    ColumnsMissingError,
     validate_required_columns,
 )
 
@@ -105,7 +106,10 @@ class CSVDataProvider(IMarketDataProvider):
 
         # Normalize required OHLCV columns (case-insensitive done by lower())
         required_ohlcv = ["open", "high", "low", "close"]
-        validate_required_columns(df, required_ohlcv)
+        try:
+            validate_required_columns(df, required_ohlcv)
+        except ColumnsMissingError as e:
+            raise MissingColumnError(e.missing_cols) from e
 
         # Add optional volume if missing
         if "volume" not in df.columns:

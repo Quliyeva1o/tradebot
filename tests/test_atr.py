@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from core.exceptions import DataValidationError, EmptyDataError, MissingColumnError
+from indicators.exceptions import DataValidationError, EmptyDataError, MissingColumnError
 from indicators.atr import atr
 
 
