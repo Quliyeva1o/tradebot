@@ -1,24 +1,20 @@
 """Unit tests for the Core Domain Modeling Foundation."""
 
 from datetime import datetime
-import pandas as pd
-import pytest
 
-from core.models import Bar, ConfluenceMetadata, SignalDirection, TradeSignal, Timeframe
-from market_structure.swing_models import Swing, SwingStrength, SwingType
+from core.models import Bar, ConfluenceMetadata, SignalDirection, Timeframe, TradeSignal
 from market_structure.structure_models import (
-    BreakType,
     MarketState,
-    StructureBreak,
-    StructureState,
-    StructureTrend,
     SwingGraph,
 )
+from market_structure.swing_models import Swing, SwingType
 
 
 def test_trade_signal_model() -> None:
     """Verifies TradeSignal attributes and constructor."""
-    meta = ConfluenceMetadata(setup_type="OrderBlockMitigation", invalidation_type="Structural", risk_reward_ratio=3.0)
+    meta = ConfluenceMetadata(
+        setup_type="OrderBlockMitigation", invalidation_type="Structural", risk_reward_ratio=3.0
+    )
     signal = TradeSignal(
         signal_id="sig_1",
         symbol="EURUSD",
@@ -74,8 +70,12 @@ def test_swing_graph_nodes_and_queries() -> None:
     assert graph.edges["swing_1"] == ["swing_2"]
     assert graph.edges["swing_2"] == ["swing_3"]
 
-    assert graph.get_latest_high().id == "swing_3"
-    assert graph.get_latest_low().id == "swing_2"
+    latest_high = graph.get_latest_high()
+    latest_low = graph.get_latest_low()
+    assert latest_high is not None
+    assert latest_low is not None
+    assert latest_high.id == "swing_3"
+    assert latest_low.id == "swing_2"
 
     # Verify equal highs grouped (swing_1 and swing_3 have price 1.1050)
     eq_highs = graph.find_equal_highs(tolerance=0.0001)

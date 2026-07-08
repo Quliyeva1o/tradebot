@@ -21,9 +21,6 @@ def sma(series: pd.Series, period: int = 20) -> pd.Series:
         raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        raise ValueError(
-            f"Invalid period {period} for SMA. Period must be greater than 0."
-        )
+        raise ValueError(f"Invalid period {period} for SMA. Period must be greater than 0.")
 
     return series.rolling(window=period).mean()
-

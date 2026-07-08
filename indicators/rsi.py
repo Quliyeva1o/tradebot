@@ -22,14 +22,10 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
         raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        raise ValueError(
-            f"Invalid period {period} for RSI. Period must be greater than 0."
-        )
+        raise ValueError(f"Invalid period {period} for RSI. Period must be greater than 0.")
 
     if len(series) < period:
-        raise ValueError(
-            f"Series length {len(series)} is less than period {period}."
-        )
+        raise ValueError(f"Series length {len(series)} is less than period {period}.")
 
     import numpy as np
 

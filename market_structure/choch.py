@@ -26,6 +26,4 @@ class CHoCHDetector:
         Returns:
             A DataFrame with flags denoting CHoCH transition events.
         """
-        raise NotImplementedError(
-            "CHoCH detection logic will be implemented in a future sprint."
-        )
+        raise NotImplementedError("CHoCH detection logic will be implemented in a future sprint.")

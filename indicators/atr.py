@@ -22,9 +22,7 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        raise ValueError(
-            f"Invalid period {period} for ATR. Period must be greater than 0."
-        )
+        raise ValueError(f"Invalid period {period} for ATR. Period must be greater than 0.")
 
     required_cols = ["open", "high", "low", "close"]
     missing = [col for col in required_cols if col not in df.columns]

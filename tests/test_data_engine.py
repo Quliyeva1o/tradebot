@@ -45,8 +45,7 @@ def test_missing_column(tmp_path: Path) -> None:
     csv_file = tmp_path / "missing_col.csv"
     # Missing 'Close' column
     csv_file.write_text(
-        "Timestamp,Open,High,Low,Volume\n"
-        "2026-07-01 12:00:00,1.1000,1.1050,1.0990,1000\n"
+        "Timestamp,Open,High,Low,Volume\n" "2026-07-01 12:00:00,1.1000,1.1050,1.0990,1000\n"
     )
 
     provider = CSVDataProvider(filepath=csv_file)

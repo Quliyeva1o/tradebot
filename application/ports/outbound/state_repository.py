@@ -9,9 +9,7 @@ from core.models import Bar, Timeframe
 class IStateRepositoryPort(Protocol):
     """Outbound port for state storage and historical retrieval."""
 
-    def save_market_state(
-        self, symbol: str, timeframe: Timeframe, bars: list[Bar]
-    ) -> None:
+    def save_market_state(self, symbol: str, timeframe: Timeframe, bars: list[Bar]) -> None:
         """Saves current synchronized market price states.
 
         Args:

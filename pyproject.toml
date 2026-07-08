@@ -54,7 +54,11 @@ select = [
     "RUF",  # Ruff-specific rules
 ]
 ignore = [
-    "D100",  # Missing docstring in public module (we will document public modules but ignore minor warnings if any)
+    "D100",  # Missing docstring in public module
+    "D102",  # Missing docstring in public method
+    "D107",  # Missing docstring in __init__
+    "E501",  # Line too long
+    "N818",  # Exception name should be named with an Error suffix
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -83,3 +87,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+pythonpath = ["."]

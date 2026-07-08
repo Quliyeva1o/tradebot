@@ -50,16 +50,12 @@ def validate_no_duplicate_timestamps(df: pd.DataFrame) -> None:
         duplicates = df.index.duplicated()
         if duplicates.any():
             duplicate_vals = df.index[duplicates].unique().tolist()
-            raise ValueError(
-                f"Duplicate timestamps detected in index: {duplicate_vals}"
-            )
+            raise ValueError(f"Duplicate timestamps detected in index: {duplicate_vals}")
     elif "time" in df.columns:
-        duplicates = df["time"].duplicated()
-        if duplicates.any():
-            duplicate_vals = df.loc[duplicates, "time"].unique().tolist()
-            raise ValueError(
-                f"Duplicate timestamps detected in 'time' column: {duplicate_vals}"
-            )
+        dupes_series = df["time"].duplicated()
+        if dupes_series.any():
+            duplicate_vals = df.loc[dupes_series, "time"].unique().tolist()
+            raise ValueError(f"Duplicate timestamps detected in 'time' column: {duplicate_vals}")
 
 
 def validate_ordered_timestamps(df: pd.DataFrame) -> None:
@@ -74,9 +70,7 @@ def validate_ordered_timestamps(df: pd.DataFrame) -> None:
     index_to_check = df.index if isinstance(df.index, pd.DatetimeIndex) else df["time"]
     # Check if index is monotonically increasing
     if not index_to_check.is_monotonic_increasing:
-        raise ValueError(
-            "Timestamps are not strictly sorted in ascending chronological order."
-        )
+        raise ValueError("Timestamps are not strictly sorted in ascending chronological order.")
 
 
 def validate_numeric_data(df: pd.DataFrame, cols: list[str]) -> None:
@@ -109,9 +103,7 @@ def validate_numeric_data(df: pd.DataFrame, cols: list[str]) -> None:
 
         # Check for infinite values (inf / -inf)
         if np.isinf(df[col]).any():
-            raise ValueError(
-                f"Column '{col}' contains infinite values (inf/-inf)."
-            )
+            raise ValueError(f"Column '{col}' contains infinite values (inf/-inf).")
 
 
 def validate_no_missing_values(df: pd.DataFrame, cols: list[str]) -> None:
@@ -126,6 +118,4 @@ def validate_no_missing_values(df: pd.DataFrame, cols: list[str]) -> None:
     """
     for col in cols:
         if col in df.columns and df[col].isna().any():
-            raise ValueError(
-                f"Column '{col}' contains missing or NaN values."
-            )
+            raise ValueError(f"Column '{col}' contains missing or NaN values.")

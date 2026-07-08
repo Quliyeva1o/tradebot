@@ -26,6 +26,4 @@ class BOSDetector:
         Returns:
             A DataFrame with flags denoting BOS breakout events.
         """
-        raise NotImplementedError(
-            "BOS detection logic will be implemented in a future sprint."
-        )
+        raise NotImplementedError("BOS detection logic will be implemented in a future sprint.")

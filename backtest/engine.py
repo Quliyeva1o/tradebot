@@ -35,4 +35,3 @@ class BacktestEngine:
         raise NotImplementedError(
             "Backtest execution logic will be implemented in a future sprint."
         )
-

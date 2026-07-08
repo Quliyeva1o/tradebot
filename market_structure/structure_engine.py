@@ -5,40 +5,44 @@ consecutive swing relationships, and confidence intervals.
 """
 
 from abc import ABC, abstractmethod
-import pandas as pd
 
-from market_structure.swing_models import Swing, SwingClassification, SwingType
 from market_structure.structure_models import (
     MarketStructure,
     StructureConfig,
     StructureTrend,
     SwingRelationship,
 )
-
+from market_structure.swing_models import Swing, SwingClassification, SwingType
 
 # --- Custom Exceptions ---
 
+
 class StructureException(Exception):
     """Base exception for Market Structure Engine errors."""
+
     pass
 
 
 class InvalidSwingSequenceError(StructureException):
     """Raised when swings are out of chronological order."""
+
     pass
 
 
 class DuplicateSwingIDError(StructureException):
     """Raised when duplicate swing IDs are processed."""
+
     pass
 
 
 class BrokenGraphError(StructureException):
     """Raised when the input Swing sequence contains incorrect graph links."""
+
     pass
 
 
 # --- Confidence Calculators ---
+
 
 class ConfidenceCalculator(ABC):
     """Interface for extensible market structure confidence calculations."""
@@ -84,6 +88,7 @@ class DefaultConfidenceCalculator(ConfidenceCalculator):
 
 
 # --- Market Structure Engine ---
+
 
 class MarketStructureEngine:
     """Deterministic State Machine tracking market structure and trends from swing data."""
@@ -323,7 +328,7 @@ class MarketStructureEngine:
         """
         # Validate graph links and chronology before analyzing
         self._validate_graph(swings)
-        
+
         for swing in swings:
             self.update(swing)
         return self.history

@@ -11,6 +11,7 @@ from enum import Enum, auto
 
 class Timeframe(Enum):
     """Supported candle bar timeframes."""
+
     M1 = "M1"
     M5 = "M5"
     M15 = "M15"
@@ -22,6 +23,7 @@ class Timeframe(Enum):
 
 class OrderType(Enum):
     """Types of trading execution and pending orders."""
+
     BUY_MARKET = auto()
     SELL_MARKET = auto()
     BUY_LIMIT = auto()
@@ -32,6 +34,7 @@ class OrderType(Enum):
 
 class OrderStatus(Enum):
     """Execution status of an order request."""
+
     PENDING = auto()
     FILLED = auto()
     CANCELED = auto()
@@ -41,6 +44,7 @@ class OrderStatus(Enum):
 @dataclass(frozen=True)
 class Bar:
     """Represents a standard OHLCV price bar."""
+
     timestamp: datetime
     open: float
     high: float
@@ -53,6 +57,7 @@ class Bar:
 @dataclass(frozen=True)
 class Tick:
     """Represents a single market price tick update."""
+
     timestamp: datetime
     bid: float
     ask: float
@@ -62,6 +67,7 @@ class Tick:
 @dataclass(frozen=True)
 class Order:
     """Represents an order request submitted for execution."""
+
     id: str
     symbol: str
     order_type: OrderType
@@ -76,6 +82,7 @@ class Order:
 @dataclass(frozen=True)
 class Position:
     """Represents an active open trade in the execution venue."""
+
     id: str
     symbol: str
     order_type: OrderType
@@ -91,6 +98,7 @@ class Position:
 @dataclass(frozen=True)
 class AccountInfo:
     """Represents account balances and margin metrics."""
+
     balance: float
     equity: float
     margin: float
@@ -101,6 +109,7 @@ class AccountInfo:
 
 class SignalDirection(Enum):
     """Supported signal execution directions."""
+
     BUY = auto()
     SELL = auto()
 
@@ -108,6 +117,7 @@ class SignalDirection(Enum):
 @dataclass(frozen=True)
 class ConfluenceMetadata:
     """Carries structured technical confluence parameters justifying a trade signal."""
+
     setup_type: str  # e.g., "OrderBlockMitigation", "LiquiditySweep", "FVGRefill"
     invalidation_type: str  # e.g., "Structural", "ATROffset"
     risk_reward_ratio: float = 0.0
@@ -117,6 +127,7 @@ class ConfluenceMetadata:
 @dataclass(frozen=True)
 class TradeSignal:
     """Represents a generated signal validation opportunity."""
+
     signal_id: str
     symbol: str
     timeframe: Timeframe
@@ -124,5 +135,7 @@ class TradeSignal:
     entry_price: float
     stop_loss: float
     take_profit: float
-    confluence: ConfluenceMetadata = field(default_factory=lambda: ConfluenceMetadata("Unknown", "None"))
+    confluence: ConfluenceMetadata = field(
+        default_factory=lambda: ConfluenceMetadata("Unknown", "None")
+    )
     timestamp: datetime = field(default_factory=datetime.now)

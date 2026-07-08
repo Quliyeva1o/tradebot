@@ -9,9 +9,7 @@ from core.models import Bar, Tick, Timeframe
 class ITradingCoordinatorUseCase(Protocol):
     """Inbound port for coordinating market analysis and trading actions."""
 
-    def process_candle_close(
-        self, symbol: str, timeframe: Timeframe, bar: Bar
-    ) -> None:
+    def process_candle_close(self, symbol: str, timeframe: Timeframe, bar: Bar) -> None:
         """Processes a newly closed historical candle bar.
 
         Args:

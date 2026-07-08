@@ -9,12 +9,14 @@ from indicators.atr import atr
 def test_atr_normal_calculation() -> None:
     """Verifies ATR calculations against a manually computed synthetic OHLC dataset."""
     # Given: A synthetic dataset
-    df = pd.DataFrame({
-        "open": [10.0, 11.0, 13.0, 12.0, 14.0],
-        "high": [12.0, 13.0, 15.0, 13.0, 16.0],
-        "low": [9.0, 10.0, 12.0, 10.0, 13.0],
-        "close": [11.0, 12.0, 14.0, 11.0, 15.0]
-    })
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 11.0, 13.0, 12.0, 14.0],
+            "high": [12.0, 13.0, 15.0, 13.0, 16.0],
+            "low": [9.0, 10.0, 12.0, 10.0, 13.0],
+            "close": [11.0, 12.0, 14.0, 11.0, 15.0],
+        }
+    )
     period = 3
 
     # When
@@ -49,11 +51,9 @@ def test_atr_normal_calculation() -> None:
 def test_atr_missing_columns() -> None:
     """Verifies that MissingColumnError is raised when required columns are missing."""
     # Given: missing 'close'
-    df_missing_close = pd.DataFrame({
-        "open": [10.0, 11.0],
-        "high": [12.0, 13.0],
-        "low": [9.0, 10.0]
-    })
+    df_missing_close = pd.DataFrame(
+        {"open": [10.0, 11.0], "high": [12.0, 13.0], "low": [9.0, 10.0]}
+    )
 
     # Then
     with pytest.raises(ValueError) as exc_info:
@@ -61,9 +61,7 @@ def test_atr_missing_columns() -> None:
     assert "close" in str(exc_info.value)
 
     # Given: missing multiple columns
-    df_missing_all = pd.DataFrame({
-        "open": [10.0, 11.0]
-    })
+    df_missing_all = pd.DataFrame({"open": [10.0, 11.0]})
     with pytest.raises(ValueError) as exc_info:
         atr(df_missing_all, period=3)
     assert "high" in str(exc_info.value)
@@ -84,12 +82,7 @@ def test_atr_empty_dataframe() -> None:
 def test_atr_invalid_period() -> None:
     """Verifies that DataValidationError is raised when period <= 0."""
     # Given
-    df = pd.DataFrame({
-        "open": [10.0],
-        "high": [12.0],
-        "low": [9.0],
-        "close": [11.0]
-    })
+    df = pd.DataFrame({"open": [10.0], "high": [12.0], "low": [9.0], "close": [11.0]})
 
     # Then
     with pytest.raises(ValueError):

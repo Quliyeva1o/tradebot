@@ -59,11 +59,9 @@ def test_normal_market_swings() -> None:
     assert res.loc[5, "swing_price"] == 1.0980
     assert res.loc[5, "swing_strength"] == SwingStrength.STRONG.value
 
-
     # Index 0 and 9 cannot be swings due to window limits
     assert not res.loc[0, "is_swing_high"]
     assert not res.loc[9, "is_swing_low"]
-
 
 
 def test_trending_market() -> None:
@@ -100,7 +98,6 @@ def test_equal_highs_lows() -> None:
     res_eq = detector_eq.detect(df)
     assert res_eq.loc[4, "is_swing_high"]
     assert res_eq.loc[5, "is_swing_high"]
-
 
 
 def test_small_datasets() -> None:
@@ -144,6 +141,7 @@ def test_duplicate_timestamps() -> None:
 
     detector = SwingDetector()
     from core.exceptions import DuplicateTimestampError
+
     with pytest.raises(DuplicateTimestampError):
         detector.detect(df)
 
@@ -166,7 +164,6 @@ def test_configuration_changes() -> None:
     # Should flag 6 but drop 7 because 7 - 6 = 1 < 3 (min_distance) and index 6 has a higher high
     assert res.loc[6, "is_swing_high"]
     assert not res.loc[7, "is_swing_high"]
-
 
 
 def test_large_dataset_performance() -> None:
@@ -204,13 +201,13 @@ def test_swing_identity_and_properties() -> None:
 
     assert len(raw) >= 2
     # Check ID structure
-    high_swing = [s for s in raw if s.type == SwingType.HIGH][0]
+    high_swing = next(s for s in raw if s.type == SwingType.HIGH)
     assert high_swing.id == "swing_4_high"
     assert high_swing.index == 4
     assert high_swing.price == 1.1200
     assert high_swing.timestamp == df.loc[4, "time"]
 
-    low_swing = [s for s in raw if s.type == SwingType.LOW][0]
+    low_swing = next(s for s in raw if s.type == SwingType.LOW)
     assert low_swing.id == "swing_8_low"
     assert low_swing.index == 8
     assert low_swing.price == 1.0800
@@ -224,7 +221,7 @@ def test_swing_identity_and_properties() -> None:
 def test_major_minor_classification() -> None:
     """Verifies that classification successfully divides swings into Major, Minor, or Unknown."""
     df = _create_base_df(20)
-    
+
     # Minor swing high at 4 (satisfies left=3, right=3 but not left=6, right=6)
     df.loc[4, "high"] = 1.1050
     # Inject low to prevent duplicate high filtering
@@ -251,7 +248,7 @@ def test_major_minor_classification() -> None:
 def test_swing_filtering_rules() -> None:
     """Verifies modular filters for bar distance, price distance, and duplicates."""
     df = _create_base_df(20)
-    
+
     # 1. Bar distance test: Two highs close to each other (indices 4 and 6, distance = 2)
     # If minimum_bar_distance = 3, only one should survive (the higher one at 6)
     df.loc[4, "high"] = 1.1100
@@ -306,6 +303,11 @@ def test_swing_graph_relationships() -> None:
     s16 = graph.get_swing("swing_16_high")
     s22 = graph.get_swing("swing_22_low")
 
+    assert s4 is not None
+    assert s10 is not None
+    assert s16 is not None
+    assert s22 is not None
+
     # Check immediate relationships
     assert s4.next_id == s10.id
     assert s10.previous_id == s4.id
@@ -314,11 +316,17 @@ def test_swing_graph_relationships() -> None:
 
     # Check distances
     assert s10.bar_distance == 6
+    assert s10.price_distance is not None
     assert round(s10.price_distance, 4) == -0.0400
 
     # Test graph traversal helpers
-    assert graph.get_previous_of_type(s16, SwingType.HIGH).id == s4.id
-    assert graph.get_next_of_type(s10, SwingType.LOW).id == s22.id
+    prev_high = graph.get_previous_of_type(s16, SwingType.HIGH)
+    assert prev_high is not None
+    assert prev_high.id == s4.id
+
+    next_low = graph.get_next_of_type(s10, SwingType.LOW)
+    assert next_low is not None
+    assert next_low.id == s22.id
 
     # Verify Major traversal
     prev_major = graph.get_previous_major(s16)
@@ -334,7 +342,9 @@ def test_configuration_changes_impact() -> None:
     df.loc[6, "high"] = 1.1300
 
     # Scenario A: Filtering disabled (use left_bars=1, right_bars=1 so both are raw swings)
-    config_no_filter = SwingConfig(left_bars=1, right_bars=1, minimum_bar_distance=3, filter_enabled=False)
+    config_no_filter = SwingConfig(
+        left_bars=1, right_bars=1, minimum_bar_distance=3, filter_enabled=False
+    )
     detector_no_filter = SwingDetector(config=config_no_filter)
     detector_no_filter.detect(df)
     # Both highs should exist in output
@@ -347,4 +357,3 @@ def test_configuration_changes_impact() -> None:
     # Swings should all be UNKNOWN classification
     for s in detector_no_class.get_swings():
         assert s.classification == SwingClassification.UNKNOWN
-

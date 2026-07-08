@@ -9,9 +9,7 @@ from core.models import Bar, Timeframe
 class IDataFeedPort(Protocol):
     """Outbound port for market data ingestion services."""
 
-    def fetch_historical_bars(
-        self, symbol: str, timeframe: Timeframe, count: int
-    ) -> list[Bar]:
+    def fetch_historical_bars(self, symbol: str, timeframe: Timeframe, count: int) -> list[Bar]:
         """Fetches historical bars buffer for a symbol and timeframe.
 
         Args:

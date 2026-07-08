@@ -55,7 +55,6 @@ class DataEngine:
             info.get("type", "Unknown"),
         )
 
-
         try:
             # 1. Load data from the provider
             df = self.provider.load()

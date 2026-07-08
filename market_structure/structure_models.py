@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum, auto
+from enum import Enum
 
 from core.models import Bar, Timeframe
 from market_structure.swing_models import Swing
@@ -10,6 +10,7 @@ from market_structure.swing_models import Swing
 
 class StructureTrend(Enum):
     """Supported market structure trend states."""
+
     UNKNOWN = "UNKNOWN"
     RANGE = "RANGE"
     BULLISH = "BULLISH"
@@ -19,6 +20,7 @@ class StructureTrend(Enum):
 
 class SwingRelationship(Enum):
     """Relationships between consecutive swings."""
+
     HH = "HH"  # Higher High
     HL = "HL"  # Higher Low
     LH = "LH"  # Lower High
@@ -40,6 +42,7 @@ class StructureConfig:
         track_internal_structure: If True, tracks internal (minor) swings within major swing ranges.
         track_external_structure: If True, tracks external major swing ranges.
     """
+
     minimum_confirmations: int = 2
     equal_high_tolerance: float = 0.0001
     equal_low_tolerance: float = 0.0001
@@ -76,6 +79,7 @@ class MarketStructure:
         confidence: Numerical confidence rating (0.0 to 1.0) of the detected trend.
         sequence_number: Sequential update index (0-indexed).
     """
+
     structure_id: str
     timestamp: datetime
     trend: StructureTrend
@@ -95,6 +99,7 @@ class MarketStructure:
 
 class BreakType(Enum):
     """Types of market structure breaks."""
+
     BOS = "BOS"
     CHoCH = "CHoCH"
 
@@ -102,6 +107,7 @@ class BreakType(Enum):
 @dataclass(frozen=True)
 class StructureBreak:
     """Represents a validated structure break (BOS or CHoCH)."""
+
     break_id: str
     break_type: BreakType
     broken_swing: Swing
@@ -112,6 +118,7 @@ class StructureBreak:
 @dataclass
 class StructureState:
     """Active structural trend configuration and historical breaks tracker."""
+
     trend: StructureTrend = StructureTrend.UNKNOWN
     confidence: float = 0.0
     active_major_high: Swing | None = None
@@ -122,6 +129,7 @@ class StructureState:
 @dataclass
 class SwingGraph:
     """Direct, queryable network of swing high and low pivots."""
+
     _nodes: list[Swing] = field(default_factory=list, repr=False)
     edges: dict[str, list[str]] = field(default_factory=dict)
 
@@ -151,7 +159,7 @@ class SwingGraph:
         highs = [s for s in self._nodes if s.type.name == "HIGH"]
         equal_highs = []
         for i, s1 in enumerate(highs):
-            for s2 in highs[i + 1:]:
+            for s2 in highs[i + 1 :]:
                 if abs(s1.price - s2.price) <= tolerance:
                     if s1 not in equal_highs:
                         equal_highs.append(s1)
@@ -164,7 +172,7 @@ class SwingGraph:
         lows = [s for s in self._nodes if s.type.name == "LOW"]
         equal_lows = []
         for i, s1 in enumerate(lows):
-            for s2 in lows[i + 1:]:
+            for s2 in lows[i + 1 :]:
                 if abs(s1.price - s2.price) <= tolerance:
                     if s1 not in equal_lows:
                         equal_lows.append(s1)
@@ -176,6 +184,7 @@ class SwingGraph:
 @dataclass
 class MarketState:
     """Domain aggregate root container representing instrument market timeline state."""
+
     symbol: str
     timeframe: Timeframe
     _bars: list[Bar] = field(default_factory=list, repr=False)

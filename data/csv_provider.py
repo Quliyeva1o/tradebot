@@ -174,6 +174,7 @@ class CSVDataProvider(IMarketDataProvider):
         for col in price_cols:
             if (df[col] <= 0).any():
                 from core.exceptions import InvalidNumericDataError
+
                 raise InvalidNumericDataError(f"Column '{col}' contains negative or zero prices.")
 
     def info(self) -> dict[str, Any]:

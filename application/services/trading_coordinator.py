@@ -35,9 +35,7 @@ class TradingCoordinatorService(ITradingCoordinatorUseCase):
         self.repository = repository
         logger.info("TradingCoordinatorService initialized with abstract ports.")
 
-    def process_candle_close(
-        self, symbol: str, timeframe: Timeframe, bar: Bar
-    ) -> None:
+    def process_candle_close(self, symbol: str, timeframe: Timeframe, bar: Bar) -> None:
         """Skeletal orchestration workflow for candle close.
 
         Coordinates the analysis, signal, risk, planning, and execution phases.

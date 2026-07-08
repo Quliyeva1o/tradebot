@@ -3,18 +3,17 @@
 import pandas as pd
 import pytest
 
-from market_structure.swing_models import Swing, SwingClassification, SwingStrength, SwingType
-from market_structure.structure_models import (
-    StructureConfig,
-    StructureTrend,
-    SwingRelationship,
-)
 from market_structure.structure_engine import (
     BrokenGraphError,
     DuplicateSwingIDError,
     InvalidSwingSequenceError,
     MarketStructureEngine,
 )
+from market_structure.structure_models import (
+    StructureConfig,
+    StructureTrend,
+)
+from market_structure.swing_models import Swing, SwingClassification, SwingStrength, SwingType
 
 
 def _make_swing(
@@ -53,7 +52,7 @@ def test_bullish_trend_progression() -> None:
         _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
         _make_swing("s2_low", 8, 90.0, SwingType.LOW),
         _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
-        _make_swing("s4_low", 16, 95.0, SwingType.LOW),   # HL
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL
     ]
     _link_swings(swings)
 
@@ -77,7 +76,7 @@ def test_bearish_trend_progression() -> None:
         _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
         _make_swing("s2_low", 8, 90.0, SwingType.LOW),
         _make_swing("s3_high", 12, 95.0, SwingType.HIGH),  # LH
-        _make_swing("s4_low", 16, 85.0, SwingType.LOW),   # LL
+        _make_swing("s4_low", 16, 85.0, SwingType.LOW),  # LL
     ]
     _link_swings(swings)
 
@@ -99,7 +98,7 @@ def test_range_state_compressing_expanding() -> None:
         _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
         _make_swing("s2_low", 8, 90.0, SwingType.LOW),
         _make_swing("s3_high", 12, 100.0, SwingType.HIGH),  # Equal High (within 0.0001 tolerance)
-        _make_swing("s4_low", 16, 90.0, SwingType.LOW),   # Equal Low
+        _make_swing("s4_low", 16, 90.0, SwingType.LOW),  # Equal Low
     ]
     _link_swings(swings_eq)
 
@@ -112,7 +111,7 @@ def test_range_state_compressing_expanding() -> None:
         _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
         _make_swing("s2_low", 8, 90.0, SwingType.LOW),
         _make_swing("s3_high", 12, 95.0, SwingType.HIGH),  # LH
-        _make_swing("s4_low", 16, 92.0, SwingType.LOW),   # HL
+        _make_swing("s4_low", 16, 92.0, SwingType.LOW),  # HL
     ]
     _link_swings(swings_comp)
 
@@ -127,9 +126,13 @@ def test_transition_states() -> None:
         _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
         _make_swing("s2_low", 8, 90.0, SwingType.LOW),
         _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH -> Trend = UNKNOWN (need HL)
-        _make_swing("s4_low", 16, 95.0, SwingType.LOW),   # HL -> Trend = BULLISH
-        _make_swing("s5_high", 20, 105.0, SwingType.HIGH),  # LH -> Trend = TRANSITION (from BULLISH)
-        _make_swing("s6_low", 24, 88.0, SwingType.LOW),   # LL -> Trend = BEARISH (reversal confirmed)
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend = BULLISH
+        _make_swing(
+            "s5_high", 20, 105.0, SwingType.HIGH
+        ),  # LH -> Trend = TRANSITION (from BULLISH)
+        _make_swing(
+            "s6_low", 24, 88.0, SwingType.LOW
+        ),  # LL -> Trend = BEARISH (reversal confirmed)
     ]
     _link_swings(swings)
 
@@ -153,10 +156,12 @@ def test_major_only_mode() -> None:
     engine = MarketStructureEngine(config=StructureConfig(major_only=True))
     history = engine.analyze(swings)
 
-    # State update count should only count major entries. 
+    # State update count should only count major entries.
     # Index 8 (s2_low) was minor and bypassed, so it shouldn't produce a new unique structural history block
     assert len(history) == 2
+    assert history[0].last_major_high is not None
     assert history[0].last_major_high.id == "s1_high"
+    assert history[1].last_major_high is not None
     assert history[1].last_major_high.id == "s3_high"
     assert history[1].last_major_low is None  # Since s2_low was ignored
 
@@ -189,7 +194,10 @@ def test_invalid_swing_sequences() -> None:
         _make_swing("s2", 5, 90.0, SwingType.LOW),  # index 5 <= 10
     ]
     _link_swings(swings_order)
-    with pytest.raises(InvalidSwingSequenceError, match="violations chronological order|out of chronological order"):
+    with pytest.raises(
+        InvalidSwingSequenceError,
+        match=r"violations chronological order|out of chronological order",
+    ):
         engine.analyze(swings_order)
 
     # Case 2: Duplicate Swing IDs

@@ -4,6 +4,7 @@ Implements high-performance, non-repainting swing high and swing low pivot detec
 """
 
 from abc import ABC, abstractmethod
+
 import numpy as np
 import pandas as pd
 
@@ -16,8 +17,8 @@ from market_structure.swing_models import (
     SwingType,
 )
 
-
 # --- Strength Calculators ---
+
 
 class SwingStrengthCalculator(ABC):
     """Interface for extensible swing strength calculation."""
@@ -64,7 +65,7 @@ class LocalDominanceStrengthCalculator(SwingStrengthCalculator):
                 swing.strength = float(rel_strength_high_arr[idx])
             elif swing.type == SwingType.LOW:
                 swing.strength = float(rel_strength_low_arr[idx])
-            
+
             # Map float strength to category for backward compatibility
             if swing.strength < 0.5:
                 swing.strength_category = SwingStrength.WEAK
@@ -101,13 +102,13 @@ class PriceExcursionStrengthCalculator(SwingStrengthCalculator):
             if swing.type == SwingType.HIGH:
                 min_low = low_min_arr[idx]
                 if np.isnan(min_low):
-                    min_low = low_arr[max(0, idx - left): min(len(df), idx + right + 1)].min()
+                    min_low = low_arr[max(0, idx - left) : min(len(df), idx + right + 1)].min()
                 excursion = swing.price - min_low
                 swing.strength = max(swing.strength, float(excursion))
             elif swing.type == SwingType.LOW:
                 max_high = high_max_arr[idx]
                 if np.isnan(max_high):
-                    max_high = high_arr[max(0, idx - left): min(len(df), idx + right + 1)].max()
+                    max_high = high_arr[max(0, idx - left) : min(len(df), idx + right + 1)].max()
                 excursion = max_high - swing.price
                 swing.strength = max(swing.strength, float(excursion))
         return swings
@@ -130,7 +131,7 @@ class CompositeSwingStrengthCalculator(SwingStrengthCalculator):
         self.calculators = [
             LocalDominanceStrengthCalculator(),
             PriceExcursionStrengthCalculator(),
-            BarDistanceStrengthCalculator()
+            BarDistanceStrengthCalculator(),
         ]
 
     def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
@@ -140,6 +141,7 @@ class CompositeSwingStrengthCalculator(SwingStrengthCalculator):
 
 
 # --- Filtering Layer ---
+
 
 class SwingFilter(ABC):
     """Interface for modular swing filtering rules."""
@@ -202,7 +204,11 @@ class MinPriceDistanceFilter(SwingFilter):
             for item in items[1:]:
                 prev = filtered[-1]
                 if abs(item.price - prev.price) < config.minimum_price_distance:
-                    better = (item.price > prev.price) if item.type == SwingType.HIGH else (item.price < prev.price)
+                    better = (
+                        (item.price > prev.price)
+                        if item.type == SwingType.HIGH
+                        else (item.price < prev.price)
+                    )
                     if better:
                         filtered[-1] = item
                 else:
@@ -261,6 +267,7 @@ class MergeCloseSwingsFilter(SwingFilter):
 
 
 # --- Classifiers ---
+
 
 class SwingClassifier(ABC):
     """Interface for swing classification logic."""
@@ -368,6 +375,7 @@ class WindowScaleSwingClassifier(SwingClassifier):
 
 # --- Swing Graph ---
 
+
 class SwingGraph:
     """Represents the relationships and traversal paths of the Swing sequence."""
 
@@ -438,6 +446,7 @@ class SwingGraph:
 
 # --- Swing Detector ---
 
+
 class SwingDetector:
     """Stateless engine to detect swing high and swing low pivot levels in price data."""
 
@@ -448,7 +457,7 @@ class SwingDetector:
             config: Configurations for window sizes and equal level boundaries.
         """
         self.config = config or SwingConfig()
-        
+
         # State containers for public APIs
         self.raw_swings: list[Swing] = []
         self.filtered_swings: list[Swing] = []
@@ -459,7 +468,7 @@ class SwingDetector:
 
         # Pipelines
         self.strength_calculator = CompositeSwingStrengthCalculator()
-        
+
         # Filters configuration
         self.filters: list[SwingFilter] = []
         if self.config.filter_enabled:
@@ -503,6 +512,7 @@ class SwingDetector:
 
         if df["time"].duplicated().any():
             from core.exceptions import DuplicateTimestampError
+
             raise DuplicateTimestampError("Duplicate timestamps detected in swing input.")
 
     def _detect_highs(self, df: pd.DataFrame) -> pd.Series:
@@ -514,17 +524,17 @@ class SwingDetector:
         for j in range(1, self.config.left_bars + 1):
             shifted = high.shift(j)
             if self.config.allow_equal_highs:
-                is_high &= (high >= shifted)
+                is_high &= high >= shifted
             else:
-                is_high &= (high > shifted)
+                is_high &= high > shifted
 
         # Compare with succeeding candles
         for k in range(1, self.config.right_bars + 1):
             shifted = high.shift(-k)
             if self.config.allow_equal_highs:
-                is_high &= (high >= shifted)
+                is_high &= high >= shifted
             else:
-                is_high &= (high > shifted)
+                is_high &= high > shifted
 
         # Bound edges are unconfirmable
         is_high.iloc[: self.config.left_bars] = False
@@ -540,17 +550,17 @@ class SwingDetector:
         for j in range(1, self.config.left_bars + 1):
             shifted = low.shift(j)
             if self.config.allow_equal_lows:
-                is_low &= (low <= shifted)
+                is_low &= low <= shifted
             else:
-                is_low &= (low < shifted)
+                is_low &= low < shifted
 
         # Compare with succeeding candles
         for k in range(1, self.config.right_bars + 1):
             shifted = low.shift(-k)
             if self.config.allow_equal_lows:
-                is_low &= (low <= shifted)
+                is_low &= low <= shifted
             else:
-                is_low &= (low < shifted)
+                is_low &= low < shifted
 
         # Bound edges are unconfirmable
         is_low.iloc[: self.config.left_bars] = False
@@ -604,7 +614,7 @@ class SwingDetector:
 
         # Sort chronologically
         raw_swings = sorted(raw_swings, key=lambda s: s.index)
-        
+
         # Calculate initial strengths for raw swings
         raw_swings = self.strength_calculator.calculate(raw_swings, df, self.config)
         self.raw_swings = raw_swings
@@ -620,10 +630,14 @@ class SwingDetector:
         classified_swings = list(filtered_swings)
         if self.config.classification_enabled:
             classified_swings = self.classifier.classify(classified_swings, df, self.config)
-        
-        self.major_swings = [s for s in classified_swings if s.classification == SwingClassification.MAJOR]
-        self.minor_swings = [s for s in classified_swings if s.classification == SwingClassification.MINOR]
-        
+
+        self.major_swings = [
+            s for s in classified_swings if s.classification == SwingClassification.MAJOR
+        ]
+        self.minor_swings = [
+            s for s in classified_swings if s.classification == SwingClassification.MINOR
+        ]
+
         # 4. Construct Graph Relationships (Phase 4)
         if classified_swings:
             for i, swing in enumerate(classified_swings):
@@ -665,7 +679,7 @@ class SwingDetector:
             elif swing.type == SwingType.LOW:
                 is_swing_low_arr[idx] = True
                 swing_type_arr[idx] = SwingType.LOW.value
-            
+
             swing_price_arr[idx] = swing.price
             swing_strength_arr[idx] = swing.strength_category.value
             swing_index_arr[idx] = float(idx)

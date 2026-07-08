@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-import pandas as pd
 
 
 class SwingType(Enum):
     """Supported local swing classifications."""
+
     NONE = "NONE"
     HIGH = "HIGH"
     LOW = "LOW"
@@ -15,6 +15,7 @@ class SwingType(Enum):
 
 class SwingStrength(Enum):
     """Strength indicators of detected swing pivots."""
+
     WEAK = "WEAK"
     NORMAL = "NORMAL"
     STRONG = "STRONG"
@@ -23,6 +24,7 @@ class SwingStrength(Enum):
 
 class SwingClassification(Enum):
     """Classification of swings based on structural significance."""
+
     MAJOR = "MAJOR"
     MINOR = "MINOR"
     UNKNOWN = "UNKNOWN"
@@ -46,6 +48,7 @@ class SwingConfig:
         classification_enabled: If True, enables Major/Minor swing classification.
         filter_enabled: If True, enables filtering of raw swings.
     """
+
     left_bars: int = 3
     right_bars: int = 3
     minimum_distance_between_swings: int = 1
@@ -63,15 +66,17 @@ class SwingConfig:
         """Validate and synchronize swing configurations."""
         if self.left_bars <= 0 or self.right_bars <= 0:
             raise ValueError("left_bars and right_bars must be positive integers.")
-        
+
         # Fallback handling to keep backward compatibility with minimum_distance_between_swings
         min_bar_dist = self.minimum_bar_distance
         if self.minimum_distance_between_swings != 1 and self.minimum_bar_distance == 1:
             min_bar_dist = self.minimum_distance_between_swings
-        
+
         if min_bar_dist <= 0:
-            raise ValueError("minimum_bar_distance and minimum_distance_between_swings must be positive.")
-            
+            raise ValueError(
+                "minimum_bar_distance and minimum_distance_between_swings must be positive."
+            )
+
         object.__setattr__(self, "minimum_bar_distance", min_bar_dist)
         object.__setattr__(self, "minimum_distance_between_swings", min_bar_dist)
 
@@ -97,6 +102,7 @@ class Swing:
         bar_distance: Distance in bars to the chronologically preceding swing in the graph.
         price_distance: Price distance to the chronologically preceding swing in the graph.
     """
+
     id: str
     timestamp: datetime
     index: int
@@ -109,4 +115,3 @@ class Swing:
     next_id: str | None = None
     bar_distance: int | None = None
     price_distance: float | None = None
-

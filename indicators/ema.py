@@ -21,8 +21,6 @@ def ema(series: pd.Series, period: int = 20) -> pd.Series:
         raise ValueError("The provided dataset is empty and contains no records.")
 
     if period <= 0:
-        raise ValueError(
-            f"Invalid period {period} for EMA. Period must be greater than 0."
-        )
+        raise ValueError(f"Invalid period {period} for EMA. Period must be greater than 0.")
 
     return series.ewm(span=period, adjust=False).mean()

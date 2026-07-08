@@ -1,7 +1,8 @@
 """Unit tests and structural check verification for the Application Layer."""
 
 import sys
-import pytest
+from collections.abc import Callable
+from typing import Any
 
 from application.dto import ExecutionDTO, OrderDTO, SignalDTO
 from application.ports.inbound.coordinator_usecase import ITradingCoordinatorUseCase
@@ -10,18 +11,18 @@ from application.ports.outbound.execution_port import IExecutionPort
 from application.ports.outbound.notification_port import INotificationPort
 from application.ports.outbound.state_repository import IStateRepositoryPort
 from application.services.trading_coordinator import TradingCoordinatorService
-from core.models import Bar, OrderStatus, OrderType, Tick, Timeframe
+from core.models import Bar, OrderStatus, Tick, Timeframe
 
 
 class MockDataFeed(IDataFeedPort):
     """Mock implementation of IDataFeedPort."""
 
-    def fetch_historical_bars(
-        self, symbol: str, timeframe: Timeframe, count: int
-    ) -> list[Bar]:
+    def fetch_historical_bars(self, symbol: str, timeframe: Timeframe, count: int) -> list[Bar]:
+        """Fetch historical bars."""
         return []
 
-    def stream_realtime_data(self, symbol: str, timeframe: Timeframe, callback) -> None:
+    def stream_realtime_data(self, symbol: str, timeframe: Timeframe, callback: Callable) -> None:
+        """Stream realtime data."""
         pass
 
 
@@ -29,6 +30,7 @@ class MockExecution(IExecutionPort):
     """Mock implementation of IExecutionPort."""
 
     def execute_market_order(self, order: OrderDTO) -> ExecutionDTO:
+        """Execute market order."""
         return ExecutionDTO(
             execution_id="mock_exec",
             order_id=order.order_id,
@@ -39,13 +41,17 @@ class MockExecution(IExecutionPort):
         )
 
     def cancel_pending_order(self, order_id: str) -> bool:
+        """Cancel pending order."""
         return True
 
-    def fetch_active_positions(self, symbol: str | None = None):
+    def fetch_active_positions(self, symbol: str | None = None) -> list[Any]:
+        """Fetch active positions."""
         return []
 
-    def fetch_account_balance(self):
+    def fetch_account_balance(self) -> Any:
+        """Fetch account balance."""
         from core.models import AccountInfo
+
         return AccountInfo(10000.0, 10000.0, 0.0, 10000.0)
 
 
@@ -53,21 +59,23 @@ class MockNotifier(INotificationPort):
     """Mock implementation of INotificationPort."""
 
     def notify_signal_generated(self, signal: SignalDTO) -> None:
+        """Notify signal generated."""
         pass
 
     def notify_order_executed(self, receipt: ExecutionDTO) -> None:
+        """Notify order executed."""
         pass
 
 
 class MockRepository(IStateRepositoryPort):
     """Mock implementation of IStateRepositoryPort."""
 
-    def save_market_state(
-        self, symbol: str, timeframe: Timeframe, bars: list[Bar]
-    ) -> None:
+    def save_market_state(self, symbol: str, timeframe: Timeframe, bars: list[Bar]) -> None:
+        """Save market state."""
         pass
 
     def save_execution_receipt(self, receipt: ExecutionDTO) -> None:
+        """Save execution receipt."""
         pass
 
 
@@ -94,6 +102,7 @@ def test_coordinator_workflow_execution() -> None:
 
     # Given
     from datetime import datetime
+
     bar = Bar(datetime.now(), 1.1000, 1.1050, 1.0990, 1.1020, 100.0)
     tick = Tick(datetime.now(), 1.1010, 1.1020)
 

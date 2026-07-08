@@ -7,6 +7,7 @@ import pandas as pd
 
 class TrendDirection(Enum):
     """Direction of the market trend."""
+
     BULLISH = "BULLISH"
     BEARISH = "BEARISH"
     SIDEWAYS = "SIDEWAYS"
