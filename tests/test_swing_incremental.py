@@ -78,10 +78,10 @@ def test_incremental_cosine_wave_oscillations() -> None:
 
     for t in range(1, length + 1):
         window = bars[:t]
-        swing = detector.detect_incremental(window, graph)
-        if swing:
-            graph.add_swing(swing)
-            incremental_swings.append(swing)
+        res = detector.detect_incremental(window, graph)
+        if res.new_swing:
+            graph.add_swing(res.new_swing)
+            incremental_swings.append(res.new_swing)
 
     # Compare batch vs incremental counts and properties
     assert len(batch_swings) == len(incremental_swings)
@@ -115,7 +115,7 @@ def test_monotonic_trends_no_swings() -> None:
 
     graph = SwingGraph()
     for t in range(1, length + 1):
-        assert detector.detect_incremental(bars[:t], graph) is None
+        assert detector.detect_incremental(bars[:t], graph).new_swing is None
 
 
 def test_insufficient_history_fails() -> None:
@@ -128,7 +128,7 @@ def test_insufficient_history_fails() -> None:
 
     # Incremental should just return None when candidate index is out of left bounds
     graph = SwingGraph()
-    assert detector.detect_incremental(bars, graph) is None
+    assert detector.detect_incremental(bars, graph).new_swing is None
 
 
 def test_no_repaint_and_immutability_invariants() -> None:
@@ -152,10 +152,10 @@ def test_no_repaint_and_immutability_invariants() -> None:
 
     # Stream bars
     for t in range(1, length + 1):
-        swing = detector.detect_incremental(bars[:t], graph)
-        if swing:
-            graph.add_swing(swing)
-            confirmed_swings.append(swing)
+        res = detector.detect_incremental(bars[:t], graph)
+        if res.new_swing:
+            graph.add_swing(res.new_swing)
+            confirmed_swings.append(res.new_swing)
 
     assert len(confirmed_swings) == 1
     detected_swing = confirmed_swings[0]
@@ -202,9 +202,9 @@ def test_minor_to_major_label_upgrade() -> None:
     # (Because left=3 and right=3 bars are closed, i.e. indices 7..13)
     # The right_major requires 6 bars (up to index 16).
     for t in range(1, 15):
-        swing = detector.detect_incremental(bars[:t], graph)
-        if swing:
-            graph.add_swing(swing)
+        res = detector.detect_incremental(bars[:t], graph)
+        if res.new_swing:
+            graph.add_swing(res.new_swing)
 
     latest_high = graph.get_latest_high()
     assert latest_high is not None

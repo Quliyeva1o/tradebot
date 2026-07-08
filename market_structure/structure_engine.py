@@ -421,9 +421,7 @@ class MarketStructureEngine:
             and self.last_major_high.id != self.last_broken_high_id
         ):
             break_type = (
-                BreakType.CHoCH
-                if self.current_trend == StructureTrend.BEARISH
-                else BreakType.BOS
+                BreakType.CHoCH if self.current_trend == StructureTrend.BEARISH else BreakType.BOS
             )
             self.last_broken_high_id = self.last_major_high.id
             brk = StructureBreak(
@@ -442,9 +440,7 @@ class MarketStructureEngine:
             and self.last_major_low.id != self.last_broken_low_id
         ):
             break_type = (
-                BreakType.CHoCH
-                if self.current_trend == StructureTrend.BULLISH
-                else BreakType.BOS
+                BreakType.CHoCH if self.current_trend == StructureTrend.BULLISH else BreakType.BOS
             )
             self.last_broken_low_id = self.last_major_low.id
             brk = StructureBreak(
@@ -473,3 +469,13 @@ class MarketStructureEngine:
             active_major_low=self.last_major_low,
             breaks_history=list(self.breaks_history),
         )
+
+    def handle_upgrade(self, swing: Swing) -> None:
+        """Handles the upgrade of an existing swing to MAJOR classification."""
+        if swing.classification == SwingClassification.MAJOR:
+            if swing.type == SwingType.HIGH:
+                self.last_major_high = swing
+                self.last_broken_high_id = None
+            elif swing.type == SwingType.LOW:
+                self.last_major_low = swing
+                self.last_broken_low_id = None

@@ -3,7 +3,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from smc.displacement import DisplacementBar
+    from smc.fvg import FairValueGap
+    from smc.liquidity import LiquidityLevel
+    from smc.order_block import OrderBlock
 
 from core.models import Bar, Timeframe
 from market_structure.swing_models import Swing, SwingClassification, SwingType
@@ -249,6 +255,16 @@ class SwingGraph:
 
 
 @dataclass
+class SMCState:
+    """State containing Smart Money Concepts (SMC) elements detected in price action."""
+
+    fair_value_gaps: list["FairValueGap"] = field(default_factory=list)
+    order_blocks: list["OrderBlock"] = field(default_factory=list)
+    liquidity_levels: list["LiquidityLevel"] = field(default_factory=list)
+    displacements: list["DisplacementBar"] = field(default_factory=list)
+
+
+@dataclass
 class MarketState:
     """Domain aggregate root container representing instrument market timeline state."""
 
@@ -257,6 +273,7 @@ class MarketState:
     _bars: list[Bar] = field(default_factory=list, repr=False)
     swing_graph: SwingGraph = field(default_factory=SwingGraph)
     structure_state: StructureState = field(default_factory=StructureState)
+    smc_state: SMCState = field(default_factory=SMCState)
 
     @property
     def bars(self) -> list[Bar]:

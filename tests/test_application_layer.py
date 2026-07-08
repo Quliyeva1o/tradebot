@@ -21,7 +21,9 @@ class MockDataFeed(IDataFeedPort):
         """Fetch historical bars."""
         return []
 
-    def stream_realtime_data(self, symbol: str, timeframe: Timeframe, callback: Callable[[Bar], None]) -> None:
+    def stream_realtime_data(
+        self, symbol: str, timeframe: Timeframe, callback: Callable[[Bar], None]
+    ) -> None:
         """Stream realtime data."""
         pass
 

@@ -392,7 +392,7 @@ def test_new_swing_high_resets_break_detection() -> None:
     engine.update(s5_high)
     assert engine.last_major_high is not None
     assert engine.last_major_high.id == "s5_high"
-    assert getattr(engine, "last_broken_high_id") is None
+    assert getattr(engine, "last_broken_high_id") is None  # noqa: B009
 
     # Now, a bar closing above the new high (120.0) should trigger a new break
     bar2 = Bar(

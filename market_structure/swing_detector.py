@@ -4,6 +4,7 @@ Implements high-performance, non-repainting, Pandas-free swing high and swing lo
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from core.exceptions import DataValidationError, DuplicateTimestampError, InvalidTimestampError
 from core.models import Bar
@@ -15,6 +16,14 @@ from market_structure.swing_models import (
     SwingStrength,
     SwingType,
 )
+
+
+@dataclass(frozen=True)
+class IncrementalSwingResult:
+    """Contains results of incremental swing detection and updates."""
+
+    new_swing: Swing | None = None
+    upgraded_swing: Swing | None = None
 
 
 class SwingDetector:
@@ -182,7 +191,7 @@ class SwingDetector:
 
         return filtered_swings
 
-    def detect_incremental(self, bars: Sequence[Bar], graph: SwingGraph) -> Swing | None:
+    def detect_incremental(self, bars: Sequence[Bar], graph: SwingGraph) -> IncrementalSwingResult:
         """Processes the latest completed candle and returns a Swing if confirmed at T - R.
 
         Args:
@@ -190,17 +199,26 @@ class SwingDetector:
             graph: Passive SwingGraph storing all historical swings.
 
         Returns:
-            A new Swing object if one is confirmed, else None.
+            An IncrementalSwingResult containing the new and/or upgraded swings.
         """
         left = self.config.left_bars
         right = self.config.right_bars
         n = len(bars)
 
+        # Upgrade Check (always checked on every closed bar)
+        upgraded_swing = None
+        for swing in graph.nodes[-5:]:
+            if swing.classification == SwingClassification.MINOR:
+                if self.check_upgrade(swing, bars):
+                    swing.classification = SwingClassification.MAJOR
+                    upgraded_swing = swing
+                    break
+
         # Candidate check index is T - right
         t = n - 1
         candidate_idx = t - right
         if candidate_idx < left:
-            return None
+            return IncrementalSwingResult(None, upgraded_swing)
 
         bar = bars[candidate_idx]
 
@@ -273,7 +291,7 @@ class SwingDetector:
             )
 
         if not candidate:
-            return None
+            return IncrementalSwingResult(None, upgraded_swing)
 
         # Filter check against graph
         if self.config.filter_enabled:
@@ -293,37 +311,33 @@ class SwingDetector:
                     if candidate.type == SwingType.HIGH
                     else (candidate.price < last_same_type.price)
                 )
-                if better:
-                    # In a stateless/non-mutating design, we cannot modify the graph.
-                    # However, to be strictly correct, we return candidate if it is better.
-                    # The caller aggregate root is responsible for replacing it.
-                    pass
-                else:
-                    return None
+                if not better:
+                    candidate = None
 
             # Alternate/Duplicate Swing filter
-            nodes = graph.nodes
-            if nodes:
-                last_swing = nodes[-1]
-                if last_swing.type == candidate.type:
-                    # Consecutive duplicate. Keep the extreme one.
-                    better = (
-                        (candidate.price > last_swing.price)
-                        if candidate.type == SwingType.HIGH
-                        else (candidate.price < last_swing.price)
-                    )
-                    if better:
-                        pass
-                    elif candidate.price == last_swing.price and (
-                        (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
-                        or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
-                    ):
-                        pass
-                    else:
-                        return None
+            if candidate:
+                nodes = graph.nodes
+                if nodes:
+                    last_swing = nodes[-1]
+                    if last_swing.type == candidate.type:
+                        # Consecutive duplicate. Keep the extreme one.
+                        better = (
+                            (candidate.price > last_swing.price)
+                            if candidate.type == SwingType.HIGH
+                            else (candidate.price < last_swing.price)
+                        )
+                        if better:
+                            pass
+                        elif candidate.price == last_swing.price and (
+                            (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
+                            or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
+                        ):
+                            pass
+                        else:
+                            candidate = None
 
             # Min Price Distance filter
-            if self.config.minimum_price_distance > 0.0 and last_same_type:
+            if candidate and self.config.minimum_price_distance > 0.0 and last_same_type:
                 if abs(candidate.price - last_same_type.price) < self.config.minimum_price_distance:
                     better = (
                         (candidate.price > last_same_type.price)
@@ -331,27 +345,28 @@ class SwingDetector:
                         else (candidate.price < last_same_type.price)
                     )
                     if not better:
-                        return None
+                        candidate = None
 
-        # Classify candidates
-        if self.config.classification_enabled:
-            candidate.classification = self._classify_swing(candidate, bars)
-        else:
-            candidate.classification = SwingClassification.UNKNOWN
+        if candidate:
+            # Classify candidates
+            if self.config.classification_enabled:
+                candidate.classification = self._classify_swing(candidate, bars)
+            else:
+                candidate.classification = SwingClassification.UNKNOWN
 
-        # Calculate Strength
-        candidate.strength = self._calculate_strength(candidate, bars)
-        candidate.strength_category = self._map_strength_category(candidate.strength)
+            # Calculate Strength
+            candidate.strength = self._calculate_strength(candidate, bars)
+            candidate.strength_category = self._map_strength_category(candidate.strength)
 
-        # Set Links to last swing in graph
-        nodes = graph.nodes
-        if nodes:
-            prev = nodes[-1]
-            candidate.previous_id = prev.id
-            candidate.bar_distance = candidate.index - prev.index
-            candidate.price_distance = float(candidate.price - prev.price)
+            # Set Links to last swing in graph
+            nodes = graph.nodes
+            if nodes:
+                prev = nodes[-1]
+                candidate.previous_id = prev.id
+                candidate.bar_distance = candidate.index - prev.index
+                candidate.price_distance = float(candidate.price - prev.price)
 
-        return candidate
+        return IncrementalSwingResult(new_swing=candidate, upgraded_swing=upgraded_swing)
 
     def check_upgrade(self, swing: Swing, bars: Sequence[Bar]) -> bool:
         """Determines if an existing MINOR swing is eligible for upgrade to MAJOR.

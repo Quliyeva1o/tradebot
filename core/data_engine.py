@@ -4,7 +4,6 @@ Acts as the central coordination layer that consumes IMarketDataProvider impleme
 runs structured check suite validations, and exposes sanitized bar sequences.
 """
 
-
 from core.exceptions import (
     DataValidationError,
     DuplicateTimestampError,
