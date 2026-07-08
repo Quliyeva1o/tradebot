@@ -1,27 +1,41 @@
-"""Strategy engine router and event dispatcher."""
+"""Strategy engine orchestrator module."""
 
-from core.interfaces import IDataFeed, IExecutionProvider, IStrategy
+from market_structure.structure_models import MarketState
+from strategy.interfaces import TradeSetupStrategy
+from strategy.models import TradeSetup
 
 
 class StrategyEngine:
-    """Coordinates active strategies, mapping and route feeding inputs."""
+    """Coordinates and executes registered strategy modules.
 
-    def __init__(self, data_feed: IDataFeed, execution_provider: IExecutionProvider) -> None:
-        """Initializes the StrategyEngine.
+    Acts as a pure orchestrator. It does not perform any structural calculations
+    or filtering, complying with the Open-Closed and Single Responsibility principles.
+    """
 
-        Args:
-            data_feed: Feeds historical/live pricing.
-            execution_provider: Broker engine wrapper.
-        """
-        self.data_feed = data_feed
-        self.execution_provider = execution_provider
-        self.active_strategies: list[IStrategy] = []
+    def __init__(self) -> None:
+        """Initializes the StrategyEngine with an empty list of strategies."""
+        self.strategies: list[TradeSetupStrategy] = []
 
-    def register_strategy(self, strategy: IStrategy) -> None:
-        """Adds a strategy to the engine.
+    def register_strategy(self, strategy: TradeSetupStrategy) -> None:
+        """Registers a trading strategy module.
 
         Args:
-            strategy: Concrete implementation of IStrategy.
+            strategy: A concrete implementation of TradeSetupStrategy.
         """
-        strategy.on_init(self.execution_provider, self.data_feed)
-        self.active_strategies.append(strategy)
+        self.strategies.append(strategy)
+
+    def run(self, market_state: MarketState) -> list[TradeSetup]:
+        """Executes all registered strategies against the given MarketState.
+
+        Args:
+            market_state: The read-only MarketState domain aggregate.
+
+        Returns:
+            A list of generated TradeSetup candidates.
+        """
+        setups: list[TradeSetup] = []
+        for strategy in self.strategies:
+            setup = strategy.evaluate(market_state)
+            if setup is not None:
+                setups.append(setup)
+        return setups
