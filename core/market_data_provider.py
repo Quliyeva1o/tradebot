@@ -4,28 +4,29 @@ Defines the contract that all concrete data providers (e.g. CSV, MT5, REST, WS)
 must implement.
 """
 
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-import pandas as pd
+from core.models import Bar
 
 
 @runtime_checkable
 class IMarketDataProvider(Protocol):
     """Protocol for fetching and validating market datasets."""
 
-    def load(self) -> pd.DataFrame:
+    def load(self) -> list[Bar]:
         """Loads raw market data from the source.
 
         Returns:
-            A pandas DataFrame representing the loaded raw market rates.
+            A list of Bar objects representing the loaded raw market rates.
         """
         ...
 
-    def validate(self, df: pd.DataFrame) -> None:
+    def validate(self, bars: Sequence[Bar]) -> None:
         """Performs source-specific validation checks on the loaded data.
 
         Args:
-            df: The pandas DataFrame to validate.
+            bars: The sequence of Bar objects to validate.
         """
         ...
 

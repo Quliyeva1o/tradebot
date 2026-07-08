@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from core.models import Bar, Timeframe
-from market_structure.swing_models import Swing
+from market_structure.swing_models import Swing, SwingClassification, SwingType
 
 
 class StructureTrend(Enum):
@@ -91,8 +92,8 @@ class MarketStructure:
     current_hl: Swing | None = None
     current_lh: Swing | None = None
     current_ll: Swing | None = None
-    internal_structure: dict = field(default_factory=dict)
-    external_structure: dict = field(default_factory=dict)
+    internal_structure: dict[str, Any] = field(default_factory=dict)
+    external_structure: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
     sequence_number: int = 0
 
@@ -132,6 +133,11 @@ class SwingGraph:
 
     _nodes: list[Swing] = field(default_factory=list, repr=False)
     edges: dict[str, list[str]] = field(default_factory=dict)
+    swings_dict: dict[str, Swing] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initializes the swings dictionary lookup table."""
+        self.swings_dict = {s.id: s for s in self._nodes}
 
     @property
     def nodes(self) -> list[Swing]:
@@ -141,22 +147,83 @@ class SwingGraph:
     def add_swing(self, swing: Swing) -> None:
         """Adds a swing node to the graph."""
         self._nodes.append(swing)
+        self.swings_dict[swing.id] = swing
         if swing.previous_id:
             self.edges.setdefault(swing.previous_id, []).append(swing.id)
 
+    def get_swing(self, swing_id: str) -> Swing | None:
+        """Finds a swing by its unique ID."""
+        return self.swings_dict.get(swing_id)
+
+    def get_previous_swing(self, swing: Swing) -> Swing | None:
+        """Gets the chronologically preceding swing in the graph."""
+        if swing.previous_id:
+            return self.get_swing(swing.previous_id)
+        return None
+
+    def get_next_swing(self, swing: Swing) -> Swing | None:
+        """Gets the chronologically succeeding swing in the graph."""
+        if swing.next_id:
+            return self.get_swing(swing.next_id)
+        return None
+
+    def get_previous_of_type(self, swing: Swing, swing_type: SwingType) -> Swing | None:
+        """Traverses backwards to find the nearest swing of the specified type."""
+        curr = swing
+        while True:
+            prev = self.get_previous_swing(curr)
+            if not prev:
+                return None
+            if prev.type == swing_type:
+                return prev
+            curr = prev
+
+    def get_next_of_type(self, swing: Swing, swing_type: SwingType) -> Swing | None:
+        """Traverses forwards to find the nearest swing of the specified type."""
+        curr = swing
+        while True:
+            nxt = self.get_next_swing(curr)
+            if not nxt:
+                return None
+            if nxt.type == swing_type:
+                return nxt
+            curr = nxt
+
+    def get_previous_major(self, swing: Swing) -> Swing | None:
+        """Traverses backwards to find the nearest MAJOR swing."""
+        curr = swing
+        while True:
+            prev = self.get_previous_swing(curr)
+            if not prev:
+                return None
+            if prev.classification == SwingClassification.MAJOR:
+                return prev
+            curr = prev
+
+    def get_next_major(self, swing: Swing) -> Swing | None:
+        """Traverses forwards to find the nearest MAJOR swing."""
+        curr = swing
+        while True:
+            nxt = self.get_next_swing(curr)
+            if not nxt:
+                return None
+            if nxt.classification == SwingClassification.MAJOR:
+                return nxt
+            curr = nxt
+
     def get_latest_high(self) -> Swing | None:
         """Returns the most recent confirmed swing high."""
-        highs = [s for s in self._nodes if s.type.name == "HIGH"]
+        highs = [s for s in self._nodes if s.type == SwingType.HIGH]
         return highs[-1] if highs else None
 
     def get_latest_low(self) -> Swing | None:
         """Returns the most recent confirmed swing low."""
-        lows = [s for s in self._nodes if s.type.name == "LOW"]
+        lows = [s for s in self._nodes if s.type == SwingType.LOW]
         return lows[-1] if lows else None
 
     def find_equal_highs(self, tolerance: float = 0.0001) -> list[Swing]:
         """Finds groups of swing highs close in price (potential double/triple highs)."""
-        highs = [s for s in self._nodes if s.type.name == "HIGH"]
+        highs = [s for s in self._nodes if s.type == SwingType.HIGH]
         equal_highs = []
         for i, s1 in enumerate(highs):
             for s2 in highs[i + 1 :]:
@@ -169,7 +236,7 @@ class SwingGraph:
 
     def find_equal_lows(self, tolerance: float = 0.0001) -> list[Swing]:
         """Finds groups of swing lows close in price (potential double/triple lows)."""
-        lows = [s for s in self._nodes if s.type.name == "LOW"]
+        lows = [s for s in self._nodes if s.type == SwingType.LOW]
         equal_lows = []
         for i, s1 in enumerate(lows):
             for s2 in lows[i + 1 :]:

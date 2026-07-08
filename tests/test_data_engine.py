@@ -32,12 +32,14 @@ def test_valid_csv(tmp_path: Path) -> None:
 
     provider = CSVDataProvider(filepath=csv_file)
     engine = DataEngine(provider=provider)
-    df = engine.get_data()
+    bars = engine.get_data()
 
-    assert len(df) == 2
-    assert list(df.columns) == ["time", "open", "high", "low", "close", "volume"]
-    assert df.loc[0, "time"] == pd.to_datetime("2026-07-01 12:00:00").tz_localize("UTC")
-    assert df.loc[1, "close"] == 1.1060
+    assert len(bars) == 2
+    assert (
+        bars[0].timestamp
+        == pd.to_datetime("2026-07-01 12:00:00").tz_localize("UTC").to_pydatetime()
+    )
+    assert bars[1].close == 1.1060
 
 
 def test_missing_column(tmp_path: Path) -> None:
@@ -110,11 +112,17 @@ def test_unsorted_timestamps(tmp_path: Path) -> None:
 
     provider = CSVDataProvider(filepath=csv_file)
     engine = DataEngine(provider=provider)
-    df = engine.get_data()
+    bars = engine.get_data()
 
     # The provider must sort these automatically
-    assert df.loc[0, "time"] == pd.to_datetime("2026-07-01 12:00:00").tz_localize("UTC")
-    assert df.loc[1, "time"] == pd.to_datetime("2026-07-01 13:00:00").tz_localize("UTC")
+    assert (
+        bars[0].timestamp
+        == pd.to_datetime("2026-07-01 12:00:00").tz_localize("UTC").to_pydatetime()
+    )
+    assert (
+        bars[1].timestamp
+        == pd.to_datetime("2026-07-01 13:00:00").tz_localize("UTC").to_pydatetime()
+    )
 
 
 def test_duplicate_removal_enabled(tmp_path: Path) -> None:
@@ -130,11 +138,11 @@ def test_duplicate_removal_enabled(tmp_path: Path) -> None:
     settings_drop = Settings(DUPLICATE_POLICY="drop")
     provider_drop = CSVDataProvider(filepath=csv_file, settings=settings_drop)
     engine_drop = DataEngine(provider=provider_drop)
-    df_drop = engine_drop.get_data()
+    bars_drop = engine_drop.get_data()
 
     # Verify duplicate was dropped (keeps the last one)
-    assert len(df_drop) == 1
-    assert df_drop.loc[0, "close"] == 1.1030
+    assert len(bars_drop) == 1
+    assert bars_drop[0].close == 1.1030
 
     # Scenario B: DUPLICATE_POLICY = "keep"
     # Keeping duplicates will cause the engine validation to fail with DuplicateTimestampError

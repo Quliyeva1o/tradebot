@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
+from application.adapters.dataframe_adapter import DataFrameSwingDetectorAdapter as SwingDetector
 from core.exceptions import DataValidationError, InvalidTimestampError, MissingColumnError
-from market_structure.swing_detector import SwingDetector
 from market_structure.swing_models import SwingClassification, SwingConfig, SwingStrength, SwingType
 
 

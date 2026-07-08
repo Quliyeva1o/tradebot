@@ -1,14 +1,13 @@
 """Swing Detection Engine module.
 
-Implements high-performance, non-repainting swing high and swing low pivot detectors.
+Implements high-performance, non-repainting, Pandas-free swing high and swing low pivot detectors.
 """
 
-from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
-import numpy as np
-import pandas as pd
-
-from core.exceptions import DataValidationError, InvalidTimestampError, MissingColumnError
+from core.exceptions import DataValidationError, DuplicateTimestampError, InvalidTimestampError
+from core.models import Bar
+from market_structure.structure_models import SwingGraph
 from market_structure.swing_models import (
     Swing,
     SwingClassification,
@@ -17,155 +16,418 @@ from market_structure.swing_models import (
     SwingType,
 )
 
-# --- Strength Calculators ---
 
+class SwingDetector:
+    """Stateless engine to detect swing high and swing low pivot levels in price data.
 
-class SwingStrengthCalculator(ABC):
-    """Interface for extensible swing strength calculation."""
+    This class has been refactored to be pure domain logic, completely independent of Pandas/NumPy.
+    """
 
-    @abstractmethod
-    def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        """Calculates a specific strength metric for the list of swings."""
-        pass
+    def __init__(self, config: SwingConfig | None = None) -> None:
+        """Initializes the SwingDetector.
 
+        Args:
+            config: Configurations for window sizes and equal level boundaries.
+        """
+        self.config = config or SwingConfig()
 
-class LocalDominanceStrengthCalculator(SwingStrengthCalculator):
-    """Calculates swing strength based on local wick divergence relative to average volatility range."""
+    def _validate(self, bars: Sequence[Bar]) -> None:
+        """Ensures that the input sequence meets structural requirements."""
+        min_required_len = self.config.left_bars + self.config.right_bars + 1
+        if len(bars) < min_required_len:
+            raise DataValidationError(
+                f"Dataset too small. Requires at least {min_required_len} rows for detection."
+            )
 
-    def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if not swings:
-            return swings
+        last_time = None
+        seen_times = set()
+        for bar in bars:
+            t = bar.timestamp
+            if last_time is not None and t < last_time:
+                raise InvalidTimestampError(
+                    "Price history timestamps must be sorted chronologically."
+                )
+            if t in seen_times:
+                raise DuplicateTimestampError("Duplicate timestamps detected in swing input.")
+            seen_times.add(t)
+            last_time = t
 
-        left = config.left_bars
-        right = config.right_bars
-        total_window = left + right + 1
+    def detect_batch(self, bars: Sequence[Bar]) -> list[Swing]:
+        """Scans the entire historical sequence of bars and returns all confirmed swings.
 
-        # Volatility normalization factor: average high-low range of surrounding window
-        avg_range = (df["high"] - df["low"]).rolling(window=total_window, center=True).mean()
-        # Handle edges and guard against division by zero
-        avg_range = avg_range.ffill().bfill().replace(0.0, 1.0)
+        Args:
+            bars: List of candlestick bars to process.
 
-        # Precalculate mean series to avoid O(N) rolling calculations in the loop
-        left_mean_high = df["high"].shift(1).rolling(window=left).mean()
-        right_mean_high = df["high"].shift(-right).rolling(window=right).mean()
-        divergence_high = df["high"] - (left_mean_high + right_mean_high) / 2.0
-        rel_strength_high = (divergence_high / avg_range).fillna(0.0)
+        Returns:
+            A chronologically sorted list of confirmed Swing objects.
+        """
+        self._validate(bars)
 
-        left_mean_low = df["low"].shift(1).rolling(window=left).mean()
-        right_mean_low = df["low"].shift(-right).rolling(window=right).mean()
-        divergence_low = (left_mean_low + right_mean_low) / 2.0 - df["low"]
-        rel_strength_low = (divergence_low / avg_range).fillna(0.0)
+        left = self.config.left_bars
+        right = self.config.right_bars
+        n = len(bars)
 
-        rel_strength_high_arr = rel_strength_high.to_numpy()
-        rel_strength_low_arr = rel_strength_low.to_numpy()
+        raw_candidates: list[Swing] = []
 
-        for swing in swings:
-            idx = swing.index
-            if swing.type == SwingType.HIGH:
-                swing.strength = float(rel_strength_high_arr[idx])
-            elif swing.type == SwingType.LOW:
-                swing.strength = float(rel_strength_low_arr[idx])
+        # 1. Candidate Detection
+        for i in range(left, n - right):
+            bar = bars[i]
 
-            # Map float strength to category for backward compatibility
-            if swing.strength < 0.5:
-                swing.strength_category = SwingStrength.WEAK
-            elif swing.strength < 1.0:
-                swing.strength_category = SwingStrength.NORMAL
-            elif swing.strength < 2.0:
-                swing.strength_category = SwingStrength.STRONG
+            # Swing High Check
+            is_high = True
+            for j in range(1, left + 1):
+                prev_high = bars[i - j].high
+                if self.config.allow_equal_highs:
+                    if bar.high < prev_high:
+                        is_high = False
+                        break
+                else:
+                    if bar.high <= prev_high:
+                        is_high = False
+                        break
+
+            if is_high:
+                for k in range(1, right + 1):
+                    next_high = bars[i + k].high
+                    if self.config.allow_equal_highs:
+                        if bar.high < next_high:
+                            is_high = False
+                            break
+                    else:
+                        if bar.high <= next_high:
+                            is_high = False
+                            break
+
+            if is_high:
+                raw_candidates.append(
+                    Swing(
+                        id=f"swing_{i}_high",
+                        timestamp=bar.timestamp,
+                        index=i,
+                        price=bar.high,
+                        type=SwingType.HIGH,
+                    )
+                )
+
+            # Swing Low Check
+            is_low = True
+            for j in range(1, left + 1):
+                prev_low = bars[i - j].low
+                if self.config.allow_equal_lows:
+                    if bar.low > prev_low:
+                        is_low = False
+                        break
+                else:
+                    if bar.low >= prev_low:
+                        is_low = False
+                        break
+
+            if is_low:
+                for k in range(1, right + 1):
+                    next_low = bars[i + k].low
+                    if self.config.allow_equal_lows:
+                        if bar.low > next_low:
+                            is_low = False
+                            break
+                    else:
+                        if bar.low >= next_low:
+                            is_low = False
+                            break
+
+            if is_low:
+                raw_candidates.append(
+                    Swing(
+                        id=f"swing_{i}_low",
+                        timestamp=bar.timestamp,
+                        index=i,
+                        price=bar.low,
+                        type=SwingType.LOW,
+                    )
+                )
+
+        # 2. Filter Swings (Alternate and spacing filters)
+        filtered_swings = self._apply_filtering(raw_candidates, bars)
+
+        # 3. Classify Swings (MAJOR vs. MINOR)
+        if self.config.classification_enabled:
+            for swing in filtered_swings:
+                swing.classification = self._classify_swing(swing, bars)
+        else:
+            for swing in filtered_swings:
+                swing.classification = SwingClassification.UNKNOWN
+
+        # 4. Calculate Strength & Categories
+        for swing in filtered_swings:
+            swing.strength = self._calculate_strength(swing, bars)
+            swing.strength_category = self._map_strength_category(swing.strength)
+
+        # 5. Build Graph Links & Distances
+        if filtered_swings:
+            for idx, swing in enumerate(filtered_swings):
+                if idx > 0:
+                    prev = filtered_swings[idx - 1]
+                    swing.previous_id = prev.id
+                    swing.bar_distance = swing.index - prev.index
+                    swing.price_distance = float(swing.price - prev.price)
+                else:
+                    swing.previous_id = None
+                    swing.bar_distance = None
+                    swing.price_distance = None
+
+                if idx < len(filtered_swings) - 1:
+                    nxt = filtered_swings[idx + 1]
+                    swing.next_id = nxt.id
+                else:
+                    swing.next_id = None
+
+        return filtered_swings
+
+    def detect_incremental(self, bars: Sequence[Bar], graph: SwingGraph) -> Swing | None:
+        """Processes the latest completed candle and returns a Swing if confirmed at T - R.
+
+        Args:
+            bars: The full candlestick timeline sequence.
+            graph: Passive SwingGraph storing all historical swings.
+
+        Returns:
+            A new Swing object if one is confirmed, else None.
+        """
+        left = self.config.left_bars
+        right = self.config.right_bars
+        n = len(bars)
+
+        # Candidate check index is T - right
+        t = n - 1
+        candidate_idx = t - right
+        if candidate_idx < left:
+            return None
+
+        bar = bars[candidate_idx]
+
+        # Check candidate Swing High
+        is_high = True
+        for j in range(1, left + 1):
+            prev_high = bars[candidate_idx - j].high
+            if self.config.allow_equal_highs:
+                if bar.high < prev_high:
+                    is_high = False
+                    break
             else:
-                swing.strength_category = SwingStrength.VERY_STRONG
+                if bar.high <= prev_high:
+                    is_high = False
+                    break
 
-        return swings
+        if is_high:
+            for k in range(1, right + 1):
+                next_high = bars[candidate_idx + k].high
+                if self.config.allow_equal_highs:
+                    if bar.high < next_high:
+                        is_high = False
+                        break
+                else:
+                    if bar.high <= next_high:
+                        is_high = False
+                        break
 
+        # Check candidate Swing Low
+        is_low = True
+        for j in range(1, left + 1):
+            prev_low = bars[candidate_idx - j].low
+            if self.config.allow_equal_lows:
+                if bar.low > prev_low:
+                    is_low = False
+                    break
+            else:
+                if bar.low >= prev_low:
+                    is_low = False
+                    break
 
-class PriceExcursionStrengthCalculator(SwingStrengthCalculator):
-    """Calculates swing strength based on the maximum price excursion relative to opposite extreme."""
+        if is_low:
+            for k in range(1, right + 1):
+                next_low = bars[candidate_idx + k].low
+                if self.config.allow_equal_lows:
+                    if bar.low > next_low:
+                        is_low = False
+                        break
+                else:
+                    if bar.low >= next_low:
+                        is_low = False
+                        break
 
-    def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if not swings:
+        candidate = None
+        if is_high:
+            candidate = Swing(
+                id=f"swing_{candidate_idx}_high",
+                timestamp=bar.timestamp,
+                index=candidate_idx,
+                price=bar.high,
+                type=SwingType.HIGH,
+            )
+        elif is_low:
+            candidate = Swing(
+                id=f"swing_{candidate_idx}_low",
+                timestamp=bar.timestamp,
+                index=candidate_idx,
+                price=bar.low,
+                type=SwingType.LOW,
+            )
+
+        if not candidate:
+            return None
+
+        # Filter check against graph
+        if self.config.filter_enabled:
+            # Min Bar Distance filter
+            last_same_type = (
+                graph.get_latest_high()
+                if candidate.type == SwingType.HIGH
+                else graph.get_latest_low()
+            )
+            if (
+                last_same_type
+                and (candidate.index - last_same_type.index) < self.config.minimum_bar_distance
+            ):
+                # Keep the extreme one
+                better = (
+                    (candidate.price > last_same_type.price)
+                    if candidate.type == SwingType.HIGH
+                    else (candidate.price < last_same_type.price)
+                )
+                if better:
+                    # In a stateless/non-mutating design, we cannot modify the graph.
+                    # However, to be strictly correct, we return candidate if it is better.
+                    # The caller aggregate root is responsible for replacing it.
+                    pass
+                else:
+                    return None
+
+            # Alternate/Duplicate Swing filter
+            nodes = graph.nodes
+            if nodes:
+                last_swing = nodes[-1]
+                if last_swing.type == candidate.type:
+                    # Consecutive duplicate. Keep the extreme one.
+                    better = (
+                        (candidate.price > last_swing.price)
+                        if candidate.type == SwingType.HIGH
+                        else (candidate.price < last_swing.price)
+                    )
+                    if better:
+                        pass
+                    elif candidate.price == last_swing.price and (
+                        (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
+                        or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
+                    ):
+                        pass
+                    else:
+                        return None
+
+            # Min Price Distance filter
+            if self.config.minimum_price_distance > 0.0 and last_same_type:
+                if abs(candidate.price - last_same_type.price) < self.config.minimum_price_distance:
+                    better = (
+                        (candidate.price > last_same_type.price)
+                        if candidate.type == SwingType.HIGH
+                        else (candidate.price < last_same_type.price)
+                    )
+                    if not better:
+                        return None
+
+        # Classify candidates
+        if self.config.classification_enabled:
+            candidate.classification = self._classify_swing(candidate, bars)
+        else:
+            candidate.classification = SwingClassification.UNKNOWN
+
+        # Calculate Strength
+        candidate.strength = self._calculate_strength(candidate, bars)
+        candidate.strength_category = self._map_strength_category(candidate.strength)
+
+        # Set Links to last swing in graph
+        nodes = graph.nodes
+        if nodes:
+            prev = nodes[-1]
+            candidate.previous_id = prev.id
+            candidate.bar_distance = candidate.index - prev.index
+            candidate.price_distance = float(candidate.price - prev.price)
+
+        return candidate
+
+    def check_upgrade(self, swing: Swing, bars: Sequence[Bar]) -> bool:
+        """Determines if an existing MINOR swing is eligible for upgrade to MAJOR.
+
+        Args:
+            swing: The confirmed MINOR Swing to check.
+            bars: The historical bar timeline sequence.
+
+        Returns:
+            True if the swing qualifies as MAJOR, False otherwise.
+        """
+        if swing.classification == SwingClassification.MAJOR:
+            return True
+
+        left_major = self.config.left_bars * 2
+        right_major = self.config.right_bars * 2
+        idx = swing.index
+        n = len(bars)
+
+        # Ensure we have enough bars to evaluate the full major window
+        if idx - left_major < 0 or idx + right_major >= n:
+            return False
+
+        if swing.type == SwingType.HIGH:
+            # Check left
+            for j in range(1, left_major + 1):
+                prev_high = bars[idx - j].high
+                if self.config.allow_equal_highs:
+                    if swing.price < prev_high:
+                        return False
+                else:
+                    if swing.price <= prev_high:
+                        return False
+            # Check right
+            for k in range(1, right_major + 1):
+                next_high = bars[idx + k].high
+                if self.config.allow_equal_highs:
+                    if swing.price < next_high:
+                        return False
+                else:
+                    if swing.price <= next_high:
+                        return False
+
+        elif swing.type == SwingType.LOW:
+            # Check left
+            for j in range(1, left_major + 1):
+                prev_low = bars[idx - j].low
+                if self.config.allow_equal_lows:
+                    if swing.price > prev_low:
+                        return False
+                else:
+                    if swing.price >= prev_low:
+                        return False
+            # Check right
+            for k in range(1, right_major + 1):
+                next_low = bars[idx + k].low
+                if self.config.allow_equal_lows:
+                    if swing.price > next_low:
+                        return False
+                else:
+                    if swing.price >= next_low:
+                        return False
+
+        return True
+
+    def _apply_filtering(self, swings: list[Swing], bars: Sequence[Bar]) -> list[Swing]:
+        """Applies MinBarDistance, Duplicate, and MinPriceDistance filters to candidate list."""
+        if not self.config.filter_enabled or len(swings) <= 1:
             return swings
-        left = config.left_bars
-        right = config.right_bars
 
-        # Precalculate min/max arrays to do fast lookups
-        low_min = df["low"].rolling(window=left + right + 1, center=True).min()
-        high_max = df["high"].rolling(window=left + right + 1, center=True).max()
-
-        low_min_arr = low_min.to_numpy()
-        high_max_arr = high_max.to_numpy()
-        high_arr = df["high"].to_numpy()
-        low_arr = df["low"].to_numpy()
-
-        for swing in swings:
-            idx = swing.index
-            if swing.type == SwingType.HIGH:
-                min_low = low_min_arr[idx]
-                if np.isnan(min_low):
-                    min_low = low_arr[max(0, idx - left) : min(len(df), idx + right + 1)].min()
-                excursion = swing.price - min_low
-                swing.strength = max(swing.strength, float(excursion))
-            elif swing.type == SwingType.LOW:
-                max_high = high_max_arr[idx]
-                if np.isnan(max_high):
-                    max_high = high_arr[max(0, idx - left) : min(len(df), idx + right + 1)].max()
-                excursion = max_high - swing.price
-                swing.strength = max(swing.strength, float(excursion))
-        return swings
-
-
-class BarDistanceStrengthCalculator(SwingStrengthCalculator):
-    """Calculates swing strength based on the left/right confirmation bar configuration."""
-
-    def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        val = float(config.left_bars + config.right_bars)
-        for swing in swings:
-            swing.strength = max(swing.strength, val)
-        return swings
-
-
-class CompositeSwingStrengthCalculator(SwingStrengthCalculator):
-    """Orchestrates all strength calculations."""
-
-    def __init__(self) -> None:
-        self.calculators = [
-            LocalDominanceStrengthCalculator(),
-            PriceExcursionStrengthCalculator(),
-            BarDistanceStrengthCalculator(),
-        ]
-
-    def calculate(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        for calc in self.calculators:
-            swings = calc.calculate(swings, df, config)
-        return swings
-
-
-# --- Filtering Layer ---
-
-
-class SwingFilter(ABC):
-    """Interface for modular swing filtering rules."""
-
-    @abstractmethod
-    def filter(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        """Applies a filter to the swing sequence and returns the filtered list."""
-        pass
-
-
-class MinBarDistanceFilter(SwingFilter):
-    """Filters consecutive swings of the same type that are closer than minimum_bar_distance."""
-
-    def filter(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if len(swings) <= 1:
-            return swings
-
-        # Filter HIGHs and LOWs separately to avoid overlapping type interference
+        # 1. Bar Distance Filter (HIGHs and LOWs resolved separately)
         highs = [s for s in swings if s.type == SwingType.HIGH]
         lows = [s for s in swings if s.type == SwingType.LOW]
+        min_dist = self.config.minimum_bar_distance
 
-        min_dist = config.minimum_bar_distance
-
-        def resolve_list(items: list[Swing], is_high: bool) -> list[Swing]:
+        def resolve_dist(items: list[Swing], is_high: bool) -> list[Swing]:
             if not items:
                 return []
             filtered = [items[0]]
@@ -179,31 +441,48 @@ class MinBarDistanceFilter(SwingFilter):
                     filtered.append(item)
             return filtered
 
-        filtered_highs = resolve_list(highs, is_high=True)
-        filtered_lows = resolve_list(lows, is_high=False)
+        filtered_highs = resolve_dist(highs, is_high=True)
+        filtered_lows = resolve_dist(lows, is_high=False)
 
-        # Merge them back chronologically
         combined = sorted(filtered_highs + filtered_lows, key=lambda s: s.index)
-        return combined
 
+        # 2. Duplicate Swings Filter (enforces alternation of types)
+        alternated: list[Swing] = []
+        for swing in combined:
+            if not alternated:
+                alternated.append(swing)
+                continue
+            prev = alternated[-1]
+            if prev.type == swing.type:
+                better = (
+                    (swing.price > prev.price)
+                    if swing.type == SwingType.HIGH
+                    else (swing.price < prev.price)
+                )
+                if better:
+                    alternated[-1] = swing
+                elif swing.price == prev.price and (
+                    (swing.type == SwingType.HIGH and self.config.allow_equal_highs)
+                    or (swing.type == SwingType.LOW and self.config.allow_equal_lows)
+                ):
+                    alternated.append(swing)
+            else:
+                alternated.append(swing)
 
-class MinPriceDistanceFilter(SwingFilter):
-    """Filters swings of the same type that do not meet the minimum_price_distance."""
+        # 3. Price Distance Filter
+        if self.config.minimum_price_distance <= 0.0:
+            return alternated
 
-    def filter(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if config.minimum_price_distance <= 0.0 or not swings:
-            return swings
+        highs_alt = [s for s in alternated if s.type == SwingType.HIGH]
+        lows_alt = [s for s in alternated if s.type == SwingType.LOW]
 
-        highs = [s for s in swings if s.type == SwingType.HIGH]
-        lows = [s for s in swings if s.type == SwingType.LOW]
-
-        def resolve_price_dist(items: list[Swing]) -> list[Swing]:
+        def resolve_price(items: list[Swing]) -> list[Swing]:
             if not items:
                 return []
             filtered = [items[0]]
             for item in items[1:]:
                 prev = filtered[-1]
-                if abs(item.price - prev.price) < config.minimum_price_distance:
+                if abs(item.price - prev.price) < self.config.minimum_price_distance:
                     better = (
                         (item.price > prev.price)
                         if item.type == SwingType.HIGH
@@ -215,508 +494,116 @@ class MinPriceDistanceFilter(SwingFilter):
                     filtered.append(item)
             return filtered
 
-        filtered_highs = resolve_price_dist(highs)
-        filtered_lows = resolve_price_dist(lows)
-
-        combined = sorted(filtered_highs + filtered_lows, key=lambda s: s.index)
-        return combined
-
-
-class DuplicateSwingsFilter(SwingFilter):
-    """Enforces alternation between HIGH and LOW swings. Keeps the extreme one of consecutive duplicates."""
-
-    def filter(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if len(swings) <= 1:
-            return swings
-
-        filtered: list[Swing] = []
-        for swing in swings:
-            if not filtered:
-                filtered.append(swing)
-                continue
-
-            prev = filtered[-1]
-            if prev.type == swing.type:
-                # Consecutive duplicate swing type! Keep the extreme one
-                if swing.type == SwingType.HIGH:
-                    if swing.price > prev.price:
-                        filtered[-1] = swing
-                    elif swing.price == prev.price and config.allow_equal_highs:
-                        filtered.append(swing)
-                elif swing.type == SwingType.LOW:
-                    if swing.price < prev.price:
-                        filtered[-1] = swing
-                    elif swing.price == prev.price and config.allow_equal_lows:
-                        filtered.append(swing)
-            else:
-                filtered.append(swing)
-
-        return filtered
-
-
-class MergeCloseSwingsFilter(SwingFilter):
-    """Merges swings that are close, keeping the dominant swing ID and fields."""
-
-    def filter(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if not config.merge_close_swings or len(swings) <= 1:
-            return swings
-
-        # Merges close swings of the same type using MinBarDistanceFilter
-        bar_filter = MinBarDistanceFilter()
-        return bar_filter.filter(swings, df, config)
-
-
-# --- Classifiers ---
-
-
-class SwingClassifier(ABC):
-    """Interface for swing classification logic."""
-
-    @abstractmethod
-    def classify(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        """Classifies each swing (e.g. Major, Minor, Unknown)."""
-        pass
-
-
-class WindowScaleSwingClassifier(SwingClassifier):
-    """Classifies swings as MAJOR if they are also pivots at a larger scale (e.g. left_bars*2, right_bars*2).
-
-    Otherwise classified as MINOR.
-    """
-
-    def classify(self, swings: list[Swing], df: pd.DataFrame, config: SwingConfig) -> list[Swing]:
-        if not swings:
-            return swings
-
-        left_major = config.left_bars * 2
-        right_major = config.right_bars * 2
-
-        high_arr = df["high"].to_numpy()
-        low_arr = df["low"].to_numpy()
-
-        for swing in swings:
-            idx = swing.index
-            is_major = True
-
-            if swing.type == SwingType.HIGH:
-                # Check left
-                for j in range(1, left_major + 1):
-                    if idx - j >= 0:
-                        shifted_val = high_arr[idx - j]
-                        if config.allow_equal_highs:
-                            if swing.price < shifted_val:
-                                is_major = False
-                                break
-                        else:
-                            if swing.price <= shifted_val:
-                                is_major = False
-                                break
-                    else:
-                        is_major = False
-                        break
-                # Check right
-                if is_major:
-                    for k in range(1, right_major + 1):
-                        if idx + k < len(high_arr):
-                            shifted_val = high_arr[idx + k]
-                            if config.allow_equal_highs:
-                                if swing.price < shifted_val:
-                                    is_major = False
-                                    break
-                            else:
-                                if swing.price <= shifted_val:
-                                    is_major = False
-                                    break
-                        else:
-                            is_major = False
-                            break
-            elif swing.type == SwingType.LOW:
-                # Check left
-                for j in range(1, left_major + 1):
-                    if idx - j >= 0:
-                        shifted_val = low_arr[idx - j]
-                        if config.allow_equal_lows:
-                            if swing.price > shifted_val:
-                                is_major = False
-                                break
-                        else:
-                            if swing.price >= shifted_val:
-                                is_major = False
-                                break
-                    else:
-                        is_major = False
-                        break
-                # Check right
-                if is_major:
-                    for k in range(1, right_major + 1):
-                        if idx + k < len(low_arr):
-                            shifted_val = low_arr[idx + k]
-                            if config.allow_equal_lows:
-                                if swing.price > shifted_val:
-                                    is_major = False
-                                    break
-                            else:
-                                if swing.price >= shifted_val:
-                                    is_major = False
-                                    break
-                        else:
-                            is_major = False
-                            break
-            else:
-                is_major = False
-
-            if is_major:
-                swing.classification = SwingClassification.MAJOR
-            else:
-                swing.classification = SwingClassification.MINOR
-
-        return swings
-
-
-# --- Swing Graph ---
-
-
-class SwingGraph:
-    """Represents the relationships and traversal paths of the Swing sequence."""
-
-    def __init__(self, swings: list[Swing]) -> None:
-        self.swings_dict = {s.id: s for s in swings}
-        self.swings_list = sorted(swings, key=lambda s: s.index)
-
-    def get_swing(self, swing_id: str) -> Swing | None:
-        """Finds a swing by its unique ID."""
-        return self.swings_dict.get(swing_id)
-
-    def get_previous_swing(self, swing: Swing) -> Swing | None:
-        """Gets the chronologically preceding swing in the graph."""
-        if swing.previous_id:
-            return self.get_swing(swing.previous_id)
-        return None
-
-    def get_next_swing(self, swing: Swing) -> Swing | None:
-        """Gets the chronologically succeeding swing in the graph."""
-        if swing.next_id:
-            return self.get_swing(swing.next_id)
-        return None
-
-    def get_previous_of_type(self, swing: Swing, swing_type: SwingType) -> Swing | None:
-        """Traverses backwards to find the nearest swing of the specified type."""
-        curr = swing
-        while True:
-            prev = self.get_previous_swing(curr)
-            if not prev:
-                return None
-            if prev.type == swing_type:
-                return prev
-            curr = prev
-
-    def get_next_of_type(self, swing: Swing, swing_type: SwingType) -> Swing | None:
-        """Traverses forwards to find the nearest swing of the specified type."""
-        curr = swing
-        while True:
-            nxt = self.get_next_swing(curr)
-            if not nxt:
-                return None
-            if nxt.type == swing_type:
-                return nxt
-            curr = nxt
-
-    def get_previous_major(self, swing: Swing) -> Swing | None:
-        """Traverses backwards to find the nearest MAJOR swing."""
-        curr = swing
-        while True:
-            prev = self.get_previous_swing(curr)
-            if not prev:
-                return None
-            if prev.classification == SwingClassification.MAJOR:
-                return prev
-            curr = prev
-
-    def get_next_major(self, swing: Swing) -> Swing | None:
-        """Traverses forwards to find the nearest MAJOR swing."""
-        curr = swing
-        while True:
-            nxt = self.get_next_swing(curr)
-            if not nxt:
-                return None
-            if nxt.classification == SwingClassification.MAJOR:
-                return nxt
-            curr = nxt
-
-
-# --- Swing Detector ---
-
-
-class SwingDetector:
-    """Stateless engine to detect swing high and swing low pivot levels in price data."""
-
-    def __init__(self, config: SwingConfig | None = None) -> None:
-        """Initializes the SwingDetector.
-
-        Args:
-            config: Configurations for window sizes and equal level boundaries.
-        """
-        self.config = config or SwingConfig()
-
-        # State containers for public APIs
-        self.raw_swings: list[Swing] = []
-        self.filtered_swings: list[Swing] = []
-        self.major_swings: list[Swing] = []
-        self.minor_swings: list[Swing] = []
-        self.swings: list[Swing] = []  # Final swings output
-        self.swing_graph: SwingGraph | None = None
-
-        # Pipelines
-        self.strength_calculator = CompositeSwingStrengthCalculator()
-
-        # Filters configuration
-        self.filters: list[SwingFilter] = []
-        if self.config.filter_enabled:
-            # 1. Resolve distance spacing (same type distance)
-            self.filters.append(MinBarDistanceFilter())
-            # 2. Merge equal highs/lows and ignore duplicates
-            self.filters.append(DuplicateSwingsFilter())
-            # 3. Minimum price distance filter
-            if self.config.minimum_price_distance > 0.0:
-                self.filters.append(MinPriceDistanceFilter())
-            # 4. Merge close swings filter
-            if self.config.merge_close_swings:
-                self.filters.append(MergeCloseSwingsFilter())
-
-        # Classifiers configuration
-        self.classifier = WindowScaleSwingClassifier()
-
-    def _validate(self, df: pd.DataFrame) -> None:
-        """Ensures that the input DataFrame meets structural requirements.
-
-        Args:
-            df: Input price DataFrame.
-
-        Raises:
-            DataValidationError: If structural checks fail.
-            MissingColumnError: If required high/low columns are missing.
-        """
-        required = ["high", "low", "time"]
-        missing = [col for col in required if col not in df.columns]
-        if missing:
-            raise MissingColumnError(missing)
-
-        min_required_len = self.config.left_bars + self.config.right_bars + 1
-        if len(df) < min_required_len:
-            raise DataValidationError(
-                f"Dataset too small. Requires at least {min_required_len} rows for detection."
-            )
-
-        if not df["time"].is_monotonic_increasing:
-            raise InvalidTimestampError("Price history timestamps must be sorted chronologically.")
-
-        if df["time"].duplicated().any():
-            from core.exceptions import DuplicateTimestampError
-
-            raise DuplicateTimestampError("Duplicate timestamps detected in swing input.")
-
-    def _detect_highs(self, df: pd.DataFrame) -> pd.Series:
-        """Detects candidate swing highs using price shifts."""
-        high = df["high"]
-        is_high = pd.Series(True, index=df.index)
-
-        # Compare with preceding candles
-        for j in range(1, self.config.left_bars + 1):
-            shifted = high.shift(j)
-            if self.config.allow_equal_highs:
-                is_high &= high >= shifted
-            else:
-                is_high &= high > shifted
-
-        # Compare with succeeding candles
-        for k in range(1, self.config.right_bars + 1):
-            shifted = high.shift(-k)
-            if self.config.allow_equal_highs:
-                is_high &= high >= shifted
-            else:
-                is_high &= high > shifted
-
-        # Bound edges are unconfirmable
-        is_high.iloc[: self.config.left_bars] = False
-        is_high.iloc[-self.config.right_bars :] = False
-        return is_high.fillna(False)
-
-    def _detect_lows(self, df: pd.DataFrame) -> pd.Series:
-        """Detects candidate swing lows using price shifts."""
-        low = df["low"]
-        is_low = pd.Series(True, index=df.index)
-
-        # Compare with preceding candles
-        for j in range(1, self.config.left_bars + 1):
-            shifted = low.shift(j)
-            if self.config.allow_equal_lows:
-                is_low &= low <= shifted
-            else:
-                is_low &= low < shifted
-
-        # Compare with succeeding candles
-        for k in range(1, self.config.right_bars + 1):
-            shifted = low.shift(-k)
-            if self.config.allow_equal_lows:
-                is_low &= low <= shifted
-            else:
-                is_low &= low < shifted
-
-        # Bound edges are unconfirmable
-        is_low.iloc[: self.config.left_bars] = False
-        is_low.iloc[-self.config.right_bars :] = False
-        return is_low.fillna(False)
-
-    def detect(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Runs the Swing Detection Engine pipeline.
-
-        Args:
-            df: Price history DataFrame containing standard columns.
-
-        Returns:
-            Enriched DataFrame with appended swing structures.
-        """
-        self._validate(df)
-
-        # 1. Vectorized Raw Pivot Candidate Search (Phase 1)
-        highs_mask = self._detect_highs(df)
-        lows_mask = self._detect_lows(df)
-
-        time_arr = df["time"].to_numpy()
-        high_arr = df["high"].to_numpy()
-        low_arr = df["low"].to_numpy()
-
-        high_indices = highs_mask.index[highs_mask].to_numpy()
-        low_indices = lows_mask.index[lows_mask].to_numpy()
-
-        raw_swings: list[Swing] = []
-        for idx in high_indices:
-            raw_swings.append(
-                Swing(
-                    id=f"swing_{idx}_high",
-                    timestamp=pd.Timestamp(time_arr[idx]),
-                    index=int(idx),
-                    price=float(high_arr[idx]),
-                    type=SwingType.HIGH,
-                )
-            )
-
-        for idx in low_indices:
-            raw_swings.append(
-                Swing(
-                    id=f"swing_{idx}_low",
-                    timestamp=pd.Timestamp(time_arr[idx]),
-                    index=int(idx),
-                    price=float(low_arr[idx]),
-                    type=SwingType.LOW,
-                )
-            )
-
-        # Sort chronologically
-        raw_swings = sorted(raw_swings, key=lambda s: s.index)
-
-        # Calculate initial strengths for raw swings
-        raw_swings = self.strength_calculator.calculate(raw_swings, df, self.config)
-        self.raw_swings = raw_swings
-
-        # 2. Filter Swings (Phase 2)
-        filtered_swings = list(raw_swings)
-        if self.config.filter_enabled:
-            for f in self.filters:
-                filtered_swings = f.filter(filtered_swings, df, self.config)
-        self.filtered_swings = filtered_swings
-
-        # 3. Classify Swings (Phase 3)
-        classified_swings = list(filtered_swings)
-        if self.config.classification_enabled:
-            classified_swings = self.classifier.classify(classified_swings, df, self.config)
-
-        self.major_swings = [
-            s for s in classified_swings if s.classification == SwingClassification.MAJOR
-        ]
-        self.minor_swings = [
-            s for s in classified_swings if s.classification == SwingClassification.MINOR
-        ]
-
-        # 4. Construct Graph Relationships (Phase 4)
-        if classified_swings:
-            for i, swing in enumerate(classified_swings):
-                if i > 0:
-                    prev = classified_swings[i - 1]
-                    swing.previous_id = prev.id
-                    swing.bar_distance = swing.index - prev.index
-                    swing.price_distance = float(swing.price - prev.price)
+        filtered_highs_p = resolve_price(highs_alt)
+        filtered_lows_p = resolve_price(lows_alt)
+
+        return sorted(filtered_highs_p + filtered_lows_p, key=lambda s: s.index)
+
+    def _classify_swing(self, swing: Swing, bars: Sequence[Bar]) -> SwingClassification:
+        """Classifies a swing as MAJOR if it satisfies twice the window bounds."""
+        left_major = self.config.left_bars * 2
+        right_major = self.config.right_bars * 2
+        idx = swing.index
+        n = len(bars)
+
+        # Ensure we have enough bounds to check for major classification
+        if idx - left_major < 0 or idx + right_major >= n:
+            return SwingClassification.MINOR
+
+        if swing.type == SwingType.HIGH:
+            # Check left
+            for j in range(1, left_major + 1):
+                prev_high = bars[idx - j].high
+                if self.config.allow_equal_highs:
+                    if swing.price < prev_high:
+                        return SwingClassification.MINOR
                 else:
-                    swing.previous_id = None
-                    swing.bar_distance = None
-                    swing.price_distance = None
-
-                if i < len(classified_swings) - 1:
-                    nxt = classified_swings[i + 1]
-                    swing.next_id = nxt.id
+                    if swing.price <= prev_high:
+                        return SwingClassification.MINOR
+            # Check right
+            for k in range(1, right_major + 1):
+                next_high = bars[idx + k].high
+                if self.config.allow_equal_highs:
+                    if swing.price < next_high:
+                        return SwingClassification.MINOR
                 else:
-                    swing.next_id = None
+                    if swing.price <= next_high:
+                        return SwingClassification.MINOR
 
-        self.swings = classified_swings
-        self.swing_graph = SwingGraph(classified_swings)
+        elif swing.type == SwingType.LOW:
+            # Check left
+            for j in range(1, left_major + 1):
+                prev_low = bars[idx - j].low
+                if self.config.allow_equal_lows:
+                    if swing.price > prev_low:
+                        return SwingClassification.MINOR
+                else:
+                    if swing.price >= prev_low:
+                        return SwingClassification.MINOR
+            # Check right
+            for k in range(1, right_major + 1):
+                next_low = bars[idx + k].low
+                if self.config.allow_equal_lows:
+                    if swing.price > next_low:
+                        return SwingClassification.MINOR
+                else:
+                    if swing.price >= next_low:
+                        return SwingClassification.MINOR
 
-        # 5. Populate Enriched DataFrame for Backward Compatibility (Phase 5)
-        # Initialize numpy arrays
-        n = len(df)
-        is_swing_high_arr = np.zeros(n, dtype=bool)
-        is_swing_low_arr = np.zeros(n, dtype=bool)
-        swing_price_arr = np.full(n, np.nan)
-        swing_type_arr = np.full(n, SwingType.NONE.value, dtype=object)
-        swing_strength_arr = np.full(n, "", dtype=object)
-        swing_index_arr = np.full(n, np.nan)
+        return SwingClassification.MAJOR
 
-        # Populate numpy arrays in loop (extremely fast, no pandas overhead)
-        for swing in self.swings:
-            idx = swing.index
-            if swing.type == SwingType.HIGH:
-                is_swing_high_arr[idx] = True
-                swing_type_arr[idx] = SwingType.HIGH.value
-            elif swing.type == SwingType.LOW:
-                is_swing_low_arr[idx] = True
-                swing_type_arr[idx] = SwingType.LOW.value
+    def _calculate_strength(self, swing: Swing, bars: Sequence[Bar]) -> float:
+        """Calculates relative strength of a swing using wick divergence normalized by average range."""
+        idx = swing.index
+        left = self.config.left_bars
+        right = self.config.right_bars
 
-            swing_price_arr[idx] = swing.price
-            swing_strength_arr[idx] = swing.strength_category.value
-            swing_index_arr[idx] = float(idx)
+        # Extract window
+        start = max(0, idx - left)
+        end = min(len(bars), idx + right + 1)
+        window = bars[start:end]
+        if not window:
+            return 1.0
 
-        # Assign to DataFrame all at once
-        result = df.copy()
-        result["is_swing_high"] = is_swing_high_arr
-        result["is_swing_low"] = is_swing_low_arr
-        result["swing_price"] = swing_price_arr
-        result["swing_type"] = swing_type_arr
-        result["swing_strength"] = swing_strength_arr
-        result["swing_index"] = swing_index_arr
+        # Average high-low range of the window
+        avg_range = sum(b.high - b.low for b in window) / len(window)
+        if avg_range == 0.0:
+            avg_range = 1.0
 
-        return result
+        left_window = bars[max(0, idx - left) : idx]
+        right_window = bars[idx + 1 : min(len(bars), idx + right + 1)]
 
-    # --- Clean Public APIs for advanced swing structures ---
+        left_val = (
+            sum(b.high for b in left_window) / len(left_window) if left_window else swing.price
+        )
+        right_val = (
+            sum(b.high for b in right_window) / len(right_window) if right_window else swing.price
+        )
 
-    def get_raw_swings(self) -> list[Swing]:
-        """Returns all raw swings before filtering."""
-        return self.raw_swings
+        if swing.type == SwingType.HIGH:
+            divergence = swing.price - (left_val + right_val) / 2.0
+            strength = divergence / avg_range
+        else:
+            left_val_low = (
+                sum(b.low for b in left_window) / len(left_window) if left_window else swing.price
+            )
+            right_val_low = (
+                sum(b.low for b in right_window) / len(right_window)
+                if right_window
+                else swing.price
+            )
+            divergence = (left_val_low + right_val_low) / 2.0 - swing.price
+            strength = divergence / avg_range
 
-    def get_filtered_swings(self) -> list[Swing]:
-        """Returns swings after the filtering layer is applied."""
-        return self.filtered_swings
+        return float(max(0.0, strength))
 
-    def get_major_swings(self) -> list[Swing]:
-        """Returns all swings classified as MAJOR."""
-        return self.major_swings
-
-    def get_minor_swings(self) -> list[Swing]:
-        """Returns all swings classified as MINOR."""
-        return self.minor_swings
-
-    def get_swings(self) -> list[Swing]:
-        """Returns all final (filtered & classified) swings."""
-        return self.swings
-
-    def get_swing_graph(self) -> SwingGraph | None:
-        """Returns the swing graph relationships object."""
-        return self.swing_graph
+    def _map_strength_category(self, strength: float) -> SwingStrength:
+        """Maps numeric strength score to SwingStrength enum categorization."""
+        if strength < 0.5:
+            return SwingStrength.WEAK
+        elif strength < 1.0:
+            return SwingStrength.NORMAL
+        elif strength < 2.0:
+            return SwingStrength.STRONG
+        else:
+            return SwingStrength.VERY_STRONG

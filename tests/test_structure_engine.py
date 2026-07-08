@@ -3,6 +3,7 @@
 import pandas as pd
 import pytest
 
+from core.models import Bar
 from market_structure.structure_engine import (
     BrokenGraphError,
     DuplicateSwingIDError,
@@ -10,7 +11,9 @@ from market_structure.structure_engine import (
     MarketStructureEngine,
 )
 from market_structure.structure_models import (
+    BreakType,
     StructureConfig,
+    StructureState,
     StructureTrend,
 )
 from market_structure.swing_models import Swing, SwingClassification, SwingStrength, SwingType
@@ -217,3 +220,191 @@ def test_invalid_swing_sequences() -> None:
     # Don't link s1 and s2 -> broken previous/next pointers
     with pytest.raises(BrokenGraphError, match="Swing graph link broken"):
         engine.analyze([s1, s2])
+
+
+def test_bullish_trend_break_bos() -> None:
+    """Verifies that a bullish break on a BULLISH trend generates a BOS."""
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+    assert engine.current_trend == StructureTrend.BULLISH
+
+    # Create a bar that closes above the last major high (110.0)
+    bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0,
+        high=115.0,
+        low=104.0,
+        close=112.0,
+        volume=100.0,
+    )
+    brk = engine.check_structural_break(bar)
+    assert brk is not None
+    assert brk.break_type == BreakType.BOS
+    assert brk.broken_swing.id == "s3_high"
+    assert brk.breaking_bar == bar
+    assert len(engine.breaks_history) == 1
+
+
+def test_bearish_trend_break_choch() -> None:
+    """Verifies that a bullish break on a BEARISH trend generates a CHoCH."""
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 95.0, SwingType.HIGH),  # LH
+        _make_swing("s4_low", 16, 85.0, SwingType.LOW),  # LL -> Trend becomes BEARISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+    assert engine.current_trend == StructureTrend.BEARISH
+
+    # Create a bar that closes above the last major high (95.0) -> Reversal / CHoCH
+    bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=90.0,
+        high=98.0,
+        low=89.0,
+        close=97.0,
+        volume=100.0,
+    )
+    brk = engine.check_structural_break(bar)
+    assert brk is not None
+    assert brk.break_type == BreakType.CHoCH
+    assert brk.broken_swing.id == "s3_high"
+    assert brk.breaking_bar == bar
+    assert len(engine.breaks_history) == 1
+
+
+def test_consecutive_bars_single_break() -> None:
+    """Verifies that consecutive bars closing beyond the same swing level trigger only one break."""
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+
+    # First bar closes above 110.0
+    bar1 = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0,
+        high=115.0,
+        low=104.0,
+        close=112.0,
+        volume=100.0,
+    )
+    brk1 = engine.check_structural_break(bar1)
+    assert brk1 is not None
+
+    # Second bar also closes above 110.0
+    bar2 = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:15:00"),
+        open=112.0,
+        high=116.0,
+        low=111.0,
+        close=114.0,
+        volume=100.0,
+    )
+    brk2 = engine.check_structural_break(bar2)
+    assert brk2 is None
+    assert len(engine.breaks_history) == 1
+
+
+def test_get_structure_state() -> None:
+    """Verifies that get_structure_state returns a correct StructureState matching the engine's status."""
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+
+    bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0,
+        high=115.0,
+        low=104.0,
+        close=112.0,
+        volume=100.0,
+    )
+    engine.check_structural_break(bar)
+
+    state = engine.get_structure_state()
+    assert isinstance(state, StructureState)
+    assert state.trend == StructureTrend.BULLISH
+    assert state.confidence > 0.0
+    assert state.active_major_high == engine.last_major_high
+    assert state.active_major_low == engine.last_major_low
+    assert len(state.breaks_history) == 1
+    assert state.breaks_history[0].broken_swing.id == "s3_high"
+
+
+def test_new_swing_high_resets_break_detection() -> None:
+    """Verifies that a new major swing high resets the broken high ID tracker, allowing subsequent breaks."""
+    swings1 = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings1)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings1)
+
+    # First break on s3_high (110.0)
+    bar1 = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0,
+        high=115.0,
+        low=104.0,
+        close=112.0,
+        volume=100.0,
+    )
+    brk1 = engine.check_structural_break(bar1)
+    assert brk1 is not None
+    assert engine.last_broken_high_id == "s3_high"
+
+    # Now confirm a new higher high swing (s5_high) at 120.0
+    s5_high = _make_swing("s5_high", 20, 120.0, SwingType.HIGH)
+    # Re-link swings sequence
+    all_swings = [*swings1, s5_high]
+    _link_swings(all_swings)
+
+    # Update engine with the new major swing
+    engine.update(s5_high)
+    assert engine.last_major_high is not None
+    assert engine.last_major_high.id == "s5_high"
+    assert getattr(engine, "last_broken_high_id") is None
+
+    # Now, a bar closing above the new high (120.0) should trigger a new break
+    bar2 = Bar(
+        timestamp=pd.Timestamp("2026-01-02T13:00:00"),
+        open=118.0,
+        high=125.0,
+        low=117.0,
+        close=122.0,
+        volume=100.0,
+    )
+    brk2 = engine.check_structural_break(bar2)
+    assert brk2 is not None
+    assert brk2.broken_swing.id == "s5_high"
+    assert brk2.break_type == BreakType.BOS
+    assert len(engine.breaks_history) == 2

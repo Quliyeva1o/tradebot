@@ -5,9 +5,8 @@ execution venues, and data feeds.
 """
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Protocol, runtime_checkable
-
-import pandas as pd
 
 from core.models import AccountInfo, Bar, Order, Position, Tick, Timeframe
 
@@ -20,10 +19,10 @@ class IDataFeed(Protocol):
         self,
         symbol: str,
         timeframe: Timeframe,
-        start: pd.Timestamp | str,
-        end: pd.Timestamp | str,
-    ) -> pd.DataFrame:
-        """Fetches historical bars as a DataFrame."""
+        start: datetime | str,
+        end: datetime | str,
+    ) -> list[Bar]:
+        """Fetches historical bars as a list of Bar objects."""
         ...
 
     def subscribe_bars(

@@ -1,121 +1,98 @@
 """Reusable data validation functions for the Enterprise Data Engine.
 
-Ensures that price DataFrames adhere to structural and semantic parameters.
+Ensures that price sequences of Bar objects adhere to structural and semantic parameters.
 """
 
-import numpy as np
-import pandas as pd
+import math
+from collections.abc import Sequence
+
+from core.models import Bar
 
 
-def validate_non_empty(df: pd.DataFrame) -> None:
-    """Verifies that the DataFrame contains data records.
+def validate_non_empty(bars: Sequence[Bar]) -> None:
+    """Verifies that the sequence contains data records.
 
     Args:
-        df: The market rates DataFrame to validate.
+        bars: The sequence of Bar objects to validate.
 
     Raises:
-        ValueError: If the DataFrame is empty.
+        ValueError: If the sequence is empty.
     """
-    if df.empty:
+    if not bars:
         raise ValueError("The provided dataset is empty and contains no records.")
 
 
-def validate_required_columns(df: pd.DataFrame, required_cols: list[str]) -> None:
-    """Verifies that all required columns are present in the DataFrame.
+def validate_no_duplicate_timestamps(bars: Sequence[Bar]) -> None:
+    """Verifies that the timeline contains no duplicate timestamps.
 
     Args:
-        df: The market rates DataFrame to validate.
-        required_cols: List of column names expected to be present.
-
-    Raises:
-        ValueError: If any of the required columns are missing.
-    """
-    missing = [col for col in required_cols if col not in df.columns]
-    if missing:
-        raise ValueError(f"Required column(s) missing from dataset: {missing}")
-
-
-def validate_no_duplicate_timestamps(df: pd.DataFrame) -> None:
-    """Verifies that the index or timestamp column contains no duplicates.
-
-    Assumes the timestamp is set as the DataFrame index or resides in the 'time' column.
-
-    Args:
-        df: The market rates DataFrame to validate.
+        bars: The sequence of Bar objects to validate.
 
     Raises:
         ValueError: If duplicate timestamps are detected.
     """
-    if isinstance(df.index, pd.DatetimeIndex):
-        duplicates = df.index.duplicated()
-        if duplicates.any():
-            duplicate_vals = df.index[duplicates].unique().tolist()
-            raise ValueError(f"Duplicate timestamps detected in index: {duplicate_vals}")
-    elif "time" in df.columns:
-        dupes_series = df["time"].duplicated()
-        if dupes_series.any():
-            duplicate_vals = df.loc[dupes_series, "time"].unique().tolist()
-            raise ValueError(f"Duplicate timestamps detected in 'time' column: {duplicate_vals}")
+    seen_times = set()
+    duplicates = []
+    for bar in bars:
+        t = bar.timestamp
+        if t in seen_times:
+            duplicates.append(t)
+        else:
+            seen_times.add(t)
+
+    if duplicates:
+        # Deduplicate to show clean list of duplicate timestamps
+        unique_dupes = list(dict.fromkeys(duplicates))
+        raise ValueError(f"Duplicate timestamps detected in sequence: {unique_dupes}")
 
 
-def validate_ordered_timestamps(df: pd.DataFrame) -> None:
-    """Verifies that the timestamps are sorted chronologically.
+def validate_ordered_timestamps(bars: Sequence[Bar]) -> None:
+    """Verifies that the timestamps are sorted chronologically in ascending order.
 
     Args:
-        df: The market rates DataFrame to validate.
+        bars: The sequence of Bar objects to validate.
 
     Raises:
         ValueError: If timestamps are out of chronological order.
     """
-    index_to_check = df.index if isinstance(df.index, pd.DatetimeIndex) else df["time"]
-    # Check if index is monotonically increasing
-    if not index_to_check.is_monotonic_increasing:
-        raise ValueError("Timestamps are not strictly sorted in ascending chronological order.")
+    for i in range(1, len(bars)):
+        if bars[i].timestamp < bars[i - 1].timestamp:
+            raise ValueError("Timestamps are not strictly sorted in ascending chronological order.")
 
 
-def validate_numeric_data(df: pd.DataFrame, cols: list[str]) -> None:
-    """Verifies that specified columns contain only valid numeric data.
-
-    Checks that columns are of numeric type and contain no infinite values or non-numeric types.
+def validate_numeric_data(bars: Sequence[Bar], cols: list[str] | None = None) -> None:
+    """Verifies that specified price fields contain only valid numeric data (no inf/nan).
 
     Args:
-        df: The market rates DataFrame to validate.
-        cols: List of columns to check.
+        bars: The sequence of Bar objects to validate.
+        cols: Unused list of field names kept for signature compatibility.
 
     Raises:
         ValueError: If non-numeric data or infinite values are present.
     """
-    for col in cols:
-        if col not in df.columns:
-            continue
-
-        # Check raw type compatibility
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            # Try to convert to numeric to see if it was just stored as object/string
-            try:
-                converted = pd.to_numeric(df[col])
-                if converted.isna().any() and not df[col].isna().any():
-                    raise ValueError()
-            except (ValueError, TypeError):
+    for bar in bars:
+        for field in ("open", "high", "low", "close", "volume"):
+            val = getattr(bar, field)
+            if not isinstance(val, (int, float)):
                 raise ValueError(
-                    f"Column '{col}' contains non-numeric values or cannot be parsed as numeric."
-                ) from None
-
-        # Check for infinite values (inf / -inf)
-        if np.isinf(df[col]).any():
-            raise ValueError(f"Column '{col}' contains infinite values (inf/-inf).")
+                    f"Field '{field}' contains non-numeric values or cannot be parsed as numeric."
+                )
+            if math.isinf(val):
+                raise ValueError(f"Field '{field}' contains infinite values (inf/-inf).")
 
 
-def validate_no_missing_values(df: pd.DataFrame, cols: list[str]) -> None:
-    """Verifies that the specified columns contain no missing or NaN values.
+def validate_no_missing_values(bars: Sequence[Bar], cols: list[str] | None = None) -> None:
+    """Verifies that the price fields contain no missing or NaN values.
 
     Args:
-        df: The market rates DataFrame to validate.
-        cols: List of columns to check.
+        bars: The sequence of Bar objects to validate.
+        cols: Unused list of field names kept for signature compatibility.
 
     Raises:
         ValueError: If missing or NaN values are found.
     """
-    for col in cols:
-        if col in df.columns and df[col].isna().any():
-            raise ValueError(f"Column '{col}' contains missing or NaN values.")
+    for bar in bars:
+        for field in ("open", "high", "low", "close", "volume"):
+            val = getattr(bar, field)
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                raise ValueError(f"Field '{field}' contains missing or NaN values.")

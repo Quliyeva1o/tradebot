@@ -4,6 +4,7 @@ Concrete implementation of IMarketDataProvider that reads, normalizes,
 and validates historical market rates from local CSV files.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +13,8 @@ import pandas as pd
 from config.settings import Settings
 from core.exceptions import InvalidTimestampError, MissingColumnError
 from core.market_data_provider import IMarketDataProvider
+from core.models import Bar
 from utils.logging import setup_logger
-from utils.validators import (
-    validate_required_columns,
-)
 
 logger = setup_logger("csv_provider")
 
@@ -37,12 +36,11 @@ class CSVDataProvider(IMarketDataProvider):
         self.filepath = Path(filepath)
         self.settings = settings or Settings.load()
 
-    def load(self) -> pd.DataFrame:
+    def load(self) -> list[Bar]:
         """Loads and processes the CSV data according to framework specifications.
 
         Returns:
-            A clean DataFrame with columns: ['time', 'open', 'high', 'low', 'close', 'volume']
-            where 'time' is parsed as Datetime and sorted.
+            A list of Bar objects representing the loaded market rates.
 
         Raises:
             FileNotFoundError: If the CSV file does not exist.
@@ -105,11 +103,9 @@ class CSVDataProvider(IMarketDataProvider):
 
         # Normalize required OHLCV columns (case-insensitive done by lower())
         required_ohlcv = ["open", "high", "low", "close"]
-        try:
-            validate_required_columns(df, required_ohlcv)
-        except ValueError as e:
-            missing = [col for col in required_ohlcv if col not in df.columns]
-            raise MissingColumnError(missing) from e
+        missing = [col for col in required_ohlcv if col not in df.columns]
+        if missing:
+            raise MissingColumnError(missing)
 
         # Add optional volume if missing
         if "volume" not in df.columns:
@@ -139,8 +135,28 @@ class CSVDataProvider(IMarketDataProvider):
         df.sort_values(by="time", ascending=True, inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        logger.info("Successfully loaded and standardized %d rows from CSV.", len(df))
-        return df
+        logger.info(
+            "Successfully loaded and standardized %d rows from CSV. Converting to Bar list...",
+            len(df),
+        )
+
+        # Convert DataFrame to list[Bar]
+        bars = []
+        for row in df.itertuples():
+            row_any: Any = row
+            bars.append(
+                Bar(
+                    timestamp=pd.Timestamp(row_any.time).to_pydatetime(),
+                    open=float(row_any.open),
+                    high=float(row_any.high),
+                    low=float(row_any.low),
+                    close=float(row_any.close),
+                    volume=float(row_any.volume),
+                    spread=float(getattr(row_any, "spread", 0.0)),
+                )
+            )
+
+        return bars
 
     def _handle_missing_values(self, df: pd.DataFrame) -> None:
         """Applies configuration policies to resolve NaN / missing values."""
@@ -163,19 +179,22 @@ class CSVDataProvider(IMarketDataProvider):
             logger.warning("Filling missing value cells using ffill/bfill.")
             df[cols_to_check] = df[cols_to_check].ffill().bfill()
 
-    def validate(self, df: pd.DataFrame) -> None:
+    def validate(self, bars: Sequence[Bar]) -> None:
         """Applies provider-specific validation logic.
 
         Args:
-            df: Processed DataFrame to inspect.
+            bars: Processed sequence of Bar objects to inspect.
         """
         # Validate that prices make physical sense (open, high, low, close > 0)
-        price_cols = ["open", "high", "low", "close"]
-        for col in price_cols:
-            if (df[col] <= 0).any():
-                from core.exceptions import InvalidNumericDataError
+        for bar in bars:
+            for field in ("open", "high", "low", "close"):
+                val = getattr(bar, field)
+                if val <= 0:
+                    from core.exceptions import InvalidNumericDataError
 
-                raise InvalidNumericDataError(f"Column '{col}' contains negative or zero prices.")
+                    raise InvalidNumericDataError(
+                        f"Field '{field}' contains negative or zero price: {val}"
+                    )
 
     def info(self) -> dict[str, Any]:
         """Exposes metadata metrics about this CSV dataset.

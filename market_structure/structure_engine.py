@@ -6,9 +6,13 @@ consecutive swing relationships, and confidence intervals.
 
 from abc import ABC, abstractmethod
 
+from core.models import Bar
 from market_structure.structure_models import (
+    BreakType,
     MarketStructure,
+    StructureBreak,
     StructureConfig,
+    StructureState,
     StructureTrend,
     SwingRelationship,
 )
@@ -133,6 +137,11 @@ class MarketStructureEngine:
         self.last_high_relationship = SwingRelationship.UNKNOWN
         self.last_low_relationship = SwingRelationship.UNKNOWN
 
+        # Structure break history and tracking
+        self.breaks_history: list[StructureBreak] = []
+        self.last_broken_high_id: str | None = None
+        self.last_broken_low_id: str | None = None
+
     def _validate_single(self, swing: Swing) -> None:
         """Validates incoming swing sequence chronologically and checks for duplicate IDs."""
         if swing.id in self.processed_ids:
@@ -145,6 +154,11 @@ class MarketStructureEngine:
 
     def update(self, swing: Swing) -> MarketStructure:
         """Incrementally updates the state machine with a new confirmed swing.
+
+        Note:
+            This method is event-driven and must be called only when a new swing is confirmed.
+            In contrast, `check_structural_break` is bar-driven and must be called for every
+            newly closed bar. These two methods are called independently and at different frequencies.
 
         Args:
             swing: The new confirmed Swing object.
@@ -162,8 +176,10 @@ class MarketStructureEngine:
         if swing.classification == SwingClassification.MAJOR:
             if swing.type == SwingType.HIGH:
                 self.last_major_high = swing
+                self.last_broken_high_id = None
             elif swing.type == SwingType.LOW:
                 self.last_major_low = swing
+                self.last_broken_low_id = None
         elif swing.classification == SwingClassification.MINOR:
             if swing.type == SwingType.HIGH:
                 self.last_minor_high = swing
@@ -381,3 +397,79 @@ class MarketStructureEngine:
     def get_history(self) -> list[MarketStructure]:
         """Returns the history list of all processed market structure state updates."""
         return self.history
+
+    def check_structural_break(self, bar: Bar) -> StructureBreak | None:
+        """Checks if the given bar closes past the last major swing levels, creating a structure break.
+
+        Note:
+            This method is bar-driven and must be called for every newly closed bar.
+            In contrast, `update` is event-driven and must be called only when a new swing
+            is confirmed. These two methods are called independently and at different frequencies.
+
+        Args:
+            bar: The bar to check for a break.
+
+        Returns:
+            A new StructureBreak if detected, else None.
+        """
+        if not self.last_major_high or not self.last_major_low:
+            return None
+
+        # Bullish break
+        if (
+            bar.close > self.last_major_high.price
+            and self.last_major_high.id != self.last_broken_high_id
+        ):
+            break_type = (
+                BreakType.CHoCH
+                if self.current_trend == StructureTrend.BEARISH
+                else BreakType.BOS
+            )
+            self.last_broken_high_id = self.last_major_high.id
+            brk = StructureBreak(
+                break_id=f"break_{len(self.breaks_history)}_{bar.timestamp.isoformat()}",
+                break_type=break_type,
+                broken_swing=self.last_major_high,
+                breaking_bar=bar,
+                timestamp=bar.timestamp,
+            )
+            self.breaks_history.append(brk)
+            return brk
+
+        # Bearish break
+        if (
+            bar.close < self.last_major_low.price
+            and self.last_major_low.id != self.last_broken_low_id
+        ):
+            break_type = (
+                BreakType.CHoCH
+                if self.current_trend == StructureTrend.BULLISH
+                else BreakType.BOS
+            )
+            self.last_broken_low_id = self.last_major_low.id
+            brk = StructureBreak(
+                break_id=f"break_{len(self.breaks_history)}_{bar.timestamp.isoformat()}",
+                break_type=break_type,
+                broken_swing=self.last_major_low,
+                breaking_bar=bar,
+                timestamp=bar.timestamp,
+            )
+            self.breaks_history.append(brk)
+            return brk
+
+        return None
+
+    def get_structure_state(self) -> StructureState:
+        """Returns the current StructureState containing active swing levels and breaks.
+
+        Returns:
+            A StructureState domain object representing the current structural configuration.
+        """
+        confidence = self.history[-1].confidence if self.history else 0.0
+        return StructureState(
+            trend=self.current_trend,
+            confidence=confidence,
+            active_major_high=self.last_major_high,
+            active_major_low=self.last_major_low,
+            breaks_history=list(self.breaks_history),
+        )

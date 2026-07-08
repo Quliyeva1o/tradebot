@@ -1,29 +1,15 @@
 """Change of Character (CHoCH) identification module."""
 
-import pandas as pd
+from market_structure.structure_models import BreakType, StructureBreak
 
 
-class CHoCHDetector:
-    """Detects Change of Character (CHoCH) shifts in market trend structure."""
+def get_choch_events(breaks_history: list[StructureBreak]) -> list[StructureBreak]:
+    """Filters break history to CHoCH (trend-reversal) events only.
 
-    def __init__(self) -> None:
-        """Initializes the CHoCHDetector."""
-        pass
+    Args:
+        breaks_history: A list of all detected StructureBreak objects.
 
-    def detect_choch(
-        self,
-        df: pd.DataFrame,
-        swing_highs: pd.Series,
-        swing_lows: pd.Series,
-    ) -> pd.DataFrame:
-        """Scan price action for CHoCH structural transitions.
-
-        Args:
-            df: Historical price candlestick DataFrame.
-            swing_highs: Series flagging swing high locations.
-            swing_lows: Series flagging swing low locations.
-
-        Returns:
-            A DataFrame with flags denoting CHoCH transition events.
-        """
-        raise NotImplementedError("CHoCH detection logic will be implemented in a future sprint.")
+    Returns:
+        A list containing only the StructureBreak objects of type BreakType.CHoCH.
+    """
+    return [b for b in breaks_history if b.break_type == BreakType.CHoCH]

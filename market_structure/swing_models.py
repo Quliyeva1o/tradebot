@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 
 class SwingType(Enum):
@@ -115,3 +116,11 @@ class Swing:
     next_id: str | None = None
     bar_distance: int | None = None
     price_distance: float | None = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Sets attribute value checking for immutability constraints."""
+        # Check if the attribute is already set (immutable fields check)
+        immutable_fields = {"id", "timestamp", "index", "price", "type"}
+        if name in immutable_fields and name in self.__dict__:
+            raise AttributeError(f"Field '{name}' is immutable after Swing initialization.")
+        super().__setattr__(name, value)
