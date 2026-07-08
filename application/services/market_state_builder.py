@@ -21,15 +21,6 @@ class MarketStateBuilder:
         structure_engine: MarketStructureEngine | None = None,
         smc_pipeline: SMCPipeline | None = None,
     ) -> None:
-        """Initializes the MarketStateBuilder.
-
-        Args:
-            symbol: Trading instrument symbol.
-            timeframe: Candle timeframe interval.
-            swing_detector: Injectable SwingDetector instance.
-            structure_engine: Injectable MarketStructureEngine instance.
-            smc_pipeline: Injectable SMCPipeline instance.
-        """
         self.symbol = symbol
         self.timeframe = timeframe
         self.swing_detector = swing_detector or SwingDetector()
@@ -42,11 +33,6 @@ class MarketStateBuilder:
         )
 
     def initialize(self, history: list[Bar]) -> None:
-        """Initializes the MarketState with a historical sequence of bars.
-
-        Args:
-            history: The list of historical candlestick bars.
-        """
         self._market_state._bars.clear()
         self._market_state.swing_graph = SwingGraph()
         self._market_state.structure_state = StructureState()
@@ -58,48 +44,34 @@ class MarketStateBuilder:
             self.append_bar(bar)
 
     def append_bar(self, bar: Bar) -> MarketState:
-        """Appends a new closed bar and updates the market state incrementally.
-
-        Args:
-            bar: The newly closed candle bar.
-
-        Returns:
-            The updated MarketState instance.
-        """
-        # 1. Append the bar
+        """Appends a new closed bar and updates the market state incrementally."""
         self._market_state.append_bar(bar)
 
-        # 2. Incremental swing detection
+        # Incremental swing detection
         result = self.swing_detector.detect_incremental(
             self._market_state.bars, self._market_state.swing_graph
         )
 
-        # 3. Handle upgraded swings first
-        if result.upgraded_swing:
-            self.structure_engine.handle_upgrade(result.upgraded_swing)
+        # Correct extraction of new_swing
+        new_swing = None
+        if result is not None:
+            if hasattr(result, 'new_swing') and result.new_swing is not None:
+                new_swing = result.new_swing
+            elif hasattr(result, 'id'):  # direct Swing
+                new_swing = result
 
-        # 4. Handle new swing
-        if result.new_swing:
-            self._market_state.swing_graph.add_swing(result.new_swing)
-            self.structure_engine.update(result.new_swing)
+        if new_swing:
+            self._market_state.swing_graph.add_swing(new_swing)
+            self.structure_engine.update(new_swing)
 
-        # 5. Check for structural break on the new bar
         new_break = self.structure_engine.check_structural_break(bar)
 
-        # 6. Update structural state reference
         self._market_state.structure_state = self.structure_engine.get_structure_state()
 
-        # 7. Run the SMC Pipeline
         self.smc_pipeline.update(self._market_state, bar, new_break)
 
-        # 8. Return updated MarketState
         return self._market_state
 
     @property
     def market_state(self) -> MarketState:
-        """Exposes the active MarketState domain aggregate root.
-
-        Returns:
-            The current MarketState instance.
-        """
         return self._market_state
