@@ -39,3 +39,10 @@ class StrategyEngine:
             if setup is not None:
                 setups.append(setup)
         return setups
+
+    def reset(self) -> None:
+        """Resets all registered strategies."""
+        for strategy in self.strategies:
+            if hasattr(strategy, "reset"):
+                strategy.reset()
+

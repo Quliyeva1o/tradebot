@@ -1,0 +1,14 @@
+{
+    "symbol": "EURUSD",
+    "timeframe": "H1",
+    "start_date": "2026-01-01 00:00:00",
+    "end_date": "2026-01-05 04:00:00",
+    "execution_timestamp": "2026-07-08 16:09:33",
+    "elapsed_time_seconds": 0.0010387999936938286,
+    "initial_balance": 10000.0,
+    "final_balance": 10000.0,
+    "total_trades": 0,
+    "win_rate": 0.0,
+    "stopped_early": false,
+    "stop_reason": null
+}

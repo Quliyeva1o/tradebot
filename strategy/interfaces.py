@@ -24,3 +24,8 @@ class TradeSetupStrategy(Protocol):
             A TradeSetup candidate if conditions are met, otherwise None.
         """
         ...
+
+    def reset(self) -> None:
+        """Resets the internal state of the strategy (e.g. proposed keys)."""
+        ...
+

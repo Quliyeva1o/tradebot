@@ -1,6 +1,7 @@
 """Continuation strategies implementation."""
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 from core.models import SignalDirection
@@ -12,6 +13,17 @@ from smc.order_block import OBDirection
 from smc.premium_discount import ZoneType
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+
+
+@dataclass(frozen=True)
+class StrategyConfig:
+    """Configuration class for Continuation Strategies."""
+
+    pip_size: float = 0.0001
+    lookback_bars: int = 20
+    fvg_proximity_pips: float = 50.0
+    stop_buffer_pips: float = 5.0
+    min_risk_reward_ratio: float = 1.0
 
 
 class BullishContinuationStrategy(TradeSetupStrategy):
@@ -27,19 +39,37 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         lookback_bars: int = 20,
         fvg_proximity_pips: float = 50.0,
         stop_buffer_pips: float = 5.0,
+        min_risk_reward_ratio: float = 1.0,
+        config: StrategyConfig | None = None,
     ) -> None:
-        """Initializes the BullishContinuationStrategy with parameters.
+        """Initializes the BullishContinuationStrategy with parameters or config.
 
         Args:
             pip_size: Price value of a single pip.
             lookback_bars: Lookback window for recent displacement.
             fvg_proximity_pips: Maximum proximity limit to FVG in pips.
             stop_buffer_pips: Stop loss buffer limit in pips.
+            min_risk_reward_ratio: Minimum risk-to-reward ratio.
+            config: StrategyConfig options overlay.
         """
-        self.pip_size = pip_size
-        self.lookback_bars = lookback_bars
-        self.fvg_proximity_pips = fvg_proximity_pips
-        self.stop_buffer_pips = stop_buffer_pips
+        if config is not None:
+            self.pip_size = config.pip_size
+            self.lookback_bars = config.lookback_bars
+            self.fvg_proximity_pips = config.fvg_proximity_pips
+            self.stop_buffer_pips = config.stop_buffer_pips
+            self.min_risk_reward_ratio = config.min_risk_reward_ratio
+        else:
+            self.pip_size = pip_size
+            self.lookback_bars = lookback_bars
+            self.fvg_proximity_pips = fvg_proximity_pips
+            self.stop_buffer_pips = stop_buffer_pips
+            self.min_risk_reward_ratio = min_risk_reward_ratio
+        self._proposed_keys: set[tuple] = set()
+
+    def reset(self) -> None:
+        """Resets the duplicate guard key memory."""
+        self._proposed_keys.clear()
+
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
         """Evaluates rules for bullish continuation.
@@ -136,6 +166,26 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             target_price = matching_ob.high + 2.0 * (matching_ob.high - stop_zone[0])
         target_zone = (round(target_price, 5), round(target_price + stop_buffer, 5))
 
+        # R:R Gate Check
+        entry_val = entry_zone[1]
+        stop_val = stop_zone[0]
+        target_val = target_zone[0]
+
+        risk_dist = entry_val - stop_val
+        reward_dist = target_val - entry_val
+
+        if risk_dist <= 0.0:
+            return None
+
+        if reward_dist / risk_dist < self.min_risk_reward_ratio:
+            return None
+
+        # Duplicate setup check
+        proposed_key = (matching_ob.id, last_break.break_id)
+        if proposed_key in self._proposed_keys:
+            return None
+        self._proposed_keys.add(proposed_key)
+
         # Generate Setup ID
         timestamp = datetime.now()
         ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")
@@ -148,6 +198,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             timeframe=market_state.timeframe,
             direction=SignalDirection.BUY,
             entry_zone=entry_zone,
+
             stop_zone=stop_zone,
             target_zone=target_zone,
             confidence_score=market_state.structure_state.confidence,
@@ -187,19 +238,37 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         lookback_bars: int = 20,
         fvg_proximity_pips: float = 50.0,
         stop_buffer_pips: float = 5.0,
+        min_risk_reward_ratio: float = 1.0,
+        config: StrategyConfig | None = None,
     ) -> None:
-        """Initializes the BearishContinuationStrategy with parameters.
+        """Initializes the BearishContinuationStrategy with parameters or config.
 
         Args:
             pip_size: Price value of a single pip.
             lookback_bars: Lookback window for recent displacement.
             fvg_proximity_pips: Maximum proximity limit to FVG in pips.
             stop_buffer_pips: Stop loss buffer limit in pips.
+            min_risk_reward_ratio: Minimum risk-to-reward ratio.
+            config: StrategyConfig options overlay.
         """
-        self.pip_size = pip_size
-        self.lookback_bars = lookback_bars
-        self.fvg_proximity_pips = fvg_proximity_pips
-        self.stop_buffer_pips = stop_buffer_pips
+        if config is not None:
+            self.pip_size = config.pip_size
+            self.lookback_bars = config.lookback_bars
+            self.fvg_proximity_pips = config.fvg_proximity_pips
+            self.stop_buffer_pips = config.stop_buffer_pips
+            self.min_risk_reward_ratio = config.min_risk_reward_ratio
+        else:
+            self.pip_size = pip_size
+            self.lookback_bars = lookback_bars
+            self.fvg_proximity_pips = fvg_proximity_pips
+            self.stop_buffer_pips = stop_buffer_pips
+            self.min_risk_reward_ratio = min_risk_reward_ratio
+        self._proposed_keys: set[tuple] = set()
+
+    def reset(self) -> None:
+        """Resets the duplicate guard key memory."""
+        self._proposed_keys.clear()
+
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
         """Evaluates rules for bearish continuation.
@@ -296,6 +365,26 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             target_price = matching_ob.low - 2.0 * (stop_zone[1] - matching_ob.low)
         target_zone = (round(target_price - stop_buffer, 5), round(target_price, 5))
 
+        # R:R Gate Check
+        entry_val = entry_zone[0]
+        stop_val = stop_zone[1]
+        target_val = target_zone[1]
+
+        risk_dist = stop_val - entry_val
+        reward_dist = entry_val - target_val
+
+        if risk_dist <= 0.0:
+            return None
+
+        if reward_dist / risk_dist < self.min_risk_reward_ratio:
+            return None
+
+        # Duplicate setup check
+        proposed_key = (matching_ob.id, last_break.break_id)
+        if proposed_key in self._proposed_keys:
+            return None
+        self._proposed_keys.add(proposed_key)
+
         # Generate Setup ID
         timestamp = datetime.now()
         ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")
@@ -308,6 +397,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             timeframe=market_state.timeframe,
             direction=SignalDirection.SELL,
             entry_zone=entry_zone,
+
             stop_zone=stop_zone,
             target_zone=target_zone,
             confidence_score=market_state.structure_state.confidence,

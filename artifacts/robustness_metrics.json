@@ -1,0 +1,26 @@
+{
+    "baseline": {
+        "net_profit": 0,
+        "max_drawdown": 0.0
+    },
+    "high_spread": {
+        "net_profit": 0,
+        "max_drawdown": 0.0
+    },
+    "high_commission": {
+        "net_profit": 0,
+        "max_drawdown": 0.0
+    },
+    "high_slippage": {
+        "net_profit": 0,
+        "max_drawdown": 0.0
+    },
+    "skipped_10pct": {
+        "net_profit": 0.0,
+        "max_drawdown": 0.0
+    },
+    "skipped_25pct": {
+        "net_profit": 0.0,
+        "max_drawdown": 0.0
+    }
+}

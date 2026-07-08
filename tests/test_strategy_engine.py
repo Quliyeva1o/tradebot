@@ -590,3 +590,51 @@ def test_no_mutation_of_market_state() -> None:
     assert len(market_state.smc_state.fair_value_gaps) == num_fvgs
     assert len(market_state.smc_state.liquidity_levels) == num_liq
     assert len(market_state.smc_state.displacements) == num_disp
+
+
+def test_strategy_duplicate_setup_guard() -> None:
+    """Verifies that duplicate setups are guarded and reset() clears the guard memory."""
+    market_state = create_valid_bullish_market_state()
+    strategy = BullishContinuationStrategy()
+
+    # 1. Call evaluate 3 times
+    setup1 = strategy.evaluate(market_state)
+    assert setup1 is not None
+
+    setup2 = strategy.evaluate(market_state)
+    assert setup2 is None
+
+    setup3 = strategy.evaluate(market_state)
+    assert setup3 is None
+
+    # 2. Call reset
+    strategy.reset()
+
+    # 3. Call evaluate again -> should emit setup again
+    setup4 = strategy.evaluate(market_state)
+    assert setup4 is not None
+    assert setup4.setup_id != setup1.setup_id  # Should have a fresh UUID/timestamp
+
+
+def test_strategy_risk_reward_gate() -> None:
+    """Verifies that setups with insufficient R:R or invalid risk distances are filtered out."""
+    market_state = create_valid_bullish_market_state()
+
+    # 1. R:R is ~7.6 (reward 0.0190 / risk 0.0025 = 7.6)
+    # min_risk_reward_ratio = 5.0 (should pass)
+    strategy_pass = BullishContinuationStrategy(min_risk_reward_ratio=5.0)
+    setup_pass = strategy_pass.evaluate(market_state)
+    assert setup_pass is not None
+
+    # 2. min_risk_reward_ratio = 10.0 (should be filtered)
+    strategy_fail = BullishContinuationStrategy(min_risk_reward_ratio=10.0)
+    setup_fail = strategy_fail.evaluate(market_state)
+    assert setup_fail is None
+
+    # 3. Invalid/negative risk distance: stop buffer pips is extremely negative so stop loss is above entry price.
+    # stop_buffer_pips = -50.0 -> stop_zone[0] = 1.0990 - (-0.0050) = 1.1040
+    # entry_zone[1] = 1.1010. Risk distance = 1.1010 - 1.1040 = -0.0030 <= 0
+    strategy_invalid_risk = BullishContinuationStrategy(stop_buffer_pips=-50.0)
+    setup_invalid = strategy_invalid_risk.evaluate(market_state)
+    assert setup_invalid is None
+
