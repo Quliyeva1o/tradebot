@@ -94,8 +94,13 @@ class LiquidityDetector:
             latest_idx = max(s.index for s in cluster)
             source_ids = [s.id for s in cluster]
 
-            # Check if swept by checking subsequent swings in the graph
-            is_swept = any(s.price >= avg_price for s in nodes if s.index > latest_idx)
+            is_swept = False
+            for s in reversed(nodes):
+                if s.index <= latest_idx:
+                    break
+                if s.price >= avg_price:
+                    is_swept = True
+                    break
 
             pools.append(
                 LiquidityLevel(
@@ -119,8 +124,13 @@ class LiquidityDetector:
             latest_idx = max(s.index for s in cluster)
             source_ids = [s.id for s in cluster]
 
-            # Check if swept by checking subsequent swings in the graph
-            is_swept = any(s.price <= avg_price for s in nodes if s.index > latest_idx)
+            is_swept = False
+            for s in reversed(nodes):
+                if s.index <= latest_idx:
+                    break
+                if s.price <= avg_price:
+                    is_swept = True
+                    break
 
             pools.append(
                 LiquidityLevel(

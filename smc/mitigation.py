@@ -14,7 +14,7 @@ class MitigationMonitor:
 
     def __init__(self) -> None:
         """Initializes the MitigationMonitor."""
-        pass
+        self._last_checked: dict[str, int] = {}
 
     def check_mitigation(self, bars: Sequence[Bar], zones: list[Any]) -> list[Any]:
         """Determines if the price path has mitigated active zones.
@@ -41,7 +41,9 @@ class MitigationMonitor:
             # Check if zone is an OrderBlock
             if isinstance(zone, OrderBlock):
                 start_idx = zone.bar_index + 1
-                for j in range(start_idx, n_bars):
+                last_idx = self._last_checked.get(zone.id, start_idx - 1)
+                start_search = max(start_idx, last_idx + 1)
+                for j in range(start_search, n_bars):
                     bar = bars[j]
                     if zone.direction == OBDirection.BULLISH:
                         if bar.low <= zone.high:
@@ -51,11 +53,15 @@ class MitigationMonitor:
                         if bar.high >= zone.low:
                             is_mitigated = True
                             break
+                if not is_mitigated and n_bars > 0:
+                    self._last_checked[zone.id] = n_bars - 1
 
             # Check if zone is a FairValueGap
             elif isinstance(zone, FairValueGap):
                 start_idx = zone.end_index + 1
-                for j in range(start_idx, n_bars):
+                last_idx = self._last_checked.get(zone.id, start_idx - 1)
+                start_search = max(start_idx, last_idx + 1)
+                for j in range(start_search, n_bars):
                     bar = bars[j]
                     if zone.direction == FVGDirection.BULLISH:
                         if bar.low <= zone.upper_price:
@@ -65,9 +71,13 @@ class MitigationMonitor:
                         if bar.high >= zone.lower_price:
                             is_mitigated = True
                             break
+                if not is_mitigated and n_bars > 0:
+                    self._last_checked[zone.id] = n_bars - 1
 
             if is_mitigated:
                 updated_zones.append(replace(zone, is_mitigated=True))
+                if zone.id in self._last_checked:
+                    del self._last_checked[zone.id]
             else:
                 updated_zones.append(zone)
 

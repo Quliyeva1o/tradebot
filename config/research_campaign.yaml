@@ -1,0 +1,32 @@
+# Validation & Research Campaign Settings
+seed: 42
+symbols:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - XAUUSD
+years:
+  - 2020
+  - 2021
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+timeframe: H1
+optimizer:
+  method: grid
+  max_iter: 20
+  search_space:
+    min_risk_reward_ratio:
+      - 1.0
+      - 1.5
+      - 2.0
+    stop_buffer_pips:
+      - 3.0
+      - 5.0
+      - 7.0
+monte_carlo:
+  n: 1000
+robustness:
+  skip_prob_1: 0.10
+  skip_prob_2: 0.25

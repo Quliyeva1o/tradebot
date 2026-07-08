@@ -70,13 +70,7 @@
 ---
 
 ## Regression Summary
-- **Baseline Compared Against**: `baseline_v1.json`
-- **Trade Difference**: +0
-- **Win Rate Difference**: +0.00%
-- **Net Profit Difference**: +0.00
-- **Profit Factor Difference**: +0.0000
-- **Expectancy Difference**: +0.0000
-- **Drawdown Difference**: +0.00%
+- **Baseline Compared Against**: None (Initial Baseline saved)
 - **Overall Status**: **PASS**
 
 ---
