@@ -47,7 +47,7 @@ def test_missing_column(tmp_path: Path) -> None:
     csv_file = tmp_path / "missing_col.csv"
     # Missing 'Close' column
     csv_file.write_text(
-        "Timestamp,Open,High,Low,Volume\n" "2026-07-01 12:00:00,1.1000,1.1050,1.0990,1000\n"
+        "Timestamp,Open,High,Low,Volume\n2026-07-01 12:00:00,1.1000,1.1050,1.0990,1000\n"
     )
 
     provider = CSVDataProvider(filepath=csv_file)
@@ -63,8 +63,7 @@ def test_invalid_datetime(tmp_path: Path) -> None:
     """Verifies that InvalidTimestampError is raised for unparseable dates."""
     csv_file = tmp_path / "invalid_date.csv"
     csv_file.write_text(
-        "Timestamp,Open,High,Low,Close,Volume\n"
-        "bad-date-string,1.1000,1.1050,1.0990,1.1020,1000\n"
+        "Timestamp,Open,High,Low,Close,Volume\nbad-date-string,1.1000,1.1050,1.0990,1.1020,1000\n"
     )
 
     provider = CSVDataProvider(filepath=csv_file)

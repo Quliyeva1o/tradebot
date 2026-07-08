@@ -18,6 +18,7 @@ from smc.displacement import DisplacementBar
 from smc.fvg import FairValueGap, FVGDirection
 from smc.liquidity import LiquidityLevel, LiquidityType
 from smc.order_block import OBDirection, OrderBlock
+from smc.premium_discount import PremiumDiscountZone, ZoneType
 from strategy.continuation import BearishContinuationStrategy, BullishContinuationStrategy
 from strategy.models import TradeSetup
 from strategy.strategy_engine import StrategyEngine
@@ -140,6 +141,14 @@ def create_valid_bullish_market_state() -> MarketState:
     )
     state.smc_state.displacements.append(displacement)
 
+    state.premium_discount_zone = PremiumDiscountZone(
+        high=1.1200,
+        low=1.0800,
+        equilibrium=1.1000,
+        current_price=1.0900,
+        zone=ZoneType.DISCOUNT,
+    )
+
     return state
 
 
@@ -236,6 +245,14 @@ def create_valid_bearish_market_state() -> MarketState:
         atr=0.0010,
     )
     state.smc_state.displacements.append(displacement)
+
+    state.premium_discount_zone = PremiumDiscountZone(
+        high=1.1200,
+        low=1.0800,
+        equilibrium=1.1000,
+        current_price=1.1100,
+        zone=ZoneType.PREMIUM,
+    )
 
     return state
 

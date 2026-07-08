@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from smc.fvg import FairValueGap
     from smc.liquidity import LiquidityLevel
     from smc.order_block import OrderBlock
+    from smc.premium_discount import PremiumDiscountZone
 
 from core.models import Bar, Timeframe
 from market_structure.swing_models import Swing, SwingClassification, SwingType
@@ -274,6 +275,7 @@ class MarketState:
     swing_graph: SwingGraph = field(default_factory=SwingGraph)
     structure_state: StructureState = field(default_factory=StructureState)
     smc_state: SMCState = field(default_factory=SMCState)
+    premium_discount_zone: "PremiumDiscountZone | None" = None
 
     @property
     def bars(self) -> list[Bar]:

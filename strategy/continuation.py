@@ -9,6 +9,7 @@ from market_structure.swing_models import SwingType
 from smc.fvg import FVGDirection
 from smc.liquidity import LiquidityType
 from smc.order_block import OBDirection
+from smc.premium_discount import ZoneType
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
 
@@ -54,6 +55,12 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         """
         # --- Rule 1: Trend Check ---
         if market_state.structure_state.trend != StructureTrend.BULLISH:
+            return None
+
+        # --- Rule 8: Premium / Discount Zone Check ---
+        if market_state.premium_discount_zone is None:
+            return None
+        if market_state.premium_discount_zone.zone != ZoneType.DISCOUNT:
             return None
 
         # --- Rule 2 & 3: Break Check ---
@@ -208,6 +215,12 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         """
         # --- Rule 1: Trend Check ---
         if market_state.structure_state.trend != StructureTrend.BEARISH:
+            return None
+
+        # --- Rule 8: Premium / Discount Zone Check ---
+        if market_state.premium_discount_zone is None:
+            return None
+        if market_state.premium_discount_zone.zone != ZoneType.PREMIUM:
             return None
 
         # --- Rule 2 & 3: Break Check ---

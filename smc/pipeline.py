@@ -5,11 +5,13 @@ Coordinates FVG, Order Blocks, Liquidity Pools, Displacement, and Mitigation mon
 
 from core.models import Bar
 from market_structure.structure_models import MarketState, StructureBreak, StructureState
+from market_structure.swing_models import SwingClassification, SwingType
 from smc.displacement import DisplacementBar, DisplacementDetector
 from smc.fvg import FairValueGap, FVGDetector
 from smc.liquidity import LiquidityDetector
 from smc.mitigation import MitigationMonitor
 from smc.order_block import OrderBlockDetector
+from smc.premium_discount import PremiumDiscountCalculator
 
 
 class SMCPipeline:
@@ -22,6 +24,7 @@ class SMCPipeline:
         liquidity_detector: LiquidityDetector | None = None,
         displacement_detector: DisplacementDetector | None = None,
         mitigation_monitor: MitigationMonitor | None = None,
+        premium_discount_calculator: PremiumDiscountCalculator | None = None,
     ) -> None:
         """Initializes the SMCPipeline with specific detector instances.
 
@@ -31,12 +34,16 @@ class SMCPipeline:
             liquidity_detector: Liquidity Pools detector.
             displacement_detector: Displacement run detector.
             mitigation_monitor: Mitigation status monitor.
+            premium_discount_calculator: Premium/Discount zone calculator.
         """
         self.fvg_detector = fvg_detector or FVGDetector()
         self.ob_detector = ob_detector or OrderBlockDetector()
         self.liquidity_detector = liquidity_detector or LiquidityDetector()
         self.displacement_detector = displacement_detector or DisplacementDetector()
         self.mitigation_monitor = mitigation_monitor or MitigationMonitor()
+        self.premium_discount_calculator = (
+            premium_discount_calculator or PremiumDiscountCalculator()
+        )
 
     def update(
         self,
@@ -117,3 +124,37 @@ class SMCPipeline:
         market_state.smc_state.order_blocks = self.mitigation_monitor.check_mitigation(
             bars, market_state.smc_state.order_blocks
         )
+
+        # 6. Premium / Discount Zone Calculation
+        major_high = market_state.structure_state.active_major_high
+        major_low = market_state.structure_state.active_major_low
+
+        if major_high is None:
+            for swing in reversed(market_state.swing_graph.nodes):
+                if (
+                    swing.type == SwingType.HIGH
+                    and swing.classification == SwingClassification.MAJOR
+                ):
+                    major_high = swing
+                    break
+
+        if major_low is None:
+            for swing in reversed(market_state.swing_graph.nodes):
+                if (
+                    swing.type == SwingType.LOW
+                    and swing.classification == SwingClassification.MAJOR
+                ):
+                    major_low = swing
+                    break
+
+        if major_high is not None and major_low is not None:
+            try:
+                market_state.premium_discount_zone = self.premium_discount_calculator.calculate(
+                    high=major_high.price,
+                    low=major_low.price,
+                    current_price=new_bar.close,
+                )
+            except ValueError:
+                market_state.premium_discount_zone = None
+        else:
+            market_state.premium_discount_zone = None
