@@ -115,6 +115,28 @@ def test_market_state_root() -> None:
     assert state.get_latest_bar() == bar2
 
 
+def test_market_state_bars_view_matches_bars_property_but_is_not_a_copy() -> None:
+    """Bug #17 differential check: bars_view() must be value-equal to the
+    copying `.bars` property (same elements, same order, same absolute
+    positions), while `.bars` remains a fresh copy each call and bars_view()
+    returns the same underlying list object every time.
+    """
+    state = MarketState(symbol="EURUSD", timeframe=Timeframe.M15)
+    bar1 = Bar(datetime(2026, 7, 1, 12, 0), 1.2000, 1.2050, 1.1990, 1.2010, 500)
+    bar2 = Bar(datetime(2026, 7, 1, 12, 15), 1.2010, 1.2080, 1.2000, 1.2060, 600)
+    state.append_bar(bar1)
+    state.append_bar(bar2)
+
+    assert state.bars_view() == state.bars
+    assert state.bars_view()[0] is bar1
+    assert state.bars_view()[1] is bar2
+
+    # `.bars` is a defensive copy: two calls return different list objects.
+    assert state.bars is not state.bars
+    # bars_view() is a direct reference: two calls return the SAME list object.
+    assert state.bars_view() is state.bars_view()
+
+
 def test_swing_graph_optimized_nodes_access() -> None:
     """Verifies optimized helper methods (recent_nodes, node_count, last_node)."""
     graph = SwingGraph()

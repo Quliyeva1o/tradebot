@@ -61,7 +61,9 @@ class SMCPipeline:
             new_bar: The newly closed candle bar.
             new_break: The structure break detected on the newly closed candle (BOS/CHoCH).
         """
-        bars = market_state.bars
+        # Bug #17: bars_view() avoids an O(n) full-history copy on every bar;
+        # safe because every detector below only reads bars by index/slice.
+        bars = market_state.bars_view()
 
         # 1. FVG Detection (checks the latest 3-bar sequence)
         if len(bars) >= 3:

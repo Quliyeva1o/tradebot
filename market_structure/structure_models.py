@@ -337,6 +337,20 @@ class MarketState:
         """Exposes a read-only copy of the price bars."""
         return list(self._bars)
 
+    def bars_view(self) -> list[Bar]:
+        """Returns the internal bars list directly, without copying (Bug #17).
+
+        Swing detection indexes bars by absolute position (`swing.index`), so
+        callers needing that indexing cannot use a truncated window the way
+        `recent_nodes`/`node_at` work for swings -- they need the same
+        positions the full list would give. This trades the defensive copy
+        for a direct reference: safe only because every current caller
+        (SwingDetector.detect_incremental and its helpers) only ever reads
+        by index/slice and never mutates the sequence it's given. Callers
+        MUST NOT mutate the returned list.
+        """
+        return self._bars
+
     def bar_count(self) -> int:
         """Returns the number of bars without copying the underlying list."""
         return len(self._bars)

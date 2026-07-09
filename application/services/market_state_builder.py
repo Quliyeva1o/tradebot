@@ -47,9 +47,11 @@ class MarketStateBuilder:
         """Appends a new closed bar and updates the market state incrementally."""
         self._market_state.append_bar(bar)
 
-        # Incremental swing detection
+        # Incremental swing detection (Bug #17: bars_view() avoids an O(n)
+        # full-history copy on every bar; safe because detect_incremental
+        # only ever reads the sequence by index, never mutates it)
         result = self.swing_detector.detect_incremental(
-            self._market_state.bars, self._market_state.swing_graph
+            self._market_state.bars_view(), self._market_state.swing_graph
         )
 
         # Handle MINOR -> MAJOR swing upgrades first (Bug #1)
