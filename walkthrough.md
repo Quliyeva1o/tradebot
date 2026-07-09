@@ -432,3 +432,10 @@ həll olunduqdan SONRA başlana bilər (Bug #19-un kontrolsuz grid search-i və 
 diaqnostika görünməzliyi, pattern-kəşfi kimi avtomatlaşdırılmış, nəzarətsiz axtarışda XÜSUSİLƏ
 təhlükəlidir — səssizcə saatlarla işləyən VƏ nəyin niyə rədd edildiyini göstərməyən bir sistem
 overfitting-i gizlədə bilər).
+
+## Sıralama Qərarları (bloklayıcı aydınlaşdırmadan sonra)
+
+1. **Bug #23** — Mərhələ A refaktorundan ƏVVƏL, hazırkı (köhnə) strukturda düzəldiləcək —
+   təkrar iş riskindən (düzəlişi həm köhnə, həm yeni strukturda etmək) qaçmaq üçün.
+2. **Bug #19/#20/#21** — Mərhələ A/B/C-ni BLOKLAMIR (bunlar `research/` paketindədir,
+   `strategy/`-yə asılılığı yoxdur). YALNIZ Mərhələ D-dən əvvəl məcburidir.
