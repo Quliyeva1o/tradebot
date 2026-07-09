@@ -340,3 +340,44 @@ EDİLMƏYİB, parametr axtarışı nəticələrinə etimadı azaldır.
 fixture istifadə edir, sıfır real trade yaradır — yuxarıdakı 3 bug-ın heç biri mövcud test
 suite tərəfindən tutulmur. Hər üçü tətbiq ediləndə yeni, real trade generasiya edən test
 fixture-ları tələb olunacaq.
+
+---
+
+# Bug #22 — 0-Trade Kök-Səbəb Araşdırması və Düzəlişi (commit `b176eeb`)
+
+EURUSD/GBPUSD/USDJPY tam tarixi datasında (4 il, 100k+ bar) HƏR İKİ continuation
+strategiyasının **dəqiq 0 trade** yaratdığı aşkarlandı. Kök-səbəb araşdırması göstərdi ki,
+`smc/mitigation.py::check_mitigation` "toxunma"nı (`bar.low <= zone.high`) "tam mitigasiya"
+kimi işarələyirdi — riyazi olaraq isbat edildi ki, `bar.low <= bar.close` universal olaraq
+doğru olduğu üçün, strategiyanın "qiymət zonadadır" şərti (`price <= ob.high`) AVTOMATİK
+olaraq mitigation trigger şərtini də doğrulayırdı — yəni "zonadadır VƏ hələ mitigated deyil"
+halı STRUKTURAL olaraq heç vaxt baş verə bilməzdi. Düzəliş: mitigation indi YALNIZ bar
+zonanın ƏKS TƏRƏFİNDƏN TAM bağlananda (`close < zone.low` bullish üçün və s.) tetiklənir —
+sadə toxunma/retest artıq zonanı etibarsız etmir. Detallar üçün commit mesajına bax.
+
+## Bug #23 (Yüksək prioritet, AYRICA sessiya tələb edir — İNDİ DÜZƏLDİLMƏYİB): trend/break asinxronluğu
+
+Bug #22 araşdırması zamanı İKİNCİ, MÜSTƏQİL bir bloklayıcı problem aşkarlandı: konkret
+nümunələrdə (məs. `2022-07-05`, 15+ ardıcıl bar) `structure_state.trend == BULLISH` olduğu
+halda, `breaks_history[-1]` (son struktur break) **köhnə, LOW-a aid, əks-istiqamətli bir
+CHoCH** idi (23-36 bar yaşında və artmaqda). Səbəb: `structure_state.trend`
+(`MarketStructureEngine`-də swing HH/HL/LH/LL pattern-i əsasında) və `breaks_history`
+(`check_structural_break`-də price-un major swing-i keçməsi əsasında) **iki müstəqil
+mexanizmdir** — trend YENİ bir break hadisəsi olmadan, sadəcə swing əlaqələri dəyişərək
+BULLISH-ə keçə bilər, halbuki tarixdəki SON break hələ də əvvəlki (bearish) rejimə aid,
+köhnə bir CHoCH ola bilər. Nəticədə `strategy/continuation.py`-in Rule 2/3 yoxlaması
+(`last_break.break_type != BOS` / `broken_swing.type != HIGH`) bu bar-ları rədd edir —
+`last_break_not_bos` (EURUSD-də 2,813) və `break_wrong_swing_type` (861) rədd səbəblərinin
+əsas mənbəyi budur.
+
+**Niyə indi düzəldilmir:** bu, Bug #22-dən TAMAMİLƏ fərqli bir kateqoriyadır (mitigation
+tərifi deyil, trend-hesablama ilə break-tarixçəsi arasındakı sinxronizasiya) və diqqətli,
+ayrıca bir sessiya tələb edir — mövcud `max_break_age_bars` konfiqurasiya parametri (hazırda
+`None`/sönük) staleness-i qismən həll edə bilər, amma `break_wrong_swing_type` üçün (köhnəlik
+deyil, tam səhv NÖV) ayrı bir yanaşma lazımdır: məsələn, strategiyanın "son BOS"u YOX,
+"cari trend istiqamətinə uyğun SON BOS"u axtarması. Bu, `MarketStructureEngine`/`breaks_history`
+strukturuna toxunma tələb edə bilər, riskli bir dəyişiklikdir.
+
+**Gələcək iş:** ayrıca sessiyada, Bug #22-nin düzəlişindən sonra yenidən ölçülməli (Bug #22
+öz-özlüyündə bir çox bar-ı bu mərhələyə belə çatdırmayacaq ola bilər, ona görə real təsirini
+görmək üçün əvvəlcə Bug #22-nin nəticələrini müşahidə etmək lazımdır).
