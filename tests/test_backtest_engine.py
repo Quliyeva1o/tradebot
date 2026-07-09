@@ -337,7 +337,7 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     # TP hit
     candles_tp = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1010 + 0.0002 + 0.0001 = 1.1013
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1010 + 0.0001 + 0.0001 = 1.1012
         _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055), # TP hit at 1.1050
     ]
 
@@ -347,14 +347,14 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == pytest.approx(1.1013)
-    # BUY TP exit: exit_price = tp - spread - slippage = 1.1050 - 0.0002 - 0.0001 = 1.1047
-    assert trade.exit_price == pytest.approx(1.1047)
+    assert trade.entry_price == pytest.approx(1.1012)
+    # BUY TP exit: exit_price = tp - spread/2 - slippage = 1.1050 - 0.0001 - 0.0001 = 1.1048
+    assert trade.exit_price == pytest.approx(1.1048)
 
     # SL hit
     candles_sl = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1013
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1012
         _create_bar(2, 1.1015, 1.1020, 1.0970, 1.0985), # SL hit at 1.0980
     ]
     evaluator = MockEvaluator([[setup_win], [], []])
@@ -362,8 +362,8 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.LOSS
-    # BUY SL exit: exit_price = sl - spread - slippage = 1.0980 - 0.0002 - 0.0001 = 1.0977
-    assert trade.exit_price == pytest.approx(1.0977)
+    # BUY SL exit: exit_price = sl - spread/2 - slippage = 1.0980 - 0.0001 - 0.0001 = 1.0978
+    assert trade.exit_price == pytest.approx(1.0978)
 
     # 2. SELL trade SL and TP exits
     setup_sell = TradeSetup(
@@ -387,7 +387,7 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     # SELL TP hit
     candles_sell_tp = [
         _create_bar(0, 1.0980, 1.0985, 1.0970, 1.0980),
-        _create_bar(1, 1.0980, 1.1000, 1.0970, 1.0980), # Entry at 1.0990 - 0.0002 - 0.0001 = 1.0987
+        _create_bar(1, 1.0980, 1.1000, 1.0970, 1.0980), # Entry at 1.0990 - 0.0001 - 0.0001 = 1.0988
         _create_bar(2, 1.0980, 1.0990, 1.0940, 1.0955), # TP hit at 1.0950
     ]
     evaluator = MockEvaluator([[setup_sell], [], []])
@@ -395,9 +395,9 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == pytest.approx(1.0987)
-    # SELL TP exit: exit_price = tp + spread + slippage = 1.0960 + 0.0002 + 0.0001 = 1.0963
-    assert trade.exit_price == pytest.approx(1.0963)
+    assert trade.entry_price == pytest.approx(1.0988)
+    # SELL TP exit: exit_price = tp + spread/2 + slippage = 1.0960 + 0.0001 + 0.0001 = 1.0962
+    assert trade.exit_price == pytest.approx(1.0962)
 
 
     # expired exit for BUY
@@ -411,7 +411,7 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     )
     candles_expired = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1013
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1012
         _create_bar(2, 1.1015, 1.1025, 1.1010, 1.1020), # bars_held = 1
         _create_bar(3, 1.1015, 1.1025, 1.1010, 1.1020), # bars_held = 2, close 1.1020
     ]
@@ -421,8 +421,8 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.EXPIRED
-    # BUY expired: close - spread - slippage = 1.1020 - 0.0002 - 0.0001 = 1.1017
-    assert trade.exit_price == pytest.approx(1.1017)
+    # BUY expired: close - spread/2 - slippage = 1.1020 - 0.0001 - 0.0001 = 1.1018
+    assert trade.exit_price == pytest.approx(1.1018)
 
 
 def test_bar_spread_override(state_builder: MarketStateBuilder) -> None:
@@ -467,10 +467,10 @@ def test_bar_spread_override(state_builder: MarketStateBuilder) -> None:
 
     assert len(result.trades) == 1
     trade = result.trades[0]
-    # Entry spread should be 0.0005: 1.1010 + 0.0005 + 0.0001 = 1.1016
-    assert trade.entry_price == pytest.approx(1.1016)
-    # Exit spread should be 0.0004: 1.1050 - 0.0004 - 0.0001 = 1.1045
-    assert trade.exit_price == pytest.approx(1.1045)
+    # Entry spread should be 0.0005: 1.1010 + 0.00025 + 0.0001 = 1.10135
+    assert trade.entry_price == pytest.approx(1.10135)
+    # Exit spread should be 0.0004: 1.1050 - 0.0002 - 0.0001 = 1.1047
+    assert trade.exit_price == pytest.approx(1.1047)
 
 
 def test_commission_per_lot(state_builder: MarketStateBuilder) -> None:
@@ -759,5 +759,70 @@ def test_max_equity_drawdown_circuit_breaker(state_builder: MarketStateBuilder) 
     assert result.stop_reason is not None
     assert "Max equity drawdown limit" in result.stop_reason
     assert evaluator.call_count <= 3
+
+
+def test_round_trip_spread_cost_is_charged_once(state_builder: MarketStateBuilder) -> None:
+    """Verifies that the spread is charged exactly once (half on entry, half on exit) over a round-trip."""
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,  # 1% risk ($100 risk amount)
+        spread=0.0010,       # 10 pips spread
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+    )
+
+    setup = TradeSetup(
+        setup_id="setup_spread_test",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1000),      # limit_price = 1.1000
+        stop_zone=(1.0900, 1.0910),       # sl = 1.0900
+        target_zone=(1.1100, 1.1110),     # tp = 1.1100
+        confidence_score=1.0,
+        confluence=[],
+        trigger_reason="Test OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+
+    # Candles
+    # Candle 0: triggers signal
+    # Candle 1: Low goes to 1.0990, triggers entry at limit_price = 1.1000
+    #           Expected entry_price = 1.1000 + spread/2 = 1.1005
+    #           Position size = 100 / (1.1005 - 1.0900) = 100 / 0.0105 = 9523.8095
+    # Candle 2: High hits TP (1.1120)
+    #           Expected exit_price = 1.1100 - spread/2 = 1.1095
+    #           Expected gross PnL = (1.1095 - 1.1005) * 9523.8095 = 0.0090 * 9523.8095 = 85.7143
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.0990, 1.1015),
+        _create_bar(2, 1.1015, 1.1120, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+
+    # Verify entry and exit prices
+    assert abs(trade.entry_price - 1.1005) < 1e-7
+    assert abs(trade.exit_price - 1.1095) < 1e-7
+
+    # Verify position sizing
+    expected_pos_size = 100.0 / (1.1005 - 1.0900)
+    assert abs(trade.position_size - expected_pos_size) < 1e-7
+
+    # Verify gross/net PnL (round-trip difference is exactly 0.0090 price units)
+    expected_pnl = (1.1095 - 1.1005) * expected_pos_size
+    assert abs(trade.pnl - expected_pnl) < 1e-7
+
 
 

@@ -21,7 +21,7 @@ class BacktestConfig:
 
     initial_balance: float
     risk_per_trade: float  # e.g., 0.01 for 1% risk per trade
-    spread: float
+    spread: float  # Full bid/ask spread in price units (Ask - Bid). Half of this is applied on entry, half on exit, so the total round-trip cost equals exactly one spread width. Slippage is applied in full on both legs independently, since each execution incurs its own slippage.
     commission: float  # flat fee per trade transaction
     slippage: float
     max_holding_bars: int | None = None

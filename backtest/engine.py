@@ -170,27 +170,27 @@ class BacktestEngine:
                 if sl_hit and tp_hit:
                     # Same-candle SL/TP conflict: conservatively assume SL hit first
                     if active_trade["direction"] == SignalDirection.BUY:
-                        exit_price = sl - spread - slippage
+                        exit_price = sl - spread / 2 - slippage
                     else:
-                        exit_price = sl + spread + slippage
+                        exit_price = sl + spread / 2 + slippage
                     result = TradeResult.LOSS
                 elif sl_hit:
                     if active_trade["direction"] == SignalDirection.BUY:
-                        exit_price = sl - spread - slippage
+                        exit_price = sl - spread / 2 - slippage
                     else:
-                        exit_price = sl + spread + slippage
+                        exit_price = sl + spread / 2 + slippage
                     result = TradeResult.LOSS
                 elif tp_hit:
                     if active_trade["direction"] == SignalDirection.BUY:
-                        exit_price = tp - spread - slippage
+                        exit_price = tp - spread / 2 - slippage
                     else:
-                        exit_price = tp + spread + slippage
+                        exit_price = tp + spread / 2 + slippage
                     result = TradeResult.WIN
                 elif expired:
                     if active_trade["direction"] == SignalDirection.BUY:
-                        exit_price = candle.close - spread - slippage
+                        exit_price = candle.close - spread / 2 - slippage
                     else:
-                        exit_price = candle.close + spread + slippage
+                        exit_price = candle.close + spread / 2 + slippage
                     result = TradeResult.EXPIRED
                 else:
                     exit_price = None
@@ -301,7 +301,7 @@ class BacktestEngine:
                     limit_price = entry_high
                     if candle.low <= limit_price:
                         # Entry triggered
-                        entry_price = limit_price + spread + slippage
+                        entry_price = limit_price + spread / 2 + slippage
                         pos_size = self.position_sizer.calculate_size(
                             balance=balance,
                             risk_per_trade=self.config.risk_per_trade,
@@ -329,7 +329,7 @@ class BacktestEngine:
                     limit_price = entry_low
                     if candle.high >= limit_price:
                         # Entry triggered
-                        entry_price = limit_price - spread - slippage
+                        entry_price = limit_price - spread / 2 - slippage
                         pos_size = self.position_sizer.calculate_size(
                             balance=balance,
                             risk_per_trade=self.config.risk_per_trade,
