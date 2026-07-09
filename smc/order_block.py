@@ -29,7 +29,10 @@ class OrderBlock:
         low: Low price limit of the OB candle.
         direction: OBDirection (BULLISH/BEARISH).
         timestamp: The timestamp of the OB candle.
-        is_mitigated: True if price has entered/re-tested this OB.
+        is_mitigated: True once price has fully closed through the OB and
+            past its far edge, invalidating it. A close that merely enters
+            or retests the zone (the intended entry trigger) does NOT set
+            this -- see MitigationMonitor.check_mitigation (Bug #22).
     """
 
     id: str

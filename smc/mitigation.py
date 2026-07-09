@@ -17,9 +17,19 @@ class MitigationMonitor:
         self._last_checked: dict[str, int] = {}
 
     def check_mitigation(self, bars: Sequence[Bar], zones: list[Any]) -> list[Any]:
-        """Determines if the price path has mitigated active zones.
+        """Determines whether the price path has fully invalidated active zones.
 
         Handles list of OrderBlock or FairValueGap objects.
+
+        Bug #22: a zone is only "mitigated" (invalidated) once a bar CLOSES
+        all the way through it, past its far edge. A wick or close merely
+        touching/entering the zone is a legitimate retest -- the intended
+        entry trigger -- and must leave the zone active (is_mitigated stays
+        False) so a strategy can still use it. The previous trigger
+        (`bar.low <= zone.high` etc.) fired on the very first touch, which
+        is mathematically indistinguishable from "price is inside the zone"
+        (since bar.low <= bar.close always), making the zone permanently
+        unusable at the exact moment a strategy would want to select it.
 
         Args:
             bars: Sequence of historical price candlestick Bar objects.
@@ -46,11 +56,11 @@ class MitigationMonitor:
                 for j in range(start_search, n_bars):
                     bar = bars[j]
                     if zone.direction == OBDirection.BULLISH:
-                        if bar.low <= zone.high:
+                        if bar.close < zone.low:
                             is_mitigated = True
                             break
                     elif zone.direction == OBDirection.BEARISH:
-                        if bar.high >= zone.low:
+                        if bar.close > zone.high:
                             is_mitigated = True
                             break
                 if not is_mitigated and n_bars > 0:
@@ -64,11 +74,11 @@ class MitigationMonitor:
                 for j in range(start_search, n_bars):
                     bar = bars[j]
                     if zone.direction == FVGDirection.BULLISH:
-                        if bar.low <= zone.upper_price:
+                        if bar.close < zone.lower_price:
                             is_mitigated = True
                             break
                     elif zone.direction == FVGDirection.BEARISH:
-                        if bar.high >= zone.lower_price:
+                        if bar.close > zone.upper_price:
                             is_mitigated = True
                             break
                 if not is_mitigated and n_bars > 0:

@@ -250,10 +250,23 @@ def test_market_state_builder_fvg_displacement_mitigation() -> None:
     disps_indices = [d.bar_index for d in state.smc_state.displacements]
     assert 4 in disps_indices
 
-    # 3. Mitigate FVG by appending a bar that touches/enters the gap range [1.1010, 1.1030]
-    # bar 5: low = 1.1020 (enters gap -> mitigated)
+    # 3. Bug #22: a bar that merely enters the gap range [1.1010, 1.1030] is a
+    # retest (the intended entry trigger), not invalidation -- it must NOT
+    # mitigate the FVG. bar 5: low = 1.1020 (wicks into the gap) but closes
+    # at 1.1050, well above lower_price, so it hasn't closed through the far
+    # edge. This assertion used to expect is_mitigated=True (pre-fix, "any
+    # touch mitigates"); that was the exact bug the strategy diagnostics
+    # investigation traced the 0-trade outcome to (see walkthrough.md Bug #22).
     b5 = _create_bar(5, 1.1190, 1.1200, 1.1020, 1.1050)
-    state_mitigated = builder.append_bar(b5)
+    state_retested = builder.append_bar(b5)
+
+    assert len(state_retested.smc_state.fair_value_gaps) == 1
+    assert state_retested.smc_state.fair_value_gaps[0].is_mitigated is False
+
+    # 4. Mitigation only fires once a bar CLOSES fully through the far edge
+    # (below lower_price=1.1010 for a bullish FVG).
+    b6 = _create_bar(6, 1.1050, 1.1050, 1.0990, 1.1000)
+    state_mitigated = builder.append_bar(b6)
 
     assert len(state_mitigated.smc_state.fair_value_gaps) == 1
     assert state_mitigated.smc_state.fair_value_gaps[0].is_mitigated is True
