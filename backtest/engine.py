@@ -99,6 +99,11 @@ class BacktestEngine:
         if hasattr(strategy_engine, "reset"):
             strategy_engine.reset()
 
+        if hasattr(market_state_builder, "smc_pipeline"):
+            market_state_builder.smc_pipeline.max_zone_age_bars = getattr(
+                self.config, "max_zone_age_bars", None
+            )
+
         balance = self.config.initial_balance
         peak_balance = balance
         max_drawdown = 0.0

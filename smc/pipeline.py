@@ -25,6 +25,7 @@ class SMCPipeline:
         displacement_detector: DisplacementDetector | None = None,
         mitigation_monitor: MitigationMonitor | None = None,
         premium_discount_calculator: PremiumDiscountCalculator | None = None,
+        max_zone_age_bars: int | None = None,
     ) -> None:
         """Initializes the SMCPipeline with specific detector instances.
 
@@ -35,6 +36,7 @@ class SMCPipeline:
             displacement_detector: Displacement run detector.
             mitigation_monitor: Mitigation status monitor.
             premium_discount_calculator: Premium/Discount zone calculator.
+            max_zone_age_bars: Maximum age (in bars) to keep mitigated zones.
         """
         self.fvg_detector = fvg_detector or FVGDetector()
         self.ob_detector = ob_detector or OrderBlockDetector()
@@ -44,6 +46,7 @@ class SMCPipeline:
         self.premium_discount_calculator = (
             premium_discount_calculator or PremiumDiscountCalculator()
         )
+        self.max_zone_age_bars = max_zone_age_bars
 
     def update(
         self,
@@ -124,6 +127,20 @@ class SMCPipeline:
         market_state.smc_state.order_blocks = self.mitigation_monitor.check_mitigation(
             bars, market_state.smc_state.order_blocks
         )
+
+        # 5b. Mitigated Zone Pruning
+        if self.max_zone_age_bars is not None:
+            current_idx = len(bars) - 1
+            # Prune order blocks
+            market_state.smc_state.order_blocks = [
+                ob for ob in market_state.smc_state.order_blocks
+                if not (ob.is_mitigated and (current_idx - ob.bar_index) > self.max_zone_age_bars)
+            ]
+            # Prune fair value gaps
+            market_state.smc_state.fair_value_gaps = [
+                fvg for fvg in market_state.smc_state.fair_value_gaps
+                if not (fvg.is_mitigated and (current_idx - fvg.end_index) > self.max_zone_age_bars)
+            ]
 
         # 6. Premium / Discount Zone Calculation
         major_high = market_state.structure_state.active_major_high

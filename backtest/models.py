@@ -29,6 +29,8 @@ class BacktestConfig:
     max_daily_loss_pct: float | None = None
     max_equity_drawdown_pct: float | None = None
     pending_order_expiry_bars: int = 1  # Number of bars a pending limit order stays active waiting to be filled before being discarded. Default 1 preserves prior behavior (check next bar only, then discard).
+    max_zone_age_bars: int | None = None  # Maximum age (in bars since creation) a mitigated order block or FVG is kept in active tracking before being archived/pruned. None means no pruning (preserves prior unbounded-growth behavior).
+
 
 
 @dataclass(frozen=True)
