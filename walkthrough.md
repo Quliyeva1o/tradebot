@@ -89,3 +89,55 @@ Bu sessiyada `pip install reportlab` internet olmadığı üçün uğursuz oldu.
 - Yeni testlər: **+27**
 - Sonrakı say: **188 PASS, 0 FAIL** ✅ (161 + 27 = 188, riyaziyyat düzdür)
 - Mövcud `tests/test_strategy_engine.py` (əvvəlki davranış testləri) dəyişməz saxlanıldı və hamısı keçdi — geriyə uyğunluq qorunub.
+
+---
+
+# FAZA 4 — Strategiya Keyfiyyəti
+
+## Bug #9: Configurable Stale-Break Gating
+
+### Qərar prosesi
+Audit-in tövsiyəsi: "Add recency gating to the structure-break rule (#9)". `StructureBreak`
+modelində break-in öz bar-mövqeyini saxlayan sahə yoxdur (yalnız `timestamp` və
+`broken_swing`). İki yanaşma müzakirə olundu:
+1. `StructureBreak`-ə `bar_index` sahəsi əlavə etmək (dəqiq, amma `check_structural_break()`
+   siqnaturuna toxunur, 2 production call-site + 7 test call-site-a təsir edir).
+2. `last_break.broken_swing.index`-i proxy kimi istifadə etmək (0 model dəyişikliyi).
+
+**İstifadəçi 2-ci variantı seçdi.** İmplementasiyadan əvvəl, proxy-nin real break-yaşını
+nə qədər şişirtdiyini ölçmək tələb olundu (real tarixi CSV data repoda yoxdur —
+`data/history/` boşdur), ona görə real `MarketStateBuilder → SwingDetector →
+MarketStructureEngine` pipeline-i 4 bazar rejimi profili × 5 seed (cəmi 3000 bar × 20 run,
+3002 real `StructureBreak`) üzərində sintetik qiymət seriyası ilə işə salındı:
+
+| Metrik | Dəyər (bar) |
+|---|---|
+| min | 7 |
+| median | 14 |
+| mean | 17.3 |
+| p90 | 31 |
+| max (outlier) | 95 |
+
+Nəticə: proxy real break-yaşını tipik olaraq **14-17 bar** şişirdir (heç vaxt aşağı
+qiymətləndirmir — konservativ tərəf xətası). İstifadəçi bu ölçmədən sonra
+**`max_break_age_bars` default-unu `None` (gating deaktiv, köhnə davranış) saxlamağı**
+seçdi — konkret ədəd real backtest data ilə kalibrasiya edildikdən sonra təyin ediləcək.
+
+### Dəyişikliklər
+
+#### 1. [MODIFY] [strategy/continuation.py](file:///Users/renaquliyeva/Desktop/tradebot/strategy/continuation.py)
+- `StrategyConfig`-ə və hər iki strategiyanın `__init__`-inə `max_break_age_bars: int | None = None` əlavə olundu.
+- Yeni "Rule 9: Break Recency Check" — `latest_bar` təsdiqləndikdən sonra: `swing_age = latest_idx - last_break.broken_swing.index`; `max_break_age_bars` təyin olunubsa və `swing_age` onu keçirsə, `RejectionReason.STALE_BREAK` ilə rədd edilir.
+- Əlavə təmizlik: Rule 7 (displacement) və yeni Rule 9 eyni `latest_idx`-ə ehtiyac duyur — əvvəllər `len(market_state.bars) - 1` iki dəfə (hər biri tam siyahı köçürməsi ilə) hesablanırdı; indi bir dəfə `market_state.bar_count()` ilə hesablanıb hər ikisində istifadə olunur.
+
+#### 2. [MODIFY] [market_structure/structure_models.py](file:///Users/renaquliyeva/Desktop/tradebot/market_structure/structure_models.py)
+- `MarketState.bar_count() -> int` əlavə olundu (`SwingGraph.node_count()`-un FAZA 3.3-dəki presedentinə uyğun) — `len(self._bars)`, siyahı köçürmədən.
+
+#### 3. [MODIFY] [strategy/diagnostics.py](file:///Users/renaquliyeva/Desktop/tradebot/strategy/diagnostics.py)
+- `RejectionReason.STALE_BREAK` əlavə olundu.
+
+### Doğrulama
+- Yeni testlər: **+7** (`tests/test_strategy_diagnostics.py`): default None gating-i söndürür, tam sərhəddə (age == limit) keçir, sərhəddən 1 bar yuxarıda (age == limit+1) rədd edir, `StrategyConfig` overlay yolu, bearish güzgü testləri.
+- `tests/test_domain_models.py::test_market_state_root`-a `bar_count()` assertion-ları əlavə olundu (yeni test funksiyası yox, mövcud testin genişlənməsi).
+- 188 (əvvəlki) + 7 (yeni) = **195 PASS, 0 FAIL** ✅
+- Commit: `6646991`
