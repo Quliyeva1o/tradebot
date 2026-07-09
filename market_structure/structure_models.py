@@ -151,6 +151,18 @@ class SwingGraph:
         """Exposes a read-only copy of the swing graph nodes."""
         return list(self._nodes)
 
+    def recent_nodes(self, n: int) -> list[Swing]:
+        """Returns the last n nodes of the swing graph (efficient partial copy)."""
+        return self._nodes[-n:]
+
+    def node_count(self) -> int:
+        """Returns the total number of nodes in the swing graph (copy-free)."""
+        return len(self._nodes)
+
+    def last_node(self) -> Swing | None:
+        """Returns the last node in the swing graph, or None if empty (copy-free)."""
+        return self._nodes[-1] if self._nodes else None
+
     def add_swing(self, swing: Swing) -> None:
         """Adds a swing node to the graph."""
         self._nodes.append(swing)

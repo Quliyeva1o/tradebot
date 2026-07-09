@@ -209,7 +209,7 @@ class SwingDetector:
 
         # Upgrade Check (always checked on every closed bar)
         upgraded_swing = None
-        for swing in graph.nodes[-5:]:
+        for swing in graph.recent_nodes(5):
             if swing.classification == SwingClassification.MINOR:
                 if self.check_upgrade(swing, bars):
                     swing.classification = SwingClassification.MAJOR
@@ -318,9 +318,8 @@ class SwingDetector:
 
             # Alternate/Duplicate Swing filter
             if candidate:
-                nodes = graph.nodes
-                if nodes:
-                    last_swing = nodes[-1]
+                last_swing = graph.last_node()
+                if last_swing:
                     if last_swing.type == candidate.type:
                         # Consecutive duplicate. Keep the extreme one.
                         better = (
@@ -365,9 +364,8 @@ class SwingDetector:
                 graph.replace_last_node(candidate)
             else:
                 # Set Links to last swing in graph
-                nodes = graph.nodes
-                if nodes:
-                    prev = nodes[-1]
+                prev = graph.last_node()
+                if prev:
                     candidate.previous_id = prev.id
                     candidate.bar_distance = candidate.index - prev.index
                     candidate.price_distance = float(candidate.price - prev.price)

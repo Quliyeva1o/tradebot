@@ -66,7 +66,7 @@ def test_swing_graph_nodes_and_queries() -> None:
     graph.add_swing(s2)
     graph.add_swing(s3)
 
-    assert len(graph.nodes) == 3
+    assert graph.node_count() == 3
     assert graph.edges["swing_1"] == ["swing_2"]
     assert graph.edges["swing_2"] == ["swing_3"]
 
@@ -104,3 +104,52 @@ def test_market_state_root() -> None:
     # Then
     assert len(state.bars) == 2
     assert state.get_latest_bar() == bar2
+
+
+def test_swing_graph_optimized_nodes_access() -> None:
+    """Verifies optimized helper methods (recent_nodes, node_count, last_node)."""
+    graph = SwingGraph()
+    assert graph.node_count() == 0
+    assert graph.last_node() is None
+    assert graph.recent_nodes(5) == []
+
+    s1 = Swing("swing_1", datetime(2026, 7, 1), 1, 1.10, SwingType.HIGH)
+    s2 = Swing("swing_2", datetime(2026, 7, 1), 2, 1.09, SwingType.LOW)
+
+    graph.add_swing(s1)
+    assert graph.node_count() == 1
+    assert graph.last_node() == s1
+    assert graph.recent_nodes(5) == [s1]
+
+    graph.add_swing(s2)
+    assert graph.node_count() == 2
+    assert graph.last_node() == s2
+    assert graph.recent_nodes(1) == [s2]
+    assert graph.recent_nodes(5) == [s1, s2]
+
+    # Micro-benchmark
+    import time
+    # Create large graph (10,000 nodes)
+    bench_graph = SwingGraph()
+    for idx in range(10000):
+        bench_graph.add_swing(Swing(f"s_{idx}", datetime(2026, 1, 1), idx, 1.0, SwingType.HIGH))
+
+    iterations = 100000
+
+    # Measure batch nodes[-5:]
+    start_batch = time.perf_counter()
+    for _ in range(iterations):
+        _ = bench_graph.nodes[-5:]
+    time_batch = time.perf_counter() - start_batch
+
+    # Measure recent_nodes(5)
+    start_inc = time.perf_counter()
+    for _ in range(iterations):
+        _ = bench_graph.recent_nodes(5)
+    time_inc = time.perf_counter() - start_inc
+
+    print(f"\n[Micro-benchmark Result] Graph size: 10,000 nodes, Iterations: {iterations}")
+    print(f"Batch nodes[-5:] time: {time_batch:.4f} seconds")
+    print(f"recent_nodes(5) time: {time_inc:.4f} seconds")
+    print(f"Speedup: {time_batch / time_inc if time_inc > 0 else float('inf'):.2f}x")
+
