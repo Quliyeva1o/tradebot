@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -47,6 +48,12 @@ _TIMEFRAME_DELTA = {
     "H4": timedelta(hours=4),
     "D1": timedelta(days=1),
 }
+
+# MT5's copy_rates_range fails outright (returns None) rather than truncating
+# once a single request would span too many bars (observed cutoff on this
+# broker: succeeds at ~62k bars, fails above ~74k -- consistent with the
+# classic MT5 65535-bar buffer limit). Chunk requests to stay safely under it.
+_CHUNK_TARGET_BARS = 40_000
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,11 @@ def fetch_symbol_bars(
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No historical rates returned from MT5 for {symbol} {timeframe}.")
 
+    return _rows_to_bars(rates)
+
+
+def _rows_to_bars(rates: object) -> list[Bar]:
+    """Converts MT5's copy_rates_range numpy record array into a Bar list."""
     return [
         Bar(
             timestamp=datetime.fromtimestamp(int(row["time"]), tz=UTC),
@@ -118,6 +130,88 @@ def fetch_symbol_bars(
         )
         for row in rates
     ]
+
+
+def _iter_chunk_windows(
+    start: datetime, end: datetime, timeframe: str
+) -> Iterator[tuple[datetime, datetime]]:
+    """Splits [start, end] into windows sized to stay under MT5's per-request bar limit.
+
+    Args:
+        start: Overall range start (inclusive).
+        end: Overall range end (inclusive).
+        timeframe: One of the supported timeframe keys, used to size each window.
+
+    Yields:
+        (chunk_start, chunk_end) tuples covering [start, end] with no gaps.
+    """
+    span = _TIMEFRAME_DELTA[timeframe] * _CHUNK_TARGET_BARS
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + span, end)
+        yield cursor, chunk_end
+        cursor = chunk_end
+
+
+def fetch_symbol_bars_chunked(
+    symbol: str, timeframe: str, start: datetime, end: datetime
+) -> list[Bar]:
+    """Fetches bars across [start, end] in size-limited chunks and concatenates them.
+
+    MT5 fails a copy_rates_range call outright (returns None) rather than
+    truncating when a single request would exceed its internal history
+    buffer, so wide ranges must be split. A chunk with no data (for example
+    a window predating the broker's available history) is logged and
+    skipped; it does not abort the overall download. Any duplicate bar MT5
+    returns at chunk boundaries (or a single clipped bar for out-of-range
+    chunks) is removed later by remove_duplicate_timestamps -- this function
+    only fetches and concatenates.
+
+    Args:
+        symbol: Trading instrument symbol (e.g. "EURUSD").
+        timeframe: One of the supported timeframe keys (e.g. "M15").
+        start: Overall range start (inclusive).
+        end: Overall range end (inclusive).
+
+    Returns:
+        Concatenated, unvalidated list of Bar objects across all chunks.
+
+    Raises:
+        RuntimeError: If the symbol cannot be selected, or no chunk yields any data.
+    """
+    mt5_tf = _MT5_TIMEFRAME_MAP[timeframe]
+
+    if not mt5.symbol_select(symbol, True):
+        raise RuntimeError(f"Symbol {symbol} is not available in the MT5 terminal.")
+
+    all_bars: list[Bar] = []
+    for chunk_start, chunk_end in _iter_chunk_windows(start, end, timeframe):
+        rates = mt5.copy_rates_range(symbol, mt5_tf, chunk_start, chunk_end)
+        if rates is None or len(rates) == 0:
+            logger.info(
+                "[%s %s] No data for chunk %s -> %s (skipped).",
+                symbol,
+                timeframe,
+                chunk_start,
+                chunk_end,
+            )
+            continue
+        logger.info(
+            "[%s %s] Fetched %d bar(s) for chunk %s -> %s.",
+            symbol,
+            timeframe,
+            len(rates),
+            chunk_start,
+            chunk_end,
+        )
+        all_bars.extend(_rows_to_bars(rates))
+
+    if not all_bars:
+        raise RuntimeError(
+            f"No historical rates returned from MT5 for {symbol} {timeframe} in any chunk."
+        )
+
+    return all_bars
 
 
 def remove_duplicate_timestamps(bars: list[Bar]) -> tuple[list[Bar], int]:
@@ -335,7 +429,7 @@ def download_symbol(
     Returns:
         The ValidationReport produced during validation.
     """
-    raw_bars = fetch_symbol_bars(symbol, timeframe, start, end)
+    raw_bars = fetch_symbol_bars_chunked(symbol, timeframe, start, end)
     validated_bars, report = validate_bars(raw_bars, symbol, timeframe)
     path = write_bars_csv(validated_bars, symbol, timeframe, output_dir)
     logger.info("[%s %s] Wrote %d bars to %s", symbol, timeframe, len(validated_bars), path)

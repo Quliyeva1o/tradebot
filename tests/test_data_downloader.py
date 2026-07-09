@@ -12,12 +12,15 @@ import pytest
 
 from core.models import Bar
 from data.download_history import (
+    _iter_chunk_windows,
     check_ohlc_consistency,
     detect_gaps,
     download_symbol,
     ensure_chronological_order,
     fetch_symbol_bars,
+    fetch_symbol_bars_chunked,
     remove_duplicate_timestamps,
+    validate_bars,
     write_bars_csv,
 )
 
@@ -213,6 +216,169 @@ def test_fetch_symbol_bars_raises_when_no_data_returned() -> None:
             )
 
 
+# --- _iter_chunk_windows / fetch_symbol_bars_chunked (multi-chunk merge) -------------
+
+
+def _fake_rates(rows: list[tuple[int, float, float, float, float, int, int]]) -> np.ndarray:
+    """Builds a fake MT5 rates array from (epoch, o, h, l, c, tick_volume, spread) rows."""
+    return np.array(
+        [(*row, 0) for row in rows],
+        dtype=[
+            ("time", "i8"),
+            ("open", "f8"),
+            ("high", "f8"),
+            ("low", "f8"),
+            ("close", "f8"),
+            ("tick_volume", "i8"),
+            ("spread", "i4"),
+            ("real_volume", "i8"),
+        ],
+    )
+
+
+def test_iter_chunk_windows_covers_full_range_without_gaps() -> None:
+    start = datetime(2022, 1, 1, tzinfo=UTC)
+    end = datetime(2026, 1, 1, tzinfo=UTC)
+
+    windows = list(_iter_chunk_windows(start, end, "M15"))
+
+    assert len(windows) > 1  # a 4-year M15 range must be split into multiple chunks
+    assert windows[0][0] == start
+    assert windows[-1][1] == end
+    # Windows must be contiguous: each chunk's end is the next chunk's start.
+    for (_, prev_end), (next_start, _) in zip(windows, windows[1:], strict=False):
+        assert prev_end == next_start
+
+
+def test_iter_chunk_windows_single_chunk_for_small_range() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = datetime(2026, 1, 2, tzinfo=UTC)
+
+    windows = list(_iter_chunk_windows(start, end, "M15"))
+
+    assert windows == [(start, end)]
+
+
+def test_fetch_symbol_bars_chunked_merges_multiple_chunk_responses() -> None:
+    """Verifies bars from several successive MT5 responses are concatenated in order."""
+    chunk1 = _fake_rates([(1735689600, 1.10, 1.15, 1.05, 1.12, 100, 2)])
+    chunk2 = _fake_rates([(1735690500, 1.12, 1.17, 1.07, 1.14, 110, 2)])
+    chunk3 = _fake_rates([(1735691400, 1.14, 1.19, 1.09, 1.16, 120, 2)])
+
+    with (
+        patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch(
+            "data.download_history.mt5.copy_rates_range",
+            side_effect=[chunk1, chunk2, chunk3],
+        ),
+        patch(
+            "data.download_history._iter_chunk_windows",
+            return_value=iter(
+                [
+                    (datetime(2022, 1, 1, tzinfo=UTC), datetime(2023, 1, 1, tzinfo=UTC)),
+                    (datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC)),
+                    (datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC)),
+                ]
+            ),
+        ),
+    ):
+        bars = fetch_symbol_bars_chunked(
+            "EURUSD", "M15", datetime(2022, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC)
+        )
+
+    assert len(bars) == 3
+    assert [b.close for b in bars] == [1.12, 1.14, 1.16]
+
+
+def test_fetch_symbol_bars_chunked_skips_empty_chunk_without_aborting() -> None:
+    """Simulates a chunk predating the broker's history (empty response) mixed with real data."""
+    empty_chunk = None  # MT5 returns None, not [], for a truly out-of-range window
+    real_chunk = _fake_rates([(1735689600, 1.10, 1.15, 1.05, 1.12, 100, 2)])
+
+    with (
+        patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch(
+            "data.download_history.mt5.copy_rates_range",
+            side_effect=[empty_chunk, real_chunk],
+        ),
+        patch(
+            "data.download_history._iter_chunk_windows",
+            return_value=iter(
+                [
+                    (datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC)),
+                    (datetime(2021, 1, 1, tzinfo=UTC), datetime(2022, 1, 1, tzinfo=UTC)),
+                ]
+            ),
+        ),
+    ):
+        bars = fetch_symbol_bars_chunked(
+            "EURUSD", "M15", datetime(2020, 1, 1, tzinfo=UTC), datetime(2022, 1, 1, tzinfo=UTC)
+        )
+
+    assert len(bars) == 1
+
+
+def test_fetch_symbol_bars_chunked_raises_when_all_chunks_empty() -> None:
+    with (
+        patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.copy_rates_range", return_value=None),
+    ):
+        with pytest.raises(RuntimeError):
+            fetch_symbol_bars_chunked(
+                "EURUSD", "M15", datetime(2020, 1, 1, tzinfo=UTC), datetime(2020, 1, 2, tzinfo=UTC)
+            )
+
+
+def test_fetch_symbol_bars_chunked_raises_when_symbol_unavailable() -> None:
+    with patch("data.download_history.mt5.symbol_select", return_value=False):
+        with pytest.raises(RuntimeError):
+            fetch_symbol_bars_chunked(
+                "EURUSD", "M15", datetime(2020, 1, 1, tzinfo=UTC), datetime(2020, 1, 2, tzinfo=UTC)
+            )
+
+
+def test_fetch_symbol_bars_chunked_then_validate_dedupes_chunk_boundary_overlap() -> None:
+    """Reproduces the real MT5 quirk: an out-of-range chunk returns one clipped bar
+    identical to the true first bar of the next chunk. validate_bars must dedupe it
+    away rather than treat it as fabricated/duplicated data or a false gap.
+    """
+    clipped_bar_epoch = 1735689600  # the "real" earliest bar MT5 clips back to
+    stale_chunk = _fake_rates([(clipped_bar_epoch, 1.10, 1.15, 1.05, 1.12, 100, 2)])
+    real_chunk = _fake_rates(
+        [
+            (clipped_bar_epoch, 1.10, 1.15, 1.05, 1.12, 100, 2),
+            (clipped_bar_epoch + 900, 1.12, 1.17, 1.07, 1.14, 110, 2),
+        ]
+    )
+
+    with (
+        patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch(
+            "data.download_history.mt5.copy_rates_range",
+            side_effect=[stale_chunk, real_chunk],
+        ),
+        patch(
+            "data.download_history._iter_chunk_windows",
+            return_value=iter(
+                [
+                    (datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC)),
+                    (datetime(2021, 1, 1, tzinfo=UTC), datetime(2022, 1, 1, tzinfo=UTC)),
+                ]
+            ),
+        ),
+    ):
+        raw_bars = fetch_symbol_bars_chunked(
+            "EURUSD", "M15", datetime(2020, 1, 1, tzinfo=UTC), datetime(2022, 1, 1, tzinfo=UTC)
+        )
+
+    assert len(raw_bars) == 3  # 1 stale + 2 real, before validation
+
+    validated, report = validate_bars(raw_bars, "EURUSD", "M15")
+
+    assert len(validated) == 2
+    assert report.duplicates_removed == 1
+
+
 # --- write_bars_csv ------------------------------------------------------------------
 
 
@@ -237,7 +403,7 @@ def test_download_symbol_deduplicates_validates_and_writes(tmp_path: Path) -> No
     t0 = datetime(2026, 1, 6, 10, 0, tzinfo=UTC)
     fake_bars = [_bar(t0), _bar(t0), _bar(t0 + timedelta(minutes=15))]
 
-    with patch("data.download_history.fetch_symbol_bars", return_value=fake_bars):
+    with patch("data.download_history.fetch_symbol_bars_chunked", return_value=fake_bars):
         report = download_symbol(
             "EURUSD", "M15", t0, t0 + timedelta(days=1), tmp_path
         )
