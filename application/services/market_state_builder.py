@@ -55,6 +55,10 @@ class MarketStateBuilder:
         # Correct extraction of new_swing
         new_swing = None
         if result is not None:
+            # Handle MINOR -> MAJOR swing upgrades first (Bug #1)
+            if hasattr(result, 'upgraded_swing') and result.upgraded_swing is not None:
+                self.structure_engine.handle_upgrade(result.upgraded_swing)
+
             if hasattr(result, 'new_swing') and result.new_swing is not None:
                 new_swing = result.new_swing
             elif hasattr(result, 'id'):  # direct Swing
