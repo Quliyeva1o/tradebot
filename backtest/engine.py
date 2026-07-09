@@ -107,6 +107,7 @@ class BacktestEngine:
         active_trade: dict | None = None
         closed_trades: list[BacktestTrade] = []
         pending_setup: TradeSetup | None = None
+        pending_setup_idx: int | None = None
 
         # Circuit breaker / state tracking
         account_blown = False
@@ -280,8 +281,10 @@ class BacktestEngine:
             # 3. Handle pending trade execution (look-ahead bias avoidance: enter on N+1)
             if account_blown:
                 pending_setup = None
+                pending_setup_idx = None
             if day_limit_reached:
                 pending_setup = None
+                pending_setup_idx = None
 
             if pending_setup is not None and active_trade is None:
                 entry_low, entry_high = pending_setup.entry_zone
@@ -354,19 +357,27 @@ class BacktestEngine:
                                 "entry_spread": spread,
                             }
 
-                # Pending setup is discarded if not filled on this candle (cancel on next bar)
-                pending_setup = None
+                # Discard or keep pending setup depending on fill or expiry
+                if active_trade is not None:
+                    pending_setup = None
+                    pending_setup_idx = None
+                elif pending_setup_idx is not None and (idx - pending_setup_idx) >= self.config.pending_order_expiry_bars:
+                    pending_setup = None
+                    pending_setup_idx = None
 
             # 4. Generate next setups from current candle state N (to be executed on N+1)
             if account_blown:
                 pending_setup = None
+                pending_setup_idx = None
             if day_limit_reached:
                 pending_setup = None
+                pending_setup_idx = None
 
             if active_trade is None and pending_setup is None and not account_blown and not day_limit_reached:
                 setups = strategy_engine.run(market_state)
                 if setups:
                     pending_setup = setups[0]
+                    pending_setup_idx = idx
 
         # Calculate metrics for BacktestResult
         total_profit = balance - self.config.initial_balance

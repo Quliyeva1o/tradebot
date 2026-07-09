@@ -28,6 +28,7 @@ class BacktestConfig:
     commission_per_lot: float | None = None
     max_daily_loss_pct: float | None = None
     max_equity_drawdown_pct: float | None = None
+    pending_order_expiry_bars: int = 1  # Number of bars a pending limit order stays active waiting to be filled before being discarded. Default 1 preserves prior behavior (check next bar only, then discard).
 
 
 @dataclass(frozen=True)

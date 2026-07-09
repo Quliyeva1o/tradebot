@@ -825,4 +825,79 @@ def test_round_trip_spread_cost_is_charged_once(state_builder: MarketStateBuilde
     assert abs(trade.pnl - expected_pnl) < 1e-7
 
 
+def test_pending_order_configurable_expiry(state_builder: MarketStateBuilder) -> None:
+    """Verifies that pending orders can remain active for multiple bars based on BacktestConfig."""
+    # Setup parameters
+    setup = TradeSetup(
+        setup_id="setup_expiry_test",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1000),      # limit_price = 1.1000
+        stop_zone=(1.0900, 1.0910),       # sl = 1.0900
+        target_zone=(1.1100, 1.1110),     # tp = 1.1100
+        confidence_score=1.0,
+        confluence=[],
+        trigger_reason="Test OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    # Candles
+    # Candle 0: triggers signal (setup created at idx 0)
+    # Candle 1: Low = 1.1050 (does not fill)
+    # Candle 2: Low = 1.0990 (fills at limit_price = 1.1000)
+    # Candle 3: High = 1.1120 (hits TP)
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1050, 1.1020), # Low is high, no fill
+        _create_bar(2, 1.1020, 1.1030, 1.0990, 1.1015), # Low fills limit_price
+        _create_bar(3, 1.1015, 1.1120, 1.1010, 1.1055), # High hits TP
+    ]
+
+    # --- Scenario A: Default Expiry = 1 bar ---
+    config_a = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+        pending_order_expiry_bars=1,
+    )
+    evaluator_a = MockEvaluator([[setup], [], [], []])
+    engine_a = BacktestEngine(config=config_a)
+    result_a = engine_a.run(candles, evaluator_a, state_builder)
+
+    # Should not execute the trade because setup expires after Candle 1
+    assert len(result_a.trades) == 0
+
+    # --- Scenario B: Configurable Expiry = 3 bars ---
+    config_b = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+        pending_order_expiry_bars=3,
+    )
+    evaluator_b = MockEvaluator([[setup], [], [], []])
+    engine_b = BacktestEngine(config=config_b)
+    result_b = engine_b.run(candles, evaluator_b, state_builder)
+
+    # Should execute the trade on Candle 2 and exit at TP on Candle 3
+    assert len(result_b.trades) == 1
+    trade = result_b.trades[0]
+    assert trade.result == TradeResult.WIN
+    assert abs(trade.entry_price - 1.1000) < 1e-7
+    assert abs(trade.exit_price - 1.1100) < 1e-7
+    assert trade.entry_bar_index == 2
+    assert trade.exit_bar_index == 3
+
+
+
 
