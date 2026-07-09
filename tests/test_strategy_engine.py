@@ -638,3 +638,35 @@ def test_strategy_risk_reward_gate() -> None:
     setup_invalid = strategy_invalid_risk.evaluate(market_state)
     assert setup_invalid is None
 
+
+def test_strategy_timestamp_determinism_and_bar_time() -> None:
+    """Verifies that strategy evaluation is deterministic and uses historical bar timestamps."""
+    market_state = create_valid_bullish_market_state()
+
+    strategy1 = BullishContinuationStrategy()
+    strategy2 = BullishContinuationStrategy()
+
+    # Reset strategy memory
+    strategy1.reset()
+    strategy2.reset()
+
+    # Assert get_latest_bar() is not None during the normal flow
+    latest_bar = market_state.get_latest_bar()
+    assert latest_bar is not None, "get_latest_bar() must not be None in a valid market state"
+
+    # Evaluate sequentially on the same market state
+    setup1 = strategy1.evaluate(market_state)
+    assert setup1 is not None
+
+    # Reset memory of proposed keys for the second strategy to prevent it from filtering out the same OB
+    strategy2.reset()
+    setup2 = strategy2.evaluate(market_state)
+    assert setup2 is not None
+
+    # Verify TradeSetup timestamp is deterministic
+    assert setup1.timestamp == setup2.timestamp, "TradeSetup timestamps must be identical for identical inputs"
+
+    # Verify TradeSetup timestamp matches the latest bar timestamp exactly
+    assert setup1.timestamp == latest_bar.timestamp, "TradeSetup timestamp must match the latest bar's timestamp"
+
+

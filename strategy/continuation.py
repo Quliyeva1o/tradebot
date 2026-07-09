@@ -187,7 +187,8 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         self._proposed_keys.add(proposed_key)
 
         # Generate Setup ID
-        timestamp = datetime.now()
+        latest_bar = market_state.get_latest_bar()
+        timestamp = latest_bar.timestamp if latest_bar is not None else datetime.now()
         ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")
         unique_id = uuid.uuid4().hex[:8]
         setup_id = f"setup_bullish_continuation_{market_state.symbol}_{market_state.timeframe.value}_{unique_id}_{ts_str}"
@@ -386,7 +387,8 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         self._proposed_keys.add(proposed_key)
 
         # Generate Setup ID
-        timestamp = datetime.now()
+        latest_bar = market_state.get_latest_bar()
+        timestamp = latest_bar.timestamp if latest_bar is not None else datetime.now()
         ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")
         unique_id = uuid.uuid4().hex[:8]
         setup_id = f"setup_bearish_continuation_{market_state.symbol}_{market_state.timeframe.value}_{unique_id}_{ts_str}"
