@@ -1,0 +1,323 @@
+W292 [*] No newline at end of file
+  --> application/services/market_state_builder.py:77:34
+   |
+75 |     @property
+76 |     def market_state(self) -> MarketState:
+77 |         return self._market_state
+   |                                  ^
+   |
+help: Add trailing newline
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> debug_market_state_builder.py:6:1
+   |
+ 4 |   sys.path.append(str(Path(__file__).parent))
+ 5 |
+ 6 | / from core.models import Timeframe
+ 7 | | from data.csv_provider import CSVDataProvider
+ 8 | | from application.services.market_state_builder import MarketStateBuilder
+   | |________________________________________________________________________^
+ 9 |
+10 |   def main():
+   |
+help: Organize imports
+
+D103 Missing docstring in public function
+  --> debug_market_state_builder.py:10:5
+   |
+ 8 | from application.services.market_state_builder import MarketStateBuilder
+ 9 |
+10 | def main():
+   |     ^^^^
+11 |     csv_path = Path("data/history/EURUSD_H1_2020.csv")
+12 |     bars = CSVDataProvider(filepath=csv_path).load()[:1000]  # ilk 1000 bar
+   |
+
+RUF003 Comment contains ambiguous `ı` (LATIN SMALL LETTER DOTLESS I). Did you mean `i` (LATIN SMALL LETTER I)?
+  --> debug_market_state_builder.py:22:19
+   |
+20 |     print("Has smc_pipeline:", hasattr(builder, 'smc_pipeline'))
+21 |
+22 |     # İlk 200 bar-ı emal et və iç vəziyyəti yoxla
+   |                   ^
+23 |     for i in range(min(200, len(bars))):
+24 |         builder.append_bar(bars[i])
+   |
+
+W293 [*] Blank line contains whitespace
+  --> debug_market_state_builder.py:25:1
+   |
+23 |     for i in range(min(200, len(bars))):
+24 |         builder.append_bar(bars[i])
+25 |         
+   | ^^^^^^^^
+26 |         if i % 50 == 0 or i == 199:
+27 |             state = builder.market_state
+   |
+help: Remove whitespace from blank line
+
+W292 [*] No newline at end of file
+  --> debug_market_state_builder.py:38:11
+   |
+37 | if __name__ == "__main__":
+38 |     main()
+   |           ^
+   |
+help: Add trailing newline
+
+E402 Module level import not at top of file
+ --> debug_swing_graph.py:7:1
+  |
+5 | sys.path.insert(0, str(root))
+6 |
+7 | from data.csv_provider import CSVDataProvider
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 | from application.services.market_state_builder import MarketStateBuilder
+  |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> debug_swing_graph.py:7:1
+   |
+ 5 |   sys.path.insert(0, str(root))
+ 6 |
+ 7 | / from data.csv_provider import CSVDataProvider
+ 8 | | from application.services.market_state_builder import MarketStateBuilder
+   | |________________________________________________________________________^
+ 9 |
+10 |   def main():
+   |
+help: Organize imports
+
+E402 Module level import not at top of file
+  --> debug_swing_graph.py:8:1
+   |
+ 7 | from data.csv_provider import CSVDataProvider
+ 8 | from application.services.market_state_builder import MarketStateBuilder
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 9 |
+10 | def main():
+   |
+
+D103 Missing docstring in public function
+  --> debug_swing_graph.py:10:5
+   |
+ 8 | from application.services.market_state_builder import MarketStateBuilder
+ 9 |
+10 | def main():
+   |     ^^^^
+11 |     provider = CSVDataProvider(filepath="data/history/EURUSD_H1_2020.csv")
+12 |     bars = provider.load()
+   |
+
+W293 [*] Blank line contains whitespace
+  --> debug_swing_graph.py:21:1
+   |
+19 |     print(f"Final Swings Count: {len(state.swing_graph.nodes)}")
+20 |     print(f"Trend: {state.structure_state.trend}")
+21 |     
+   | ^^^^
+22 |     # StructureState-in mövcud atributlarını yoxla
+23 |     print(f"StructureState attributes: {dir(state.structure_state)}")
+   |
+help: Remove whitespace from blank line
+
+RUF003 Comment contains ambiguous `ı` (LATIN SMALL LETTER DOTLESS I). Did you mean `i` (LATIN SMALL LETTER I)?
+  --> debug_swing_graph.py:22:42
+   |
+20 |     print(f"Trend: {state.structure_state.trend}")
+21 |     
+22 |     # StructureState-in mövcud atributlarını yoxla
+   |                                          ^
+23 |     print(f"StructureState attributes: {dir(state.structure_state)}")
+   |
+
+RUF003 Comment contains ambiguous `ı` (LATIN SMALL LETTER DOTLESS I). Did you mean `i` (LATIN SMALL LETTER I)?
+  --> debug_swing_graph.py:22:44
+   |
+20 |     print(f"Trend: {state.structure_state.trend}")
+21 |     
+22 |     # StructureState-in mövcud atributlarını yoxla
+   |                                            ^
+23 |     print(f"StructureState attributes: {dir(state.structure_state)}")
+   |
+
+W292 [*] No newline at end of file
+  --> debug_swing_graph.py:33:11
+   |
+32 | if __name__ == "__main__":
+33 |     main()
+   |           ^
+   |
+help: Add trailing newline
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> test_market_state.py:6:1
+   |
+ 4 |   sys.path.append(str(Path(__file__).parent))
+ 5 |
+ 6 | / from core.models import Timeframe
+ 7 | | from data.csv_provider import CSVDataProvider
+ 8 | | from application.services.market_state_builder import MarketStateBuilder
+   | |________________________________________________________________________^
+ 9 |
+10 |   def main():
+   |
+help: Organize imports
+
+D103 Missing docstring in public function
+  --> test_market_state.py:10:5
+   |
+ 8 | from application.services.market_state_builder import MarketStateBuilder
+ 9 |
+10 | def main():
+   |     ^^^^
+11 |     csv_path = Path("data/history/EURUSD_H1_2020.csv")
+12 |     bars = CSVDataProvider(filepath=csv_path).load()
+   |
+
+W293 [*] Blank line contains whitespace
+  --> test_market_state.py:27:1
+   |
+25 |         builder.append_bar(bars[i])
+26 |         state = builder.market_state
+27 |         
+   | ^^^^^^^^
+28 |         if i % 20 == 0:
+29 |             print(f"Bar {i:3d}: trend={getattr(state, 'trend', None)}, "
+   |
+help: Remove whitespace from blank line
+
+W292 [*] No newline at end of file
+  --> test_market_state.py:40:11
+   |
+39 | if __name__ == "__main__":
+40 |     main()
+   |           ^
+   |
+help: Add trailing newline
+
+E402 Module level import not at top of file
+ --> test_signal_diagnostics.py:7:1
+  |
+5 | sys.path.insert(0, str(root))
+6 |
+7 | from data.csv_provider import CSVDataProvider
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+8 | from application.services.market_state_builder import MarketStateBuilder
+9 | from strategy.continuation import BullishContinuationStrategy, BearishContinuationStrategy
+  |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> test_signal_diagnostics.py:7:1
+   |
+ 5 |   sys.path.insert(0, str(root))
+ 6 |
+ 7 | / from data.csv_provider import CSVDataProvider
+ 8 | | from application.services.market_state_builder import MarketStateBuilder
+ 9 | | from strategy.continuation import BullishContinuationStrategy, BearishContinuationStrategy
+   | |__________________________________________________________________________________________^
+10 |
+11 |   def main():
+   |
+help: Organize imports
+
+E402 Module level import not at top of file
+ --> test_signal_diagnostics.py:8:1
+  |
+7 | from data.csv_provider import CSVDataProvider
+8 | from application.services.market_state_builder import MarketStateBuilder
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+9 | from strategy.continuation import BullishContinuationStrategy, BearishContinuationStrategy
+  |
+
+E402 Module level import not at top of file
+  --> test_signal_diagnostics.py:9:1
+   |
+ 7 | from data.csv_provider import CSVDataProvider
+ 8 | from application.services.market_state_builder import MarketStateBuilder
+ 9 | from strategy.continuation import BullishContinuationStrategy, BearishContinuationStrategy
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 |
+11 | def main():
+   |
+
+D103 Missing docstring in public function
+  --> test_signal_diagnostics.py:11:5
+   |
+ 9 | from strategy.continuation import BullishContinuationStrategy, BearishContinuationStrategy
+10 |
+11 | def main():
+   |     ^^^^
+12 |     provider = CSVDataProvider(filepath="data/history/EURUSD_H1_2020.csv")
+13 |     bars = provider.load()[:3000]  # Son 3000 bar
+   |
+
+B007 Loop control variable `bar` not used within loop body
+  --> test_signal_diagnostics.py:27:9
+   |
+26 |     signals = []
+27 |     for bar in bars[-500:]:  # Son 500 bar
+   |         ^^^
+28 |         setup = bullish.evaluate(state)
+29 |         if setup:
+   |
+help: Rename unused `bar` to `_bar`
+
+W292 [*] No newline at end of file
+  --> test_signal_diagnostics.py:41:11
+   |
+40 | if __name__ == "__main__":
+41 |     main()
+   |           ^
+   |
+help: Add trailing newline
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> test_swing_detector.py:6:1
+   |
+ 4 |   sys.path.append(str(Path(__file__).parent))
+ 5 |
+ 6 | / from core.models import Timeframe
+ 7 | | from data.csv_provider import CSVDataProvider
+ 8 | | from market_structure.swing_detector import SwingDetector
+ 9 | | from market_structure.swing_models import SwingConfig
+   | |_____________________________________________________^
+10 |
+11 |   def main():
+   |
+help: Organize imports
+
+F401 [*] `core.models.Timeframe` imported but unused
+ --> test_swing_detector.py:6:25
+  |
+4 | sys.path.append(str(Path(__file__).parent))
+5 |
+6 | from core.models import Timeframe
+  |                         ^^^^^^^^^
+7 | from data.csv_provider import CSVDataProvider
+8 | from market_structure.swing_detector import SwingDetector
+  |
+help: Remove unused import: `core.models.Timeframe`
+
+D103 Missing docstring in public function
+  --> test_swing_detector.py:11:5
+   |
+ 9 | from market_structure.swing_models import SwingConfig
+10 |
+11 | def main():
+   |     ^^^^
+12 |     csv_path = Path("data/history/EURUSD_H1_2020.csv")
+13 |     bars = CSVDataProvider(filepath=csv_path).load()[:500]  # ilk 500 bar
+   |
+
+W292 [*] No newline at end of file
+  --> test_swing_detector.py:33:11
+   |
+32 | if __name__ == "__main__":
+33 |     main()
+   |           ^
+   |
+help: Add trailing newline
+
+Found 29 errors.
+[*] 15 fixable with the `--fix` option (1 hidden fix can be enabled with the `--unsafe-fixes` option).

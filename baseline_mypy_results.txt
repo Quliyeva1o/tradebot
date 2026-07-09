@@ -1,0 +1,7 @@
+test_swing_detector.py: error: Duplicate module named "test_swing_detector" (also at "./tests/test_swing_detector.py")
+test_swing_detector.py: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#mapping-file-paths-to-modules for more info
+test_swing_detector.py: note: Common resolutions include:
+test_swing_detector.py: note:     a) using `--exclude` to avoid checking one of them,
+test_swing_detector.py: note:     b) adding `__init__.py` somewhere,
+test_swing_detector.py: note:     c) using `--explicit-package-bases` or adjusting `MYPYPATH`
+Found 1 error in 1 file (errors prevented further checking)

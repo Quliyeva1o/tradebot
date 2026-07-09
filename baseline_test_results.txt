@@ -1,0 +1,18 @@
+........................................................................ [ 46%]
+.FF..................................................................... [ 92%]
+............                                                             [100%]
+=================================== FAILURES ===================================
+___________________ test_market_state_builder_bos_and_choch ____________________
+tests/test_market_state_builder.py:143: in test_market_state_builder_bos_and_choch
+    assert len(breaks) == 2
+E   assert 0 == 2
+E    +  where 0 = len([])
+___________________ test_market_state_builder_swing_upgrades ___________________
+tests/test_market_state_builder.py:203: in test_market_state_builder_swing_upgrades
+    assert builder.structure_engine.last_major_high == swing
+E   AssertionError: assert None == Swing(id='swing_4_high', timestamp=datetime.datetime(2026, 1, 1, 1, 0), index=4, price=1.12, type=<SwingType.HIGH: 'HI...ngth_category=<SwingStrength.STRONG: 'STRONG'>, previous_id=None, next_id=None, bar_distance=None, price_distance=None)
+E    +  where None = <market_structure.structure_engine.MarketStructureEngine object at 0x10785cc00>.last_major_high
+E    +    where <market_structure.structure_engine.MarketStructureEngine object at 0x10785cc00> = <application.services.market_state_builder.MarketStateBuilder object at 0x111783050>.structure_engine
+=========================== short test summary info ============================
+FAILED tests/test_market_state_builder.py::test_market_state_builder_bos_and_choch
+FAILED tests/test_market_state_builder.py::test_market_state_builder_swing_upgrades
