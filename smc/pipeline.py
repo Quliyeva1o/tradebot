@@ -90,7 +90,7 @@ class SMCPipeline:
             market_state.smc_state.order_blocks.extend(new_obs)
 
         # 3. Liquidity Pools Detection (refresh liquidity levels using swing graph)
-        market_state.smc_state.liquidity_levels = self.liquidity_detector.find_liquidity_pools(
+        market_state.smc_state.liquidity_levels = self.liquidity_detector.update_incremental(
             market_state.swing_graph
         )
 

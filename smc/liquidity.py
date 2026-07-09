@@ -45,6 +45,160 @@ class LiquidityDetector:
         """
         self.tolerance = tolerance
         self.min_swings = min_swings
+        # Incremental states
+        self._last_processed_swing_index = -1
+        self._last_processed_swing_id = None
+        self._swept_keys = set()
+        self._pools_cache = {}
+        self._cached_pools = []
+
+    def update_incremental(self, swing_graph: SwingGraph) -> list[LiquidityLevel]:
+        """Locates high-probability liquidity pools incrementally.
+
+        Args:
+            swing_graph: The swing graph containing detected high/low pivot nodes.
+
+        Returns:
+            A list of LiquidityLevel objects.
+        """
+        nodes = swing_graph.nodes
+        if not nodes:
+            self._last_processed_swing_index = -1
+            self._last_processed_swing_id = None
+            self._swept_keys = set()
+            self._pools_cache = {}
+            self._cached_pools = []
+            return []
+
+        # Detect reset or swing replacement
+        # If the number of nodes decreased or the last node is different
+        if (self._last_processed_swing_index >= len(nodes) or 
+            (self._last_processed_swing_index >= 0 and self._last_processed_swing_index < len(nodes) and nodes[self._last_processed_swing_index].id != self._last_processed_swing_id)):
+            self._last_processed_swing_index = -1
+            self._last_processed_swing_id = None
+            self._swept_keys = set()
+            self._pools_cache = {}
+            self._cached_pools = []
+
+        # If no new swing was added, we can just return the cached pools!
+        if len(nodes) - 1 == self._last_processed_swing_index:
+            return self._cached_pools
+
+        # A new swing was added! We need to re-cluster and update sweeps incrementally.
+        highs = [s for s in nodes if s.type == SwingType.HIGH]
+        high_clusters = self._cluster_swings(highs)
+
+        pools = []
+
+        # Process highs (BUY_SIDE)
+        for idx, cluster in enumerate(high_clusters):
+            if len(cluster) < self.min_swings:
+                continue
+
+            avg_price = sum(s.price for s in cluster) / len(cluster)
+            latest_idx = max(s.index for s in cluster)
+            source_ids = [s.id for s in cluster]
+            key = frozenset(source_ids)
+
+            if key in self._swept_keys:
+                is_swept = True
+            else:
+                # Check cache
+                if key in self._pools_cache:
+                    cached_info = self._pools_cache[key]
+                    is_swept = cached_info["is_swept"]
+                    last_checked_idx = cached_info["last_checked_idx"]
+                else:
+                    is_swept = False
+                    last_checked_idx = latest_idx
+
+                if not is_swept:
+                    # Scan new nodes since last_checked_idx
+                    for s in reversed(nodes):
+                        if s.index <= last_checked_idx:
+                            break
+                        if s.price >= avg_price:
+                            is_swept = True
+                            break
+                    last_checked_idx = nodes[-1].index
+
+                # Update cache
+                self._pools_cache[key] = {
+                    "is_swept": is_swept,
+                    "last_checked_idx": last_checked_idx
+                }
+                if is_swept:
+                    self._swept_keys.add(key)
+                    self._pools_cache.pop(key, None)
+
+            pools.append(
+                LiquidityLevel(
+                    id=f"liq_buyside_{idx}",
+                    price=avg_price,
+                    type=LiquidityType.BUY_SIDE,
+                    source_swing_ids=source_ids,
+                    is_swept=is_swept,
+                )
+            )
+
+        # Process lows (SELL_SIDE)
+        lows = [s for s in nodes if s.type == SwingType.LOW]
+        low_clusters = self._cluster_swings(lows)
+
+        for idx, cluster in enumerate(low_clusters):
+            if len(cluster) < self.min_swings:
+                continue
+
+            avg_price = sum(s.price for s in cluster) / len(cluster)
+            latest_idx = max(s.index for s in cluster)
+            source_ids = [s.id for s in cluster]
+            key = frozenset(source_ids)
+
+            if key in self._swept_keys:
+                is_swept = True
+            else:
+                # Check cache
+                if key in self._pools_cache:
+                    cached_info = self._pools_cache[key]
+                    is_swept = cached_info["is_swept"]
+                    last_checked_idx = cached_info["last_checked_idx"]
+                else:
+                    is_swept = False
+                    last_checked_idx = latest_idx
+
+                if not is_swept:
+                    # Scan new nodes since last_checked_idx
+                    for s in reversed(nodes):
+                        if s.index <= last_checked_idx:
+                            break
+                        if s.price <= avg_price:
+                            is_swept = True
+                            break
+                    last_checked_idx = nodes[-1].index
+
+                # Update cache
+                self._pools_cache[key] = {
+                    "is_swept": is_swept,
+                    "last_checked_idx": last_checked_idx
+                }
+                if is_swept:
+                    self._swept_keys.add(key)
+                    self._pools_cache.pop(key, None)
+
+            pools.append(
+                LiquidityLevel(
+                    id=f"liq_sellside_{idx}",
+                    price=avg_price,
+                    type=LiquidityType.SELL_SIDE,
+                    source_swing_ids=source_ids,
+                    is_swept=is_swept,
+                )
+            )
+
+        self._last_processed_swing_index = len(nodes) - 1
+        self._last_processed_swing_id = nodes[-1].id
+        self._cached_pools = pools
+        return pools
 
     def _cluster_swings(self, swings: list[Swing]) -> list[list[Swing]]:
         """Groups swings whose price is within tolerance."""
