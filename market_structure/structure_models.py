@@ -157,6 +157,43 @@ class SwingGraph:
         self.swings_dict[swing.id] = swing
         if swing.previous_id:
             self.edges.setdefault(swing.previous_id, []).append(swing.id)
+            prev_swing = self.swings_dict.get(swing.previous_id)
+            if prev_swing:
+                prev_swing.next_id = swing.id
+
+    def replace_last_node(self, new_swing: Swing) -> None:
+        """Replaces the last node in the graph with the new_swing, maintaining type consistency and links."""
+        if not self._nodes:
+            return
+        last_swing = self._nodes[-1]
+        if last_swing.type != new_swing.type:
+            return
+
+        # 1. Update links for the new swing based on the old last_swing's predecessor
+        new_swing.previous_id = last_swing.previous_id
+        if last_swing.previous_id:
+            prev_node = self.swings_dict.get(last_swing.previous_id)
+            if prev_node:
+                new_swing.bar_distance = new_swing.index - prev_node.index
+                new_swing.price_distance = float(new_swing.price - prev_node.price)
+                # Update predecessor's next_id
+                prev_node.next_id = new_swing.id
+        else:
+            new_swing.bar_distance = None
+            new_swing.price_distance = None
+
+        # 2. Update predecessor edges
+        if last_swing.previous_id in self.edges:
+            try:
+                self.edges[last_swing.previous_id].remove(last_swing.id)
+            except ValueError:
+                pass
+            self.edges[last_swing.previous_id].append(new_swing.id)
+
+        # 3. Update dictionary and nodes list
+        self.swings_dict.pop(last_swing.id, None)
+        self.swings_dict[new_swing.id] = new_swing
+        self._nodes[-1] = new_swing
 
     def get_swing(self, swing_id: str) -> Swing | None:
         """Finds a swing by its unique ID."""

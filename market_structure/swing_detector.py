@@ -24,6 +24,7 @@ class IncrementalSwingResult:
 
     new_swing: Swing | None = None
     upgraded_swing: Swing | None = None
+    is_replacement: bool = False
 
 
 class SwingDetector:
@@ -204,6 +205,7 @@ class SwingDetector:
         left = self.config.left_bars
         right = self.config.right_bars
         n = len(bars)
+        is_replacement = False
 
         # Upgrade Check (always checked on every closed bar)
         upgraded_swing = None
@@ -327,7 +329,7 @@ class SwingDetector:
                             else (candidate.price < last_swing.price)
                         )
                         if better:
-                            pass
+                            is_replacement = True
                         elif candidate.price == last_swing.price and (
                             (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
                             or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
@@ -358,15 +360,19 @@ class SwingDetector:
             candidate.strength = self._calculate_strength(candidate, bars)
             candidate.strength_category = self._map_strength_category(candidate.strength)
 
-            # Set Links to last swing in graph
-            nodes = graph.nodes
-            if nodes:
-                prev = nodes[-1]
-                candidate.previous_id = prev.id
-                candidate.bar_distance = candidate.index - prev.index
-                candidate.price_distance = float(candidate.price - prev.price)
+            if is_replacement:
+                # We replace the last node in the graph instead of appending
+                graph.replace_last_node(candidate)
+            else:
+                # Set Links to last swing in graph
+                nodes = graph.nodes
+                if nodes:
+                    prev = nodes[-1]
+                    candidate.previous_id = prev.id
+                    candidate.bar_distance = candidate.index - prev.index
+                    candidate.price_distance = float(candidate.price - prev.price)
 
-        return IncrementalSwingResult(new_swing=candidate, upgraded_swing=upgraded_swing)
+        return IncrementalSwingResult(new_swing=candidate, upgraded_swing=upgraded_swing, is_replacement=is_replacement)
 
     def check_upgrade(self, swing: Swing, bars: Sequence[Bar]) -> bool:
         """Determines if an existing MINOR swing is eligible for upgrade to MAJOR.
