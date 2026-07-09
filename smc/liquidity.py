@@ -55,14 +55,21 @@ class LiquidityDetector:
     def update_incremental(self, swing_graph: SwingGraph) -> list[LiquidityLevel]:
         """Locates high-probability liquidity pools incrementally.
 
+        Bug #15: the change-detection checks below only need the node count
+        and a single node lookup, both copy-free. The full `swing_graph.nodes`
+        list (an O(n) copy of the entire swing history) is only fetched once
+        we know a new swing actually needs processing -- calling this every
+        bar regardless of whether anything changed was the dominant cost in
+        a full-history backtest.
+
         Args:
             swing_graph: The swing graph containing detected high/low pivot nodes.
 
         Returns:
             A list of LiquidityLevel objects.
         """
-        nodes = swing_graph.nodes
-        if not nodes:
+        node_count = swing_graph.node_count()
+        if node_count == 0:
             self._last_processed_swing_index = -1
             self._last_processed_swing_id = None
             self._swept_keys = set()
@@ -72,8 +79,11 @@ class LiquidityDetector:
 
         # Detect reset or swing replacement
         # If the number of nodes decreased or the last node is different
-        if (self._last_processed_swing_index >= len(nodes) or 
-            (self._last_processed_swing_index >= 0 and self._last_processed_swing_index < len(nodes) and nodes[self._last_processed_swing_index].id != self._last_processed_swing_id)):
+        if (self._last_processed_swing_index >= node_count or
+            (self._last_processed_swing_index >= 0
+             and self._last_processed_swing_index < node_count
+             and swing_graph.node_at(self._last_processed_swing_index).id  # type: ignore[union-attr]
+             != self._last_processed_swing_id)):
             self._last_processed_swing_index = -1
             self._last_processed_swing_id = None
             self._swept_keys = set()
@@ -81,10 +91,11 @@ class LiquidityDetector:
             self._cached_pools = []
 
         # If no new swing was added, we can just return the cached pools!
-        if len(nodes) - 1 == self._last_processed_swing_index:
+        if node_count - 1 == self._last_processed_swing_index:
             return self._cached_pools
 
         # A new swing was added! We need to re-cluster and update sweeps incrementally.
+        nodes = swing_graph.nodes
         highs = [s for s in nodes if s.type == SwingType.HIGH]
         high_clusters = self._cluster_swings(highs)
 

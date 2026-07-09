@@ -163,6 +163,12 @@ class SwingGraph:
         """Returns the last node in the swing graph, or None if empty (copy-free)."""
         return self._nodes[-1] if self._nodes else None
 
+    def node_at(self, index: int) -> Swing | None:
+        """Returns the node at the given index, or None if out of range (copy-free)."""
+        if 0 <= index < len(self._nodes):
+            return self._nodes[index]
+        return None
+
     def add_swing(self, swing: Swing) -> None:
         """Adds a swing node to the graph."""
         self._nodes.append(swing)

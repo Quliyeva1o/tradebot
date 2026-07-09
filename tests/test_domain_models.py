@@ -83,6 +83,12 @@ def test_swing_graph_nodes_and_queries() -> None:
     assert "swing_1" in [s.id for s in eq_highs]
     assert "swing_3" in [s.id for s in eq_highs]
 
+    # node_at must match indexing into the (copying) .nodes property, copy-free
+    for i, expected in enumerate(graph.nodes):
+        assert graph.node_at(i) is expected
+    assert graph.node_at(-1) is None
+    assert graph.node_at(3) is None
+
 
 def test_market_state_root() -> None:
     """Verifies MarketState root aggregate lifecycle operations."""
