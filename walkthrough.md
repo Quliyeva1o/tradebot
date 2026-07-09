@@ -287,3 +287,56 @@ VƏ `next_timestamp`-in saatı 00:00-01:30 UTC aralığındadırsa → `"daily_s
 Differential test tələb olunur (mövcud gap sayının/reason-larının dəyişmədiyini, yalnız
 `unexplained_gap_possible_broker_interruption`-dan `daily_session_break`-ə keçən alt-çoxluğun
 düzgün seçildiyini yoxlayan).
+
+---
+
+# `research/` Modulu Auditi — Tapıntılar (kod dəyişməyib, yalnız qeyd)
+
+`research/` qovluğunun bütün modulları (walk_forward, research_optimizer, monte_carlo,
+robustness, stability, dashboard) və `tests/test_research.py` audit edildi. Look-ahead bias
+tapılmadı (walk_forward.py-də train/val bölgüsü düzgün, sıfır overlap), Monte Carlo/robustness
+simulyasiyaları həqiqidir (sabit seed yoxdur, real təsadüfi resampling). Aşağıdakı 3 tapıntı
+Bug #19/#20/#21 kimi qeydə alınıb, prioritet sırası ilə.
+
+## Bug #19 (KRİTİK — Mərhələ A-dan ƏVVƏL həll olunmalı): Grid search-də max_iter tətbiq olunmur
+
+`research/research_optimizer.py:64-66` — `max_iter` YALNIZ `method == "random"` olanda
+işləyir. Defolt `method="grid"` üçün `itertools.product(*values)` (sətir 62) bütün
+kombinasiyaları HEÇ BİR HƏDD OLMADAN işə salır. Real bir grid (5 strategiya + 7 backtest
+parametri, hərəsi 8 dəyər) `8⁵ = 32,768` tam `BacktestEngine.run()` çağırışına bərabərdir —
+xəbərdarlıq olmadan saatlarla/günlərlə işə düşə bilər.
+
+**Düzəliş istiqaməti (hələ tətbiq edilməyib):** ya defolt `method`-u `"random"` et (max_iter
+ilə məhdudlaşdırılmış), ya da `method="grid"` seçilərkən əvvəlcə kombinasiya sayını hesabla,
+konfiqurasiya edilə bilən bir həddi aşarsa `ValueError`/xəbərdarlıq at — istifadəçi bilə-bilə
+davam etməli, səssizcə saatlarla işə düşməsin.
+
+## Bug #20 (Orta prioritet): dashboard.py-in gözlədiyi "best_pnl" açarı optimizer nəticəsində yoxdur
+
+`research/dashboard.py:69` — `opt_data.get("best_pnl", 0.0)` oxuyur, amma
+`ParameterOptimizer.optimize()` (research_optimizer.py:123) YALNIZ `best_params` qaytarır —
+`"best_pnl"` açarı heç vaxt mövcud olmur. Nəticə: bu dəyər HƏMİŞƏ `0.0`-a defolt olur,
+`dashboard.py:70`-dəki `best_pnl > 0` yoxlaması heç vaxt keçmir, **"Optimization Score" daimi
+"N/A" qalır** — göndərilmiş, amma heç vaxt aktivləşməyən bir xüsusiyyət.
+
+**Düzəliş istiqaməti (hələ tətbiq edilməyib):** `ParameterOptimizer.optimize()`-in qaytardığı
+struktura `best_pnl` (və ya digər uyğun metrik) əlavə et, `dashboard.py`-in gözlədiyi API ilə
+uyğunlaşdır. Test yoxdur — bu bug mövcud test suite tərəfindən tutulmur, düzəlişlə birlikdə
+regression testi yazılmalıdır.
+
+## Bug #21 (Yüksək prioritet, praktik əhəmiyyətli): research/ modulunda StrategyDiagnostics istifadə olunmur
+
+Heç bir `research/` modulu `StrategyEngine.get_diagnostics()` (strategy_engine.py:49-65) və ya
+`StrategyDiagnostics.summary()` çağırmır. Fold/sınaq 0 trade verəndə (SMC-nin sərt şərtləri ilə
+tez-tez baş verir — bax: bu sessiyanın ADDIM 2 tapıntısı, "no_trend"/"wrong_zone" dominant rədd
+səbəbləri), rədd səbəbi görünmür — FAZA 3.5-in diaqnostika xüsusiyyəti ilə inteqrasiya
+EDİLMƏYİB, parametr axtarışı nəticələrinə etimadı azaldır.
+
+**Düzəliş istiqaməti (hələ tətbiq edilməyib):** `walk_forward.py`, `research_optimizer.py`,
+`robustness.py`-də hər fold/sınaq üçün `strategy_engine.get_diagnostics()`-i nəticə obyektinə
+əlavə et, ki 0-trade halların səbəbi görünsün.
+
+**Ümumi qeyd:** `tests/test_research.py`-in 5 testi hamısı 30-bar-lıq "flat/siqnalsız" dummy
+fixture istifadə edir, sıfır real trade yaradır — yuxarıdakı 3 bug-ın heç biri mövcud test
+suite tərəfindən tutulmur. Hər üçü tətbiq ediləndə yeni, real trade generasiya edən test
+fixture-ları tələb olunacaq.
