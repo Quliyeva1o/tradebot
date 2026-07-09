@@ -182,3 +182,84 @@ strategiyada (`continuation.py`) R:R gate-dən DƏRHAL sonra, `TradeSetup` yarad
 olunur, heç bir yan-keçid yoxdur. `test_strategy_duplicate_setup_guard` və
 `test_strategy_risk_reward_gate` (mövcud, `test_strategy_engine.py`) bunu artıq
 doğrulayır. Əlavə düzəliş tələb olunmur — audit-in "correct" qeyd etdiyi doğrudur.
+
+---
+
+# FAZA 5 — Arxitektura Təmizliyi
+
+## 1. `hasattr` sadələşdirməsi
+[MODIFY] [application/services/market_state_builder.py](file:///Users/renaquliyeva/Desktop/tradebot/application/services/market_state_builder.py)
+
+`SwingDetector.detect_incremental()`-in siqnaturu (`market_structure/swing_detector.py:195`)
+`-> IncrementalSwingResult` (heç vaxt `None`, heç vaxt xam `Swing`) elan edir və bütün
+`return` nöqtələri (3 ədəd) bunu təsdiqləyir. Deməli `append_bar()`-dəki
+`hasattr(result, 'upgraded_swing')`, `hasattr(result, 'new_swing')`,
+`elif hasattr(result, 'id')` (birbaşa Swing halı üçün) yoxlamaları ölü müdafiə kodu idi —
+`IncrementalSwingResult` dataclass-ında bu sahələr default `None`/`False` ilə həmişə
+mövcuddur. Sadələşdirildi: birbaşa `result.upgraded_swing`, `result.new_swing`,
+`result.is_replacement` istifadə olunur.
+
+## 2. Ölü memarlıq təbəqəsinin silinməsi (commit `fffc97e`)
+Grep ilə təsdiqləndi ki, aşağıdakılardan HEÇ BİRİ `run_backtest.py`/`run_research.py`
+tərəfindən istifadə olunmur, yalnız bir-birlərinə və öz testlərinə istinad edirlər:
+
+- `application/ports/*` (inbound + outbound port protocolları)
+- `application/dto/*` (yalnız ports təbəqəsi tərəfindən istifadə olunurdu)
+- `application/services/trading_coordinator.py`
+- `core/interfaces.py` (`IDataFeed`, `IExecutionProvider`, `IStrategy`)
+- `strategy/base_strategy.py` (`core/interfaces.py`-nin YEGANƏ istifadəçisi idi, özü də heç yerdə subclass edilmirdi — `TradeSetupStrategy` protokolu ilə RƏQABƏTLİ, işlədilməyən ikinci abstraksiya)
+- `tests/test_application_layer.py` (yalnız bu ölü təbəqəni test edirdi, 3 test)
+
+`application/services/__init__.py` yeniləndi (`TradingCoordinatorService` export-u silindi).
+
+**Qeyd — `core/interfaces.py` və FAZA 6:** `IExecutionProvider` FAZA 6-nın hədəfidir
+("MT5 connector-u real IExecutionProvider-ə çevir"), amma hazırda `mt5/connector.py`
+onu HEÇ İSTİFADƏ ETMİR (audit: "the current connector is a login helper, not an
+execution engine"). İstifadəçinin öz FAZA 5 planı bu faylı açıq şəkildə silinməli kimi
+adlandırdığı üçün (`"application/ports/*, core/interfaces.py, TradingCoordinator: sil"`)
+silindi — FAZA 6 başlayanda real IExecutionProvider kontraktı yenidən (və bu dəfə faktiki
+`mt5/connector.py`-ə bağlı şəkildə) yazılacaq.
+
+## 3. Root-level debug/duplicate faylların silinməsi (eyni commit)
+- `debug_market_state_builder.py`, `debug_swing_graph.py`, `manual_test.py` — `main()`-tipli
+  manual skriptlər, `data/history/*.csv`-ə istinad edir (bu repoda mövcud deyil).
+- `test_market_state.py`, `test_signal_diagnostics.py`, `test_swing_detector.py` (root) —
+  `tests/test_market_state_builder.py` və `tests/test_swing_detector.py`-nin köhnə
+  dublikatları.
+- Doğrulama: `pyproject.toml`-da `testpaths = ["tests"]` olduğu üçün bu fayllar HEÇ VAXT
+  pytest tərəfindən toplanmırdı (`--collect-only` ilə təsdiqləndi) — silinmə test sayına
+  təsir etmədi.
+
+## 4. `indicators/` paketinin silinməsi (commit `2df8e0a`)
+Tapıntı: İKİ ayrı ATR implementasiyası var idi:
+- `indicators/atr.py` — pandas-əsaslı, YALNIZ öz testi tərəfindən istifadə olunurdu.
+- `smc/displacement.py::DisplacementDetector._calculate_tr_and_atr` — pandas-sız,
+  list-əsaslı Wilder's ATR, **production-da aktiv istifadədədir** (`smc/pipeline.py`
+  vasitəsilə).
+
+`indicators/` paketinin bütün 5 modulu (atr, ema, macd, rsi, sma) grep ilə yoxlanıldı —
+heç biri strategiya/backtest/SMC kodunda import olunmurdu, yalnız öz testləri onları
+çağırırdı. İstifadəçiyə seçim təqdim olundu (saxla — gələcək kitabxana kimi, yoxsa sil).
+**İstifadəçi silməyi seçdi.**
+
+`smc/displacement.py`-dəki ATR-ə TOXUNULMADI — onu `indicators/atr.py` ilə birləşdirmək
+pandas asılılığını domain/SMC koduna gətirərdi, bu isə audit-in tərif etdiyi "domain
+purity"ni (pandas-sız core alqoritmlər) pozardı.
+
+Silinən: `indicators/{atr,ema,macd,rsi,sma,__init__}.py` (6 fayl) +
+`tests/test_{atr,ema,macd,rsi,sma}.py` (5 fayl, 23 test funksiyası).
+
+## Doğrulama (FAZA 5, bütün addımlar)
+- `hasattr` sadələşdirməsi: 202 → 202 PASS (davranış dəyişmədi).
+- Ölü memarlıq təbəqəsi + root faylların silinməsi: 202 − 3 = **199 PASS, 0 FAIL** (yalnız ölü təbəqəni test edən 3 test silindi).
+- `indicators/` silinməsi: 199 − 23 = **176 PASS, 0 FAIL** (hazırkı say).
+- `run_backtest.py`/`run_research.py`/`strategy/*`/`backtest/*`/`application/**/*`-də silinən modullara qalan istinad yoxdur (grep ilə təsdiqləndi).
+- Commit-lər: `fffc97e` (memarlıq + root təmizlik), `2df8e0a` (indicators/).
+
+## Mühit qeydi (əlavə, plandan kənar, bloklayıcı deyil)
+`run_backtest.py`-i import etmək cəhdi zamanı `mt5/history_downloader.py`-də
+`ModuleNotFoundError: No module named 'MetaTrader5'` xətası aşkarlandı. Bu, Windows-only
+MT5 SDK-sının macOS-da mövcud olmamasından qaynaqlanır (repo `c:/Users/Microsol/...`
+yollarına görə əvvəllər Windows-da inkişaf etdirilib) — mənim bu sessiyadakı dəyişikliklərimlə
+ƏLAQƏSİ YOXDUR (heç bir silinən modul bu importa təsir etmir, grep ilə təsdiqləndi). Fix
+tələb olunmur, sadəcə qeyd üçün.

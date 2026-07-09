@@ -1,6 +1,6 @@
 # Tapşırıq İzləmə — fix/critical-state-bugs
 
-## Status: FAZA 4 bitdi (Bug #11 istifadəçi qərarı ilə təxirə salındı), FAZA 5-ə keçilir
+## Status: FAZA 5 BİTDİ. FAZA 6-ya keçməzdən əvvəl istifadəçi təsdiqi tələb olunur (canlı pulla bağlı).
 
 ## Bitmiş fazalar (toxunulmayıb, commit olunub)
 - **FAZA 0 — Baseline**: 156 test (154 PASS + 2 FAIL) təsdiqləndi.
@@ -21,13 +21,16 @@
 - [ ] Bug #11: OB/FVG/break eyni displacement leg-ə aid olmalıdır. **İstifadəçi qərarı ilə TƏXİRƏ SALINDI** — real backtest datası ilə kalibrasiya edildikdən sonra ayrıca ele alınacaq. Bax `walkthrough.md`.
 - [x] Duplicate setup + R:R gate yoxlanıldı — düzgün işləyir, dəyişiklik tələb olunmadı.
 
-### FAZA 5 — Arxitektura Təmizliyi
-- [ ] `application/ports/*`, `core/interfaces.py`, `TradingCoordinator` sil (əvvəlcə grep ilə istifadə yoxlanılacaq)
-- [ ] `risk/position_size.py`, `risk/risk_reward.py` sil (NotImplementedError atır)
-- [ ] Root-level debug faylları və duplikat testlər sil/köçür
-- [ ] `hasattr(result, 'upgraded_swing')` sadələşdirməsi
-- [ ] İki ATR implementasiyası / orphan `indicators/` paketi qərarı
+### FAZA 5 — Arxitektura Təmizliyi (BİTDİ)
+- [x] `hasattr(result, 'upgraded_swing')` sadələşdirməsi — `IncrementalSwingResult` həmişə qaytarılır, müdafiə kodu ölü idi.
+- [x] `application/ports/*`, `application/dto/*`, `TradingCoordinator`, `core/interfaces.py`, `strategy/base_strategy.py` sil — grep ilə istifadəsizlik təsdiqləndi. Commit `fffc97e`.
+- [x] `risk/position_size.py`, `risk/risk_reward.py` sil (NotImplementedError atır, heç yerdə import olunmur). Eyni commit.
+- [x] Root-level debug faylları və duplikat testlər sil (`pyproject.toml`-da `testpaths=["tests"]` olduğu üçün test sayına təsir etmədi). Eyni commit.
+- [x] `indicators/` paketi (atr/ema/macd/rsi/sma, orphan) — istifadəçi qərarı ilə SİLİNDİ. `smc/displacement.py`-dəki ayrıca, production-da işlədilən ATR-ə toxunulmadı (pandas asılılığı gətirməmək üçün). Commit `2df8e0a`.
+- Test sayı: 202 → 199 (ölü təbəqə testləri) → **176 PASS, 0 FAIL** (indicators/ testləri) — hazırkı say.
 
-### FAZA 6 — Canlı Ticarətə Hazırlıq (aşağı prioritet, bu sessiyada məcburi deyil, əvvəlcədən xəbərdarlıq tələb edir)
-- [ ] MT5 connector → real `IExecutionProvider`
+**Mühit qeydi (bloklayıcı deyil)**: `run_backtest.py` import edərkən `ModuleNotFoundError: No module named 'MetaTrader5'` aşkarlandı (Windows-only SDK, macOS-da mövcud deyil). Bizim dəyişikliklərimizlə əlaqəsi yoxdur (grep ilə təsdiqləndi). Bax `walkthrough.md`.
+
+### FAZA 6 — Canlı Ticarətə Hazırlıq (⚠️ CANLI PULLA BAĞLI — başlamazdan əvvəl istifadəçi təsdiqi tələb olunur)
+- [ ] MT5 connector → real `IExecutionProvider` (bu interfeys FAZA 5-də silindi, FAZA 6-da yenidən — bu dəfə faktiki `mt5/connector.py`-ə bağlı şəkildə — yazılacaq)
 - [ ] Margin/leverage-aware position sizing
