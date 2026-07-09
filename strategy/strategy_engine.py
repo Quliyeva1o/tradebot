@@ -46,3 +46,21 @@ class StrategyEngine:
             if hasattr(strategy, "reset"):
                 strategy.reset()
 
+    def get_diagnostics(self) -> dict[str, dict]:
+        """Aggregates rejection diagnostics from all registered strategies.
+
+        Strategies without a `diagnostics` attribute are silently skipped, so
+        this stays optional/duck-typed rather than part of the strategy
+        Protocol.
+
+        Returns:
+            Mapping of "{registration index}_{class name}" to that
+            strategy's diagnostics summary (see StrategyDiagnostics.summary).
+        """
+        result: dict[str, dict] = {}
+        for idx, strategy in enumerate(self.strategies):
+            diagnostics = getattr(strategy, "diagnostics", None)
+            if diagnostics is not None:
+                result[f"{idx}_{strategy.__class__.__name__}"] = diagnostics.summary()
+        return result
+

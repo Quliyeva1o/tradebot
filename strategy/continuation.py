@@ -11,6 +11,7 @@ from smc.fvg import FVGDirection
 from smc.liquidity import LiquidityType
 from smc.order_block import OBDirection
 from smc.premium_discount import ZoneType
+from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
 
@@ -65,11 +66,17 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             self.stop_buffer_pips = stop_buffer_pips
             self.min_risk_reward_ratio = min_risk_reward_ratio
         self._proposed_keys: set[tuple] = set()
+        self.diagnostics = StrategyDiagnostics()
 
     def reset(self) -> None:
-        """Resets the duplicate guard key memory."""
+        """Resets the duplicate guard key memory and diagnostics counters."""
         self._proposed_keys.clear()
+        self.diagnostics.reset()
 
+    def _reject(self, reason: RejectionReason) -> None:
+        """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""
+        self.diagnostics.record_rejection(reason)
+        return None
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
         """Evaluates rules for bullish continuation.
@@ -83,30 +90,32 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         6. Sell-side liquidity already swept
         7. Recent bullish displacement exists
         """
+        self.diagnostics.record_evaluation()
+
         # --- Rule 1: Trend Check ---
         if market_state.structure_state.trend != StructureTrend.BULLISH:
-            return None
+            return self._reject(RejectionReason.NO_TREND)
 
         # --- Rule 8: Premium / Discount Zone Check ---
         if market_state.premium_discount_zone is None:
-            return None
+            return self._reject(RejectionReason.NO_PREMIUM_DISCOUNT_ZONE)
         if market_state.premium_discount_zone.zone != ZoneType.DISCOUNT:
-            return None
+            return self._reject(RejectionReason.WRONG_ZONE)
 
         # --- Rule 2 & 3: Break Check ---
         breaks = market_state.structure_state.breaks_history
         if not breaks:
-            return None
+            return self._reject(RejectionReason.NO_BREAK_HISTORY)
         last_break = breaks[-1]
         if last_break.break_type != BreakType.BOS:
-            return None
+            return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
         if last_break.broken_swing.type != SwingType.HIGH:
-            return None
+            return self._reject(RejectionReason.BREAK_WRONG_SWING_TYPE)
 
         # Get latest closed bar
         latest_bar = market_state.get_latest_bar()
         if latest_bar is None:
-            return None
+            return self._reject(RejectionReason.NO_LATEST_BAR)
 
         # --- Rule 4: Order Block Check ---
         matching_ob = None
@@ -116,7 +125,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
                     matching_ob = ob
                     break
         if matching_ob is None:
-            return None
+            return self._reject(RejectionReason.NO_MATCHING_ORDER_BLOCK)
 
         # --- Rule 5: FVG Check ---
         matching_fvg = None
@@ -135,7 +144,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
                     matching_fvg = fvg
                     break
         if matching_fvg is None:
-            return None
+            return self._reject(RejectionReason.NO_MATCHING_FVG)
 
         # --- Rule 6: Liquidity Sweep Check ---
         sellside_swept = any(
@@ -143,7 +152,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             for lvl in market_state.smc_state.liquidity_levels
         )
         if not sellside_swept:
-            return None
+            return self._reject(RejectionReason.LIQUIDITY_NOT_SWEPT)
 
         # --- Rule 7: Displacement Check ---
         latest_idx = len(market_state.bars) - 1
@@ -152,7 +161,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             for d in market_state.smc_state.displacements
         )
         if not displacement_confirmed:
-            return None
+            return self._reject(RejectionReason.NO_DISPLACEMENT)
 
         # --- Calculate Zones ---
         entry_zone = (round(matching_ob.low, 5), round(matching_ob.high, 5))
@@ -175,15 +184,15 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         reward_dist = target_val - entry_val
 
         if risk_dist <= 0.0:
-            return None
+            return self._reject(RejectionReason.NON_POSITIVE_RISK)
 
         if reward_dist / risk_dist < self.min_risk_reward_ratio:
-            return None
+            return self._reject(RejectionReason.RR_GATE_FAILED)
 
         # Duplicate setup check
         proposed_key = (matching_ob.id, last_break.break_id)
         if proposed_key in self._proposed_keys:
-            return None
+            return self._reject(RejectionReason.DUPLICATE_SETUP)
         self._proposed_keys.add(proposed_key)
 
         # Generate Setup ID
@@ -193,6 +202,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         unique_id = uuid.uuid4().hex[:8]
         setup_id = f"setup_bullish_continuation_{market_state.symbol}_{market_state.timeframe.value}_{unique_id}_{ts_str}"
 
+        self.diagnostics.record_setup_generated()
         return TradeSetup(
             setup_id=setup_id,
             symbol=market_state.symbol,
@@ -265,11 +275,17 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             self.stop_buffer_pips = stop_buffer_pips
             self.min_risk_reward_ratio = min_risk_reward_ratio
         self._proposed_keys: set[tuple] = set()
+        self.diagnostics = StrategyDiagnostics()
 
     def reset(self) -> None:
-        """Resets the duplicate guard key memory."""
+        """Resets the duplicate guard key memory and diagnostics counters."""
         self._proposed_keys.clear()
+        self.diagnostics.reset()
 
+    def _reject(self, reason: RejectionReason) -> None:
+        """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""
+        self.diagnostics.record_rejection(reason)
+        return None
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
         """Evaluates rules for bearish continuation.
@@ -283,30 +299,32 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         6. Buy-side liquidity already swept
         7. Recent bearish displacement exists
         """
+        self.diagnostics.record_evaluation()
+
         # --- Rule 1: Trend Check ---
         if market_state.structure_state.trend != StructureTrend.BEARISH:
-            return None
+            return self._reject(RejectionReason.NO_TREND)
 
         # --- Rule 8: Premium / Discount Zone Check ---
         if market_state.premium_discount_zone is None:
-            return None
+            return self._reject(RejectionReason.NO_PREMIUM_DISCOUNT_ZONE)
         if market_state.premium_discount_zone.zone != ZoneType.PREMIUM:
-            return None
+            return self._reject(RejectionReason.WRONG_ZONE)
 
         # --- Rule 2 & 3: Break Check ---
         breaks = market_state.structure_state.breaks_history
         if not breaks:
-            return None
+            return self._reject(RejectionReason.NO_BREAK_HISTORY)
         last_break = breaks[-1]
         if last_break.break_type != BreakType.BOS:
-            return None
+            return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
         if last_break.broken_swing.type != SwingType.LOW:
-            return None
+            return self._reject(RejectionReason.BREAK_WRONG_SWING_TYPE)
 
         # Get latest closed bar
         latest_bar = market_state.get_latest_bar()
         if latest_bar is None:
-            return None
+            return self._reject(RejectionReason.NO_LATEST_BAR)
 
         # --- Rule 4: Order Block Check ---
         matching_ob = None
@@ -316,7 +334,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
                     matching_ob = ob
                     break
         if matching_ob is None:
-            return None
+            return self._reject(RejectionReason.NO_MATCHING_ORDER_BLOCK)
 
         # --- Rule 5: FVG Check ---
         matching_fvg = None
@@ -335,7 +353,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
                     matching_fvg = fvg
                     break
         if matching_fvg is None:
-            return None
+            return self._reject(RejectionReason.NO_MATCHING_FVG)
 
         # --- Rule 6: Liquidity Sweep Check ---
         buyside_swept = any(
@@ -343,7 +361,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             for lvl in market_state.smc_state.liquidity_levels
         )
         if not buyside_swept:
-            return None
+            return self._reject(RejectionReason.LIQUIDITY_NOT_SWEPT)
 
         # --- Rule 7: Displacement Check ---
         latest_idx = len(market_state.bars) - 1
@@ -352,7 +370,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             for d in market_state.smc_state.displacements
         )
         if not displacement_confirmed:
-            return None
+            return self._reject(RejectionReason.NO_DISPLACEMENT)
 
         # --- Calculate Zones ---
         entry_zone = (round(matching_ob.low, 5), round(matching_ob.high, 5))
@@ -375,15 +393,15 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         reward_dist = entry_val - target_val
 
         if risk_dist <= 0.0:
-            return None
+            return self._reject(RejectionReason.NON_POSITIVE_RISK)
 
         if reward_dist / risk_dist < self.min_risk_reward_ratio:
-            return None
+            return self._reject(RejectionReason.RR_GATE_FAILED)
 
         # Duplicate setup check
         proposed_key = (matching_ob.id, last_break.break_id)
         if proposed_key in self._proposed_keys:
-            return None
+            return self._reject(RejectionReason.DUPLICATE_SETUP)
         self._proposed_keys.add(proposed_key)
 
         # Generate Setup ID
@@ -393,6 +411,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         unique_id = uuid.uuid4().hex[:8]
         setup_id = f"setup_bearish_continuation_{market_state.symbol}_{market_state.timeframe.value}_{unique_id}_{ts_str}"
 
+        self.diagnostics.record_setup_generated()
         return TradeSetup(
             setup_id=setup_id,
             symbol=market_state.symbol,

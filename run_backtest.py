@@ -167,6 +167,11 @@ def execute_backtest(
     result = engine.run(candles, strategy_engine, state_builder)
     elapsed_time = time.perf_counter() - start_time
 
+    # 5b. Strategy rejection diagnostics (FAZA 3.5)
+    diagnostics = strategy_engine.get_diagnostics()
+    if diagnostics:
+        logger.info("Strategy rejection diagnostics: %s", json.dumps(diagnostics, indent=2))
+
     # 6. Report generation
     report_gen = BacktestReportGenerator()
     metrics = report_gen.generate(result)
