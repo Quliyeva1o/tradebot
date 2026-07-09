@@ -7,13 +7,64 @@ from datetime import datetime
 from core.models import SignalDirection
 from market_structure.structure_models import BreakType, MarketState, StructureTrend
 from market_structure.swing_models import SwingType
-from smc.fvg import FVGDirection
+from smc.fvg import FairValueGap, FVGDirection
 from smc.liquidity import LiquidityType
-from smc.order_block import OBDirection
+from smc.order_block import OBDirection, OrderBlock
 from smc.premium_discount import ZoneType
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+
+
+def _select_best_order_block(
+    order_blocks: list[OrderBlock], direction: OBDirection, price: float
+) -> OrderBlock | None:
+    """Selects the unmitigated OB of the given direction whose zone contains price.
+
+    Ties (multiple overlapping zones both containing price) are broken by
+    recency (highest bar_index), instead of the previous first-in-list-wins
+    behavior (Bug #10).
+    """
+    candidates = [
+        ob
+        for ob in order_blocks
+        if ob.direction == direction and not ob.is_mitigated and ob.low <= price <= ob.high
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda ob: ob.bar_index)
+
+
+def _fvg_distance(fvg: FairValueGap, price: float) -> float:
+    """Distance from price to the FVG zone; 0.0 if price is inside it."""
+    if fvg.lower_price <= price <= fvg.upper_price:
+        return 0.0
+    return min(abs(price - fvg.lower_price), abs(price - fvg.upper_price))
+
+
+def _select_best_fvg(
+    fair_value_gaps: list[FairValueGap],
+    direction: FVGDirection,
+    price: float,
+    proximity_threshold: float,
+) -> FairValueGap | None:
+    """Selects the unmitigated FVG of the given direction nearest to price.
+
+    Considers every eligible FVG within proximity_threshold instead of
+    stopping at the first list match, ranking by distance to price (0 if
+    price is inside) and breaking ties by recency (highest end_index),
+    instead of the previous first-in-list-wins behavior (Bug #10).
+    """
+    candidates = [
+        fvg
+        for fvg in fair_value_gaps
+        if fvg.direction == direction
+        and not fvg.is_mitigated
+        and _fvg_distance(fvg, price) <= proximity_threshold
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda fvg: (_fvg_distance(fvg, price), -fvg.end_index))
 
 
 @dataclass(frozen=True)
@@ -131,32 +182,21 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             if swing_age > self.max_break_age_bars:
                 return self._reject(RejectionReason.STALE_BREAK)
 
-        # --- Rule 4: Order Block Check ---
-        matching_ob = None
-        for ob in market_state.smc_state.order_blocks:
-            if ob.direction == OBDirection.BULLISH and not ob.is_mitigated:
-                if ob.low <= latest_bar.close <= ob.high:
-                    matching_ob = ob
-                    break
+        # --- Rule 4: Order Block Check (nearest/most-recent, Bug #10) ---
+        matching_ob = _select_best_order_block(
+            market_state.smc_state.order_blocks, OBDirection.BULLISH, latest_bar.close
+        )
         if matching_ob is None:
             return self._reject(RejectionReason.NO_MATCHING_ORDER_BLOCK)
 
-        # --- Rule 5: FVG Check ---
-        matching_fvg = None
+        # --- Rule 5: FVG Check (nearest/most-recent, Bug #10) ---
         proximity_threshold = self.fvg_proximity_pips * self.pip_size
-        for fvg in market_state.smc_state.fair_value_gaps:
-            if fvg.direction == FVGDirection.BULLISH and not fvg.is_mitigated:
-                # Calculate distance to FVG boundaries
-                if fvg.lower_price <= latest_bar.close <= fvg.upper_price:
-                    matching_fvg = fvg
-                    break
-                dist = min(
-                    abs(latest_bar.close - fvg.lower_price),
-                    abs(latest_bar.close - fvg.upper_price),
-                )
-                if dist <= proximity_threshold:
-                    matching_fvg = fvg
-                    break
+        matching_fvg = _select_best_fvg(
+            market_state.smc_state.fair_value_gaps,
+            FVGDirection.BULLISH,
+            latest_bar.close,
+            proximity_threshold,
+        )
         if matching_fvg is None:
             return self._reject(RejectionReason.NO_MATCHING_FVG)
 
@@ -352,32 +392,21 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             if swing_age > self.max_break_age_bars:
                 return self._reject(RejectionReason.STALE_BREAK)
 
-        # --- Rule 4: Order Block Check ---
-        matching_ob = None
-        for ob in market_state.smc_state.order_blocks:
-            if ob.direction == OBDirection.BEARISH and not ob.is_mitigated:
-                if ob.low <= latest_bar.close <= ob.high:
-                    matching_ob = ob
-                    break
+        # --- Rule 4: Order Block Check (nearest/most-recent, Bug #10) ---
+        matching_ob = _select_best_order_block(
+            market_state.smc_state.order_blocks, OBDirection.BEARISH, latest_bar.close
+        )
         if matching_ob is None:
             return self._reject(RejectionReason.NO_MATCHING_ORDER_BLOCK)
 
-        # --- Rule 5: FVG Check ---
-        matching_fvg = None
+        # --- Rule 5: FVG Check (nearest/most-recent, Bug #10) ---
         proximity_threshold = self.fvg_proximity_pips * self.pip_size
-        for fvg in market_state.smc_state.fair_value_gaps:
-            if fvg.direction == FVGDirection.BEARISH and not fvg.is_mitigated:
-                # Calculate distance to FVG boundaries
-                if fvg.lower_price <= latest_bar.close <= fvg.upper_price:
-                    matching_fvg = fvg
-                    break
-                dist = min(
-                    abs(latest_bar.close - fvg.lower_price),
-                    abs(latest_bar.close - fvg.upper_price),
-                )
-                if dist <= proximity_threshold:
-                    matching_fvg = fvg
-                    break
+        matching_fvg = _select_best_fvg(
+            market_state.smc_state.fair_value_gaps,
+            FVGDirection.BEARISH,
+            latest_bar.close,
+            proximity_threshold,
+        )
         if matching_fvg is None:
             return self._reject(RejectionReason.NO_MATCHING_FVG)
 
