@@ -381,3 +381,54 @@ strukturuna toxunma tələb edə bilər, riskli bir dəyişiklikdir.
 **Gələcək iş:** ayrıca sessiyada, Bug #22-nin düzəlişindən sonra yenidən ölçülməli (Bug #22
 öz-özlüyündə bir çox bar-ı bu mərhələyə belə çatdırmayacaq ola bilər, ona görə real təsirini
 görmək üçün əvvəlcə Bug #22-nin nəticələrini müşahidə etmək lazımdır).
+
+**Doğrulama (Bug #22 tətbiqindən sonra, EURUSD tam tarixi, 99,950 bar):** `setups_generated`
+0-dan **21 (Bullish) + 27 (Bearish) = 48 trade / 4 il**-ə qalxdı. `no_displacement`,
+`duplicate_setup`, `rr_gate_failed` rədd səbəbləri İLK DƏFƏ görünür (əvvəllər 0 idi) — bar-ların
+artıq bütün pipeline-ı (OB→FVG→likvidlik→displacement→R:R→duplikat) keçdiyini sübut edir.
+AMMA `no_trend`/`wrong_zone`/`last_break_not_bos`/`break_wrong_swing_type` demək olar
+dəyişməyib — **Bug #23 hələ də dominant maneədir**, Bug #22-dən qat-qat böyük təsirə malikdir.
+
+---
+
+# Strategiya Çərçivəsi Roadmap-ı (Mərhələ A/B/C/D)
+
+Bu bölmə istifadəçi ilə əvvəlki müzakirədən qeydə alınır ki, gələcək sessiyalarda kontekst
+itməsin. Bu, FAZA 0-5-dən (arxitektura təmizliyi) VƏ FAZA 6-dan (real icra, `IExecutionProvider`)
+AYRI, paralel bir roadmap-dır.
+
+## Mərhələ A — Strategiya Çərçivəsi
+
+Hazırkı tək-strategiya strukturunu (`BullishContinuationStrategy`/`BearishContinuationStrategy`)
+**çoxlu strategiyanı** dəstəkləyən bir sistemə çevirmək:
+- Ortaq `BaseStrategy` interfeysi
+- Strategiya reyestri (registry)
+- Config-əsaslı aktivləşdirmə (hansı strategiyaların işə düşəcəyi konfiqurasiya ilə idarə olunur)
+- Mövcud `backtest/`, `risk/`, diaqnostika (`StrategyDiagnostics`) HƏR strategiya üçün
+  AVTOMATİK işləməlidir (hər yeni strategiya üçün ayrıca inteqrasiya kodu yazılmamalıdır)
+
+## Mərhələ B — Siqnal Mühərriki
+
+Aktiv strategiyaları real-vaxt/son bar üzərində işlədib **"BUY/SELL + entry/SL/TP + səbəb"**
+formatında siqnal verən YENİ komponent. **REAL ORDER GÖNDƏRMİR** — yalnız siqnal göstərir.
+FAZA 6-dan (real icra) AYRIDIR, ondan ƏVVƏL gəlir.
+
+## Mərhələ C — İstifadəçinin 2 Hazır Strategiyası
+
+TradingView Pine Script-dən Python-a portlanacaq iki konkret strategiya:
+- "5 Candle Accumulation Breakout Retest"
+- "NASDAQ Midline Sweep"
+
+Hər ikisi Mərhələ A-nın `BaseStrategy` interfeysinə uyğun tətbiq olunmalıdır.
+
+## Mərhələ D — Avtomatik Pattern Kəşfi
+
+Sistemin köhnə datanı təhlil edib, təkrarlanan pattern-ləri ÖZÜ tapıb strategiya kimi qeydə
+alması. **MƏCBURİ qoruma qatı:** statistik əhəmiyyətlilik + out-of-sample doğrulama +
+çoxlu-müqayisə düzəlişi (multiple-comparison correction, overfitting-ə qarşı).
+
+**ŞƏRT:** Mərhələ D **YALNIZ** `research/` modulunun auditində tapılan Bug #19/#20/#21 TAM
+həll olunduqdan SONRA başlana bilər (Bug #19-un kontrolsuz grid search-i və Bug #21-in
+diaqnostika görünməzliyi, pattern-kəşfi kimi avtomatlaşdırılmış, nəzarətsiz axtarışda XÜSUSİLƏ
+təhlükəlidir — səssizcə saatlarla işləyən VƏ nəyin niyə rədd edildiyini göstərməyən bir sistem
+overfitting-i gizlədə bilər).
