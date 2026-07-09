@@ -52,20 +52,12 @@ class MarketStateBuilder:
             self._market_state.bars, self._market_state.swing_graph
         )
 
-        # Correct extraction of new_swing
-        new_swing = None
-        is_replacement = False
-        if result is not None:
-            # Handle MINOR -> MAJOR swing upgrades first (Bug #1)
-            if hasattr(result, 'upgraded_swing') and result.upgraded_swing is not None:
-                self.structure_engine.handle_upgrade(result.upgraded_swing)
+        # Handle MINOR -> MAJOR swing upgrades first (Bug #1)
+        if result.upgraded_swing is not None:
+            self.structure_engine.handle_upgrade(result.upgraded_swing)
 
-            if hasattr(result, 'new_swing') and result.new_swing is not None:
-                new_swing = result.new_swing
-                if getattr(result, 'is_replacement', False):
-                    is_replacement = True
-            elif hasattr(result, 'id'):  # direct Swing
-                new_swing = result
+        new_swing = result.new_swing
+        is_replacement = result.is_replacement
 
         if new_swing:
             if is_replacement:
