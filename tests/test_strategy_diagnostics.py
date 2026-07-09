@@ -16,7 +16,11 @@ from smc.fvg import FairValueGap, FVGDirection
 from smc.liquidity import LiquidityLevel, LiquidityType
 from smc.order_block import OBDirection, OrderBlock
 from smc.premium_discount import PremiumDiscountZone, ZoneType
-from strategy.continuation import BearishContinuationStrategy, BullishContinuationStrategy
+from strategy.continuation import (
+    BearishContinuationStrategy,
+    BullishContinuationStrategy,
+    StrategyConfig,
+)
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.strategy_engine import StrategyEngine
 from tests.test_strategy_engine import (
@@ -230,6 +234,44 @@ class TestBullishContinuationDiagnostics:
         assert strategy.evaluate(state) is None
         assert strategy.diagnostics.rejections[RejectionReason.RR_GATE_FAILED] == 1
 
+    def test_default_max_break_age_bars_disables_stale_break_gating(self) -> None:
+        # create_valid_bullish_market_state(): broken_swing.index=10, 30 bars ->
+        # swing_age = 29 - 10 = 19. Default (None) must never reject on this.
+        state = create_valid_bullish_market_state()
+        strategy = BullishContinuationStrategy()
+        assert strategy.max_break_age_bars is None
+        assert strategy.evaluate(state) is not None
+        assert strategy.diagnostics.rejections == {}
+
+    def test_stale_break_rejection(self) -> None:
+        # swing_age = 19 > 10 -> rejected.
+        state = create_valid_bullish_market_state()
+        strategy = BullishContinuationStrategy(max_break_age_bars=10)
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.STALE_BREAK] == 1
+
+    def test_break_age_exactly_at_limit_is_allowed(self) -> None:
+        # swing_age = 19, limit = 19 -> not > limit, so it passes through.
+        state = create_valid_bullish_market_state()
+        strategy = BullishContinuationStrategy(max_break_age_bars=19)
+        setup = strategy.evaluate(state)
+        assert setup is not None
+        assert strategy.diagnostics.rejections == {}
+
+    def test_break_age_one_over_limit_is_rejected(self) -> None:
+        # swing_age = 19, limit = 18 -> 19 > 18, rejected.
+        state = create_valid_bullish_market_state()
+        strategy = BullishContinuationStrategy(max_break_age_bars=18)
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.STALE_BREAK] == 1
+
+    def test_stale_break_gating_via_strategy_config_overlay(self) -> None:
+        state = create_valid_bullish_market_state()
+        strategy = BullishContinuationStrategy(config=StrategyConfig(max_break_age_bars=10))
+        assert strategy.max_break_age_bars == 10
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.STALE_BREAK] == 1
+
     def test_duplicate_setup_rejection(self) -> None:
         state = create_valid_bullish_market_state()
         strategy = BullishContinuationStrategy()
@@ -303,6 +345,20 @@ class TestBearishContinuationDiagnostics:
         strategy = BearishContinuationStrategy()
         assert strategy.evaluate(state) is None
         assert strategy.diagnostics.rejections[RejectionReason.BREAK_WRONG_SWING_TYPE] == 1
+
+    def test_stale_break_rejection(self) -> None:
+        # create_valid_bearish_market_state(): broken_swing.index=10, 30 bars ->
+        # swing_age = 29 - 10 = 19 > 10 -> rejected.
+        state = create_valid_bearish_market_state()
+        strategy = BearishContinuationStrategy(max_break_age_bars=10)
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.STALE_BREAK] == 1
+
+    def test_break_age_exactly_at_limit_is_allowed(self) -> None:
+        state = create_valid_bearish_market_state()
+        strategy = BearishContinuationStrategy(max_break_age_bars=19)
+        assert strategy.evaluate(state) is not None
+        assert strategy.diagnostics.rejections == {}
 
 
 class TestStrategyEngineDiagnosticsAggregation:

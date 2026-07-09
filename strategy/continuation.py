@@ -25,6 +25,7 @@ class StrategyConfig:
     fvg_proximity_pips: float = 50.0
     stop_buffer_pips: float = 5.0
     min_risk_reward_ratio: float = 1.0
+    max_break_age_bars: int | None = None
 
 
 class BullishContinuationStrategy(TradeSetupStrategy):
@@ -41,6 +42,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         fvg_proximity_pips: float = 50.0,
         stop_buffer_pips: float = 5.0,
         min_risk_reward_ratio: float = 1.0,
+        max_break_age_bars: int | None = None,
         config: StrategyConfig | None = None,
     ) -> None:
         """Initializes the BullishContinuationStrategy with parameters or config.
@@ -51,6 +53,9 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             fvg_proximity_pips: Maximum proximity limit to FVG in pips.
             stop_buffer_pips: Stop loss buffer limit in pips.
             min_risk_reward_ratio: Minimum risk-to-reward ratio.
+            max_break_age_bars: Maximum age (in bars, measured from the broken
+                swing's index) a structure break may have and still be used
+                for a setup. None disables the check (old behavior).
             config: StrategyConfig options overlay.
         """
         if config is not None:
@@ -59,12 +64,14 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             self.fvg_proximity_pips = config.fvg_proximity_pips
             self.stop_buffer_pips = config.stop_buffer_pips
             self.min_risk_reward_ratio = config.min_risk_reward_ratio
+            self.max_break_age_bars = config.max_break_age_bars
         else:
             self.pip_size = pip_size
             self.lookback_bars = lookback_bars
             self.fvg_proximity_pips = fvg_proximity_pips
             self.stop_buffer_pips = stop_buffer_pips
             self.min_risk_reward_ratio = min_risk_reward_ratio
+            self.max_break_age_bars = max_break_age_bars
         self._proposed_keys: set[tuple] = set()
         self.diagnostics = StrategyDiagnostics()
 
@@ -116,6 +123,13 @@ class BullishContinuationStrategy(TradeSetupStrategy):
         latest_bar = market_state.get_latest_bar()
         if latest_bar is None:
             return self._reject(RejectionReason.NO_LATEST_BAR)
+        latest_idx = market_state.bar_count() - 1
+
+        # --- Rule 9: Break Recency Check ---
+        if self.max_break_age_bars is not None:
+            swing_age = latest_idx - last_break.broken_swing.index
+            if swing_age > self.max_break_age_bars:
+                return self._reject(RejectionReason.STALE_BREAK)
 
         # --- Rule 4: Order Block Check ---
         matching_ob = None
@@ -155,7 +169,6 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.LIQUIDITY_NOT_SWEPT)
 
         # --- Rule 7: Displacement Check ---
-        latest_idx = len(market_state.bars) - 1
         displacement_confirmed = any(
             d.direction == "BULLISH" and (latest_idx - d.bar_index) <= self.lookback_bars
             for d in market_state.smc_state.displacements
@@ -250,6 +263,7 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         fvg_proximity_pips: float = 50.0,
         stop_buffer_pips: float = 5.0,
         min_risk_reward_ratio: float = 1.0,
+        max_break_age_bars: int | None = None,
         config: StrategyConfig | None = None,
     ) -> None:
         """Initializes the BearishContinuationStrategy with parameters or config.
@@ -260,6 +274,9 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             fvg_proximity_pips: Maximum proximity limit to FVG in pips.
             stop_buffer_pips: Stop loss buffer limit in pips.
             min_risk_reward_ratio: Minimum risk-to-reward ratio.
+            max_break_age_bars: Maximum age (in bars, measured from the broken
+                swing's index) a structure break may have and still be used
+                for a setup. None disables the check (old behavior).
             config: StrategyConfig options overlay.
         """
         if config is not None:
@@ -268,12 +285,14 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             self.fvg_proximity_pips = config.fvg_proximity_pips
             self.stop_buffer_pips = config.stop_buffer_pips
             self.min_risk_reward_ratio = config.min_risk_reward_ratio
+            self.max_break_age_bars = config.max_break_age_bars
         else:
             self.pip_size = pip_size
             self.lookback_bars = lookback_bars
             self.fvg_proximity_pips = fvg_proximity_pips
             self.stop_buffer_pips = stop_buffer_pips
             self.min_risk_reward_ratio = min_risk_reward_ratio
+            self.max_break_age_bars = max_break_age_bars
         self._proposed_keys: set[tuple] = set()
         self.diagnostics = StrategyDiagnostics()
 
@@ -325,6 +344,13 @@ class BearishContinuationStrategy(TradeSetupStrategy):
         latest_bar = market_state.get_latest_bar()
         if latest_bar is None:
             return self._reject(RejectionReason.NO_LATEST_BAR)
+        latest_idx = market_state.bar_count() - 1
+
+        # --- Rule 9: Break Recency Check ---
+        if self.max_break_age_bars is not None:
+            swing_age = latest_idx - last_break.broken_swing.index
+            if swing_age > self.max_break_age_bars:
+                return self._reject(RejectionReason.STALE_BREAK)
 
         # --- Rule 4: Order Block Check ---
         matching_ob = None
@@ -364,7 +390,6 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.LIQUIDITY_NOT_SWEPT)
 
         # --- Rule 7: Displacement Check ---
-        latest_idx = len(market_state.bars) - 1
         displacement_confirmed = any(
             d.direction == "BEARISH" and (latest_idx - d.bar_index) <= self.lookback_bars
             for d in market_state.smc_state.displacements

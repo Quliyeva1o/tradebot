@@ -21,6 +21,7 @@ class RejectionReason(str, Enum):
     LAST_BREAK_NOT_BOS = "last_break_not_bos"
     BREAK_WRONG_SWING_TYPE = "break_wrong_swing_type"
     NO_LATEST_BAR = "no_latest_bar"
+    STALE_BREAK = "stale_break"
     NO_MATCHING_ORDER_BLOCK = "no_matching_order_block"
     NO_MATCHING_FVG = "no_matching_fvg"
     LIQUIDITY_NOT_SWEPT = "liquidity_not_swept"

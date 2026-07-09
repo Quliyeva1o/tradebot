@@ -91,6 +91,7 @@ def test_market_state_root() -> None:
     assert state.symbol == "GBPUSD"
     assert state.timeframe == Timeframe.M15
     assert len(state.bars) == 0
+    assert state.bar_count() == 0
     assert state.get_latest_bar() is None
 
     # Given
@@ -103,6 +104,8 @@ def test_market_state_root() -> None:
 
     # Then
     assert len(state.bars) == 2
+    assert state.bar_count() == 2
+    assert state.bar_count() == len(state.bars)
     assert state.get_latest_bar() == bar2
 
 

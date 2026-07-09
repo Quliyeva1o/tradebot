@@ -331,6 +331,10 @@ class MarketState:
         """Exposes a read-only copy of the price bars."""
         return list(self._bars)
 
+    def bar_count(self) -> int:
+        """Returns the number of bars without copying the underlying list."""
+        return len(self._bars)
+
     def append_bar(self, bar: Bar) -> None:
         """Appends a new bar to the timeframe timeline."""
         self._bars.append(bar)
