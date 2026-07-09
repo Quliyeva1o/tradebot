@@ -66,12 +66,12 @@ def check_and_get_data(config: dict[str, Any]) -> list[Bar]:
     if isinstance(end_dt, str):
         end_dt = datetime.strptime(end_dt, "%Y-%m-%d %H:%M:%S")
 
-    # Target path format: data/history/{symbol}_{timeframe}_{year}.csv
-    export_dir = Path("c:/Users/Microsol/Desktop/trade/data/history")
-    file_name = f"{symbol}_{tf_str}_{start_dt.year}.csv"
+    # Target path format: data/history/{symbol}_{timeframe}.csv
+    export_dir = Path("data/history")
+    file_name = f"{symbol}_{tf_str}.csv"
     csv_path = export_dir / file_name
 
-    fallback_path = Path(f"c:/Users/Microsol/Desktop/trade/data/{symbol}_{tf_str}.csv")
+    fallback_path = Path(f"data/{symbol}_{tf_str}.csv")
 
     # If file doesn't exist, attempt download from MT5
     if not csv_path.exists():
@@ -566,7 +566,7 @@ def write_reports(
     compare_metrics: dict[str, Any] | None = None,
 ) -> None:
     """Generates the required reports and files: report.md, metrics.json, trades.csv, run_metadata.json."""
-    artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+    artifacts_dir = Path("artifacts")
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Save trades.csv
@@ -978,7 +978,7 @@ def write_reports(
 
 def save_baseline(metrics_dict: dict) -> None:
     """Saves the current metrics as the official baseline_v1.json."""
-    baseline_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts/baselines")
+    baseline_dir = Path("artifacts/baselines")
     baseline_dir.mkdir(parents=True, exist_ok=True)
     baseline_path = baseline_dir / "baseline_v1.json"
 
@@ -993,7 +993,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=str,
-        default="c:/Users/Microsol/Desktop/trade/config/backtest.yaml",
+        default="config/backtest.yaml",
         help="Path to the YAML backtest configuration file.",
     )
     parser.add_argument(
@@ -1027,7 +1027,7 @@ def main() -> None:
         # 6. Save baseline if we are not comparing
         if not args.compare:
             # Re-read metrics JSON to ensure dictionary structure matches
-            metrics_path = Path("c:/Users/Microsol/Desktop/trade/artifacts/backtest_metrics.json")
+            metrics_path = Path("artifacts/backtest_metrics.json")
             with open(metrics_path) as f:
                 saved_metrics = json.load(f)
             save_baseline(saved_metrics)
