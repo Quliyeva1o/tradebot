@@ -263,3 +263,27 @@ MT5 SDK-sının macOS-da mövcud olmamasından qaynaqlanır (repo `c:/Users/Micr
 yollarına görə əvvəllər Windows-da inkişaf etdirilib) — mənim bu sessiyadakı dəyişikliklərimlə
 ƏLAQƏSİ YOXDUR (heç bir silinən modul bu importa təsir etmir, grep ilə təsdiqləndi). Fix
 tələb olunmur, sadəcə qeyd üçün.
+
+---
+
+# Gələcək Təmizlik / Aşağı Prioritet
+
+## Bug #18: `_classify_gap`-ə "daily_session_break" kateqoriyası — TƏXİRƏ SALINDI
+
+Tapıntı: `data/download_history.py::detect_gaps` XAUUSD-in tam tarixi datasında (2022-04 →
+bugün) 888 gap-i `unexplained_gap_possible_broker_interruption` kimi təsnif etdi. Araşdırma
+göstərdi ki, bunların 93%-i eyni ~1 saat 15 dəqiqəlik pəncərədə (23:45/22:45 UTC → 01:00 UTC,
+Bazar ertəsi–Cümə axşamı) 4 il boyu davamlı təkrarlanır — bu, broker nasazlığı deyil, spot
+qızılın (XAUUSD) real gündəlik COMEX rollover/settlement fasiləsidir (FX cütlərində olmayan,
+metal-a xas bir sessiya xüsusiyyəti). Validasiya sistemi düzgün işləyib: heç bir data
+fabrikasiya olunmayıb, hər gap doğru loglanıb — bu, YALNIZ təsnifat etiketinin dəqiqliyi
+məsələsidir, funksional təsiri yoxdur.
+
+**Təxirə salınma səbəbi:** kosmetik/informativ, aşağı prioritet. İstifadəçi qərarı.
+
+**Gələcək iş (edildikdə):** `_classify_gap`-ə yeni bir şərt əlavə et — gap müddəti təxminən
+1-2.5 saat aralığındadırsa VƏ `previous_timestamp`-in saatı 21:00-23:59 UTC aralığındadırsa
+VƏ `next_timestamp`-in saatı 00:00-01:30 UTC aralığındadırsa → `"daily_session_break"`.
+Differential test tələb olunur (mövcud gap sayının/reason-larının dəyişmədiyini, yalnız
+`unexplained_gap_possible_broker_interruption`-dan `daily_session_break`-ə keçən alt-çoxluğun
+düzgün seçildiyini yoxlayan).
