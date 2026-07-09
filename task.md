@@ -1,6 +1,6 @@
 # Tapşırıq İzləmə — fix/critical-state-bugs
 
-## Status: FAZA 4 davam edir (Bug #9 bitdi, Bug #10/#11 istifadəçi qərarı gözləyir)
+## Status: FAZA 4 bitdi (Bug #11 istifadəçi qərarı ilə təxirə salındı), FAZA 5-ə keçilir
 
 ## Bitmiş fazalar (toxunulmayıb, commit olunub)
 - **FAZA 0 — Baseline**: 156 test (154 PASS + 2 FAIL) təsdiqləndi.
@@ -9,15 +9,17 @@
 - **FAZA 3 — Performans**: Bug #3 (incremental liquidity, 11d2447 + 0b6509e), Bug #13 (configurable zone pruning, c4c434b), SwingGraph node access optimallaşdırması (1a8251e).
 - Test sayı bu fazaların sonunda: 166/166 PASS (əsl baseline 156, +10 yeni test).
 - **FAZA 3.5 — Analytics & Diagnostics**: `RejectionReason` enum (14 üzv) + `StrategyDiagnostics` sinfi (`strategy/diagnostics.py`), `strategy_engine.get_diagnostics()` aqreqasiyası, `run_backtest.py`-də loglama. Commit: `5b4ee26`. 161 (mühit məhdudiyyəti ilə) + 27 yeni = 188 PASS.
-- **FAZA 4 / Bug #9 — Stale-break gating**: `max_break_age_bars` (default=`None`), `broken_swing.index` proxy (istifadəçi seçimi), `MarketState.bar_count()` əlavəsi. Commit: `6646991`. 188 + 7 = **195 PASS, 0 FAIL** (hazırkı say).
+- **FAZA 4 / Bug #9 — Stale-break gating**: `max_break_age_bars` (default=`None`), `broken_swing.index` proxy (istifadəçi seçimi), `MarketState.bar_count()` əlavəsi. Commit: `6646991`. 188 + 7 = 195 PASS.
+- **FAZA 4 / Bug #10 — Nearest/most-recent OB & FVG seçimi**: `_select_best_order_block`/`_select_best_fvg` helper-ləri, model dəyişikliyi yoxdur. Commit: `5de6f53`. 195 + 7 = **202 PASS, 0 FAIL** (hazırkı say).
+- **FAZA 4 / Duplicate + R:R gate yoxlaması**: Kod nəzərdən keçirildi, audit-in "correct" qeydini təsdiqlədim — `_proposed_keys` yoxlaması R:R gate-dən sonra, TradeSetup yaradılmazdan əvvəl işləyir, yan-keçid yoxdur. Əlavə dəyişiklik tələb olunmadı.
 
 ## Qalan iş
 
-### FAZA 4 — Strategiya Keyfiyyəti (davam edir)
-- [x] Bug #9: Stale break gating (`max_break_age_bars`) — BİTDİ, commit `6646991`.
-- [ ] Bug #10: OB/FVG seçimi — ilk-uyğun yox, ən yaxın/ən yeni. İstifadəçidən dizayn təsdiqi gözlənilir (AskUserQuestion dismiss edildi, yenidən soruşulacaq).
-- [ ] Bug #11: OB/FVG/break eyni displacement leg-ə aid olmalıdır. İstifadəçidən dizayn təsdiqi gözlənilir (ən riskli dəyişiklik, backtest nəticələrini kəskin dəyişə bilər).
-- [ ] Duplicate setup bug-ın təkrar yoxlanılması + R:R gate-in bütün yollarda tətbiqinin təsdiqi
+### FAZA 4 — Strategiya Keyfiyyəti (BİTDİ)
+- [x] Bug #9: Stale break gating — BİTDİ, commit `6646991`.
+- [x] Bug #10: OB/FVG nearest/most-recent seçimi — BİTDİ, commit `5de6f53`.
+- [ ] Bug #11: OB/FVG/break eyni displacement leg-ə aid olmalıdır. **İstifadəçi qərarı ilə TƏXİRƏ SALINDI** — real backtest datası ilə kalibrasiya edildikdən sonra ayrıca ele alınacaq. Bax `walkthrough.md`.
+- [x] Duplicate setup + R:R gate yoxlanıldı — düzgün işləyir, dəyişiklik tələb olunmadı.
 
 ### FAZA 5 — Arxitektura Təmizliyi
 - [ ] `application/ports/*`, `core/interfaces.py`, `TradingCoordinator` sil (əvvəlcə grep ilə istifadə yoxlanılacaq)

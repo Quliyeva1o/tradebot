@@ -141,3 +141,44 @@ seçdi — konkret ədəd real backtest data ilə kalibrasiya edildikdən sonra 
 - `tests/test_domain_models.py::test_market_state_root`-a `bar_count()` assertion-ları əlavə olundu (yeni test funksiyası yox, mövcud testin genişlənməsi).
 - 188 (əvvəlki) + 7 (yeni) = **195 PASS, 0 FAIL** ✅
 - Commit: `6646991`
+
+## Bug #10: Nearest/Most-Recent OB & FVG Selection
+
+### Qərar prosesi
+Audit: "Select nearest/most-recent OB/FVG, not first-in-list (#10)". Köhnə kod OB/FVG
+siyahısını gəzib **ilk uyğun gələni** seçirdi (`break` ilk uyğunluqda), sonrakı daha
+yaxşı namizədlərə baxmadan. İstifadəçiyə 2 kriteriya təqdim olundu (yalnız ən yeni,
+yoxsa qiymətə ən yaxın + bərabərlikdə ən yeni tiebreak) — **ikincini seçdi**, model
+dəyişikliyi tələb olunmadığı üçün.
+
+### Dəyişikliklər
+
+#### [MODIFY] [strategy/continuation.py](file:///Users/renaquliyeva/Desktop/tradebot/strategy/continuation.py)
+- İki modul-səviyyəli helper əlavə olundu (Bullish/Bearish arasında paylaşılır, çünki məntiq istiqamətdən başqa eynidir):
+  - `_select_best_order_block(order_blocks, direction, price)` — bütün uyğun (unmitigated, düzgün istiqamət, qiymət daxilində) namizədləri toplayır, `bar_index` maksimuma görə seçir. **Qeyd:** OB üçün "daxilində" şərti = məsafə həmişə 0-dır bütün namizədlər üçün, ona görə əməli olaraq yeganə diskriminator recency-dir.
+  - `_select_best_fvg(fair_value_gaps, direction, price, proximity_threshold)` — bütün uyğun namizədləri toplayır, `(məsafə, -end_index)` üzrə sıralayır — ən yaxın əvvəl, bərabərlikdə ən yeni.
+- Hər iki strategiyanın Rule 4 (OB) və Rule 5 (FVG) blokları bu helper-lərə köçürüldü.
+
+### Doğrulama
+- Yeni testlər: **+7** (`tests/test_continuation_ob_fvg_selection.py`): OB recency tiebreak, mitigated/səhv-istiqamət OB-ların istisnası, FVG-də "yaxın uzaqdan üstündür" halı, bərabər-məsafə tiebreak, mitigated/proximity-dən-kənar FVG-lərin istisnası.
+- Mövcud testlərdə (tək OB/FVG olan fixture-lar) davranış dəyişmədi — 195 köhnə test hamısı keçdi.
+- 195 (əvvəlki) + 7 (yeni) = **202 PASS, 0 FAIL** ✅
+- Commit: `5de6f53`
+
+## Bug #11: Eyni Displacement Leg Tələbi — TƏXİRƏ SALINDI
+
+İstifadəçi qərarı: bu, ən yüksək qeyri-müəyyənlik daşıyan dəyişiklikdir (SMC-də "leg"
+anlayışının kanonik tərifi yoxdur, backtest nəticələrini kəskin restriktiv edə bilər).
+Hazırda tətbiq edilmir, real backtest datası ilə kalibrasiya edildikdən sonra ayrıca
+ele alına bilər. FAZA 5-ə keçilir.
+
+## Duplicate Setup / R:R Gate — Yoxlama Nəticəsi
+
+Audit qeydi: "Duplicate trades: Guarded reasonably well via `_proposed_keys =
+{(ob.id, break.id)}` and `reset()` on engine reset — this specific mechanism looks
+correct." Kodu yenidən nəzərdən keçirdim: `_proposed_keys` yoxlaması hər iki
+strategiyada (`continuation.py`) R:R gate-dən DƏRHAL sonra, `TradeSetup` yaradılmazdan
+əvvəl işləyir — yəni R:R gate BÜTÜN uğur yolunda (yeganə return-success nöqtəsi) tətbiq
+olunur, heç bir yan-keçid yoxdur. `test_strategy_duplicate_setup_guard` və
+`test_strategy_risk_reward_gate` (mövcud, `test_strategy_engine.py`) bunu artıq
+doğrulayır. Əlavə düzəliş tələb olunmur — audit-in "correct" qeyd etdiyi doğrudur.
