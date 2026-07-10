@@ -161,3 +161,77 @@ def test_order_block_anchor_modes() -> None:
     obs_default = detector_default.detect_order_blocks(bars, state)
     assert len(obs_default) == 1
     assert obs_default[0].bar_index == 3
+
+
+def test_breaking_bar_mode_handles_both_fast_path_and_fallback_in_one_call() -> None:
+    """Differential test for Bug #30's O(1) fast path (bars[-1] IS the
+    breaking bar, the pipeline's actual calling convention -- no ts_to_idx
+    dict needed) alongside its ts_to_idx fallback (a break whose breaking
+    bar is NOT the last bar in `bars`, e.g. an earlier break in a
+    multi-break history). Both must resolve to the same correct Order
+    Blocks as the old always-build-the-dict implementation did.
+    """
+    # i=0: bullish filler
+    # i=1: bearish -> OB candidate for brk1 (breaking_bar = bars[3], NOT bars[-1])
+    # i=2: swing high pivot for brk1
+    # i=3: break bar #1 (close 1.1055 > swing high 1.1050)
+    # i=4: bearish -> OB candidate for brk2 (breaking_bar = bars[6] == bars[-1])
+    # i=5: swing high pivot for brk2
+    # i=6: break bar #2 (close 1.1095 > swing high 1.1090) -- last bar
+    prices = [
+        (1.1000, 1.1010, 1.0990, 1.1005, 10.0),
+        (1.1005, 1.1020, 1.0995, 1.1000, 10.0),
+        (1.1000, 1.1050, 1.1000, 1.1040, 10.0),
+        (1.1040, 1.1060, 1.1030, 1.1055, 10.0),
+        (1.1055, 1.1058, 1.1035, 1.1040, 10.0),
+        (1.1040, 1.1090, 1.1038, 1.1080, 10.0),
+        (1.1080, 1.1100, 1.1070, 1.1095, 10.0),
+    ]
+    bars = _create_bars(prices)
+
+    swing_high_1 = Swing(
+        id="swing_2_high",
+        timestamp=bars[2].timestamp,
+        index=2,
+        price=1.1050,
+        type=SwingType.HIGH,
+        classification=SwingClassification.MAJOR,
+        strength=1.0,
+        strength_category=SwingStrength.NORMAL,
+    )
+    swing_high_2 = Swing(
+        id="swing_5_high",
+        timestamp=bars[5].timestamp,
+        index=5,
+        price=1.1090,
+        type=SwingType.HIGH,
+        classification=SwingClassification.MAJOR,
+        strength=1.0,
+        strength_category=SwingStrength.NORMAL,
+    )
+
+    brk1 = StructureBreak(
+        break_id="break_1",
+        break_type=BreakType.BOS,
+        broken_swing=swing_high_1,
+        breaking_bar=bars[3],  # NOT the last bar -> exercises the ts_to_idx fallback
+        timestamp=bars[3].timestamp,
+    )
+    brk2 = StructureBreak(
+        break_id="break_2",
+        break_type=BreakType.BOS,
+        broken_swing=swing_high_2,
+        breaking_bar=bars[6],  # bars[-1] -> exercises the O(1) fast path
+        timestamp=bars[6].timestamp,
+    )
+    state = StructureState(breaks_history=[brk1, brk2])
+
+    detector = OrderBlockDetector(volume_multiplier=0.0, anchor_mode="breaking_bar")
+    obs = detector.detect_order_blocks(bars, state)
+
+    assert len(obs) == 2
+    obs_by_index = {ob.bar_index: ob for ob in obs}
+    assert obs_by_index[1].high == 1.1020  # fallback-path OB (for brk1)
+    assert obs_by_index[1].low == 1.0995
+    assert obs_by_index[4].high == 1.1058  # fast-path OB (for brk2)
+    assert obs_by_index[4].low == 1.1035

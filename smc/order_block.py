@@ -81,8 +81,20 @@ class OrderBlockDetector:
         if not bars or not structure_state.breaks_history:
             return order_blocks
 
-        # Map timestamps to indices for fast lookup
-        ts_to_idx = {bar.timestamp: idx for idx, bar in enumerate(bars)}
+        # Bug #30: ts_to_idx used to be built unconditionally (O(n)) even
+        # though the caller (SMCPipeline.update) always passes bars ending
+        # exactly at the break's own breaking_bar -- i.e. bars[-1] IS the
+        # breaking bar, an O(1) fact, not something that needs a full
+        # timestamp index to discover. Built lazily now, only if a break
+        # doesn't fit that fast path (e.g. "swing" mode, or a caller that
+        # passes a bars window not ending at the breaking bar).
+        ts_to_idx: dict[object, int] | None = None
+
+        def _resolve_index(timestamp: object) -> int | None:
+            nonlocal ts_to_idx
+            if ts_to_idx is None:
+                ts_to_idx = {bar.timestamp: idx for idx, bar in enumerate(bars)}
+            return ts_to_idx.get(timestamp)
 
         for brk in structure_state.breaks_history:
             # 1. Determine direction
@@ -95,12 +107,15 @@ class OrderBlockDetector:
 
             # Get start index for backwards search based on anchor_mode
             if self.anchor_mode == "breaking_bar":
-                start_idx = ts_to_idx.get(brk.breaking_bar.timestamp)
+                if bars[-1].timestamp == brk.breaking_bar.timestamp:
+                    start_idx = len(bars) - 1
+                else:
+                    start_idx = _resolve_index(brk.breaking_bar.timestamp)
                 if start_idx is None:
                     continue
             else:
                 # "swing" mode
-                swing_idx = ts_to_idx.get(brk.broken_swing.timestamp)
+                swing_idx = _resolve_index(brk.broken_swing.timestamp)
                 if swing_idx is None:
                     swing_idx = brk.broken_swing.index
                     if swing_idx < 0 or swing_idx >= len(bars):
