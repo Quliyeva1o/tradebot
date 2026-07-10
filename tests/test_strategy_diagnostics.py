@@ -117,6 +117,7 @@ class TestBullishContinuationDiagnostics:
         assert strategy.diagnostics.evaluations == 1
         assert strategy.diagnostics.setups_generated == 1
         assert strategy.diagnostics.rejections == {}
+        assert setup.strategy_name == "BullishContinuationStrategy"
 
     def test_no_trend_rejection(self) -> None:
         state = create_valid_bullish_market_state()
@@ -310,6 +311,7 @@ class TestBearishContinuationDiagnostics:
         assert strategy.diagnostics.evaluations == 1
         assert strategy.diagnostics.setups_generated == 1
         assert strategy.diagnostics.rejections == {}
+        assert setup.strategy_name == "BearishContinuationStrategy"
 
     def test_no_trend_rejection(self) -> None:
         state = create_valid_bearish_market_state()

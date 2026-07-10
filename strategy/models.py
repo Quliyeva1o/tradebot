@@ -32,3 +32,4 @@ class TradeSetup:
     related_order_block: OrderBlock | None
     related_fvg: FairValueGap | None
     timestamp: datetime
+    strategy_name: str = ""

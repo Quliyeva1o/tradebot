@@ -105,6 +105,7 @@ class TestBreakoutAndVolume:
         # risk = 101.0 - 99.8 = 1.2; reward = 1.2 * 3.0 (default rr) = 3.6
         assert setup.target_zone == (104.6, 104.6)
         assert strategy._trade_taken_today is True
+        assert setup.strategy_name == "OpeningRangeBreakoutStrategy"
 
     def test_bearish_breakout_with_volume_generates_setup_sl_at_first_bar(self) -> None:
         state = _new_state()

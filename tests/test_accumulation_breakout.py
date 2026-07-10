@@ -128,6 +128,7 @@ class TestBreakoutAndRetest:
         assert setup.target_zone[0] == round(1.1030 + 0.0035 * 2.0, 5)
         assert strategy._trade_taken is True
         assert strategy.diagnostics.setups_generated == 1
+        assert setup.strategy_name == "AccumulationBreakoutStrategy"
 
     def test_breakout_persists_until_later_retest(self) -> None:
         """Breakout flag is sticky: retest can confirm on a later bar, and is

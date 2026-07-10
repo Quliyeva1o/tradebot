@@ -319,6 +319,7 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             related_order_block=matching_ob,
             related_fvg=matching_fvg,
             timestamp=timestamp,
+            strategy_name=self.__class__.__name__,
         )
 
 
@@ -532,4 +533,5 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             related_order_block=matching_ob,
             related_fvg=matching_fvg,
             timestamp=timestamp,
+            strategy_name=self.__class__.__name__,
         )

@@ -257,4 +257,5 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
             related_order_block=None,
             related_fvg=None,
             timestamp=latest_bar.timestamp,
+            strategy_name=self.__class__.__name__,
         )

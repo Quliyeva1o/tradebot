@@ -103,6 +103,7 @@ class TestSweepLogic:
         # risk = 112 - 90 = 22; reward = 22 * 2.0 (default rr) = 44
         assert setup.target_zone == (156.0, 156.0)
         assert strategy._trade_taken is True
+        assert setup.strategy_name == "NasdaqMidlineSweepStrategy"
 
     def test_short_sweep_and_displacement_generates_setup(self) -> None:
         state = _new_state()
