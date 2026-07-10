@@ -50,6 +50,12 @@ class RejectionReason(str, Enum):
     WRONG_CLOSE_SIDE = "wrong_close_side"
     TRADE_ALREADY_TAKEN_TODAY = "trade_already_taken_today"
 
+    # OrderBlockRetestStrategy gates (Strategy #4)
+    # Reuses NO_LATEST_BAR, NON_POSITIVE_RISK, RR_GATE_FAILED above.
+    NO_ORDER_BLOCKS = "no_order_blocks"
+    NO_TOUCH_DETECTED = "no_touch_detected"
+    OB_ALREADY_USED = "ob_already_used"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""
