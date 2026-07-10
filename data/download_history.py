@@ -87,6 +87,24 @@ class ValidationReport:
     ohlc_violations: list[OHLCViolation] = field(default_factory=list)
 
 
+def _get_symbol_point(symbol: str) -> float:
+    """Fetches the symbol's point size (smallest price increment) from MT5.
+
+    MT5's `copy_rates_*` results report `spread` as an integer number of
+    points, not a price-space value -- it must be multiplied by this point
+    size to become a price-space spread usable by BacktestEngine. Point size
+    varies by instrument (e.g. 0.00001 for EURUSD, 0.01 for an index like
+    USTEC), so it cannot be assumed/hardcoded.
+
+    Raises:
+        RuntimeError: If symbol_info is unavailable for the (already-selected) symbol.
+    """
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"symbol_info unavailable for {symbol}; cannot resolve point size.")
+    return float(info.point)
+
+
 def fetch_symbol_bars(
     symbol: str, timeframe: str, start: datetime, end: datetime
 ) -> list[Bar]:
@@ -109,15 +127,23 @@ def fetch_symbol_bars(
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Symbol {symbol} is not available in the MT5 terminal.")
 
+    point = _get_symbol_point(symbol)
+
     rates = mt5.copy_rates_range(symbol, mt5_tf, start, end)
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"No historical rates returned from MT5 for {symbol} {timeframe}.")
 
-    return _rows_to_bars(rates)
+    return _rows_to_bars(rates, point)
 
 
-def _rows_to_bars(rates: object) -> list[Bar]:
-    """Converts MT5's copy_rates_range numpy record array into a Bar list."""
+def _rows_to_bars(rates: object, point: float) -> list[Bar]:
+    """Converts MT5's copy_rates_range numpy record array into a Bar list.
+
+    Args:
+        rates: Raw MT5 rate rows.
+        point: The symbol's point size, used to convert the raw integer
+            `spread` (points) into a price-space value (points * point).
+    """
     return [
         Bar(
             timestamp=datetime.fromtimestamp(int(row["time"]), tz=UTC),
@@ -126,7 +152,7 @@ def _rows_to_bars(rates: object) -> list[Bar]:
             low=float(row["low"]),
             close=float(row["close"]),
             volume=float(row["tick_volume"]),
-            spread=float(row["spread"]),
+            spread=float(row["spread"]) * point,
         )
         for row in rates
     ]
@@ -184,6 +210,8 @@ def fetch_symbol_bars_chunked(
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Symbol {symbol} is not available in the MT5 terminal.")
 
+    point = _get_symbol_point(symbol)
+
     all_bars: list[Bar] = []
     for chunk_start, chunk_end in _iter_chunk_windows(start, end, timeframe):
         rates = mt5.copy_rates_range(symbol, mt5_tf, chunk_start, chunk_end)
@@ -204,7 +232,7 @@ def fetch_symbol_bars_chunked(
             chunk_start,
             chunk_end,
         )
-        all_bars.extend(_rows_to_bars(rates))
+        all_bars.extend(_rows_to_bars(rates, point))
 
     if not all_bars:
         raise RuntimeError(

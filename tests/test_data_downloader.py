@@ -5,6 +5,7 @@ MT5 API calls are mocked throughout; no real terminal connection is made.
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -12,6 +13,7 @@ import pytest
 
 from core.models import Bar
 from data.download_history import (
+    _get_symbol_point,
     _iter_chunk_windows,
     check_ohlc_consistency,
     detect_gaps,
@@ -23,6 +25,11 @@ from data.download_history import (
     validate_bars,
     write_bars_csv,
 )
+
+
+def _fake_symbol_info(point: float = 1.0) -> SimpleNamespace:
+    """Minimal stand-in for MT5's SymbolInfo, exposing only what we read (.point)."""
+    return SimpleNamespace(point=point)
 
 
 def _bar(
@@ -185,6 +192,7 @@ def _fake_mt5_rates() -> np.ndarray:
 def test_fetch_symbol_bars_converts_mt5_rates_to_bars() -> None:
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info(point=1.0)),
         patch("data.download_history.mt5.copy_rates_range", return_value=_fake_mt5_rates()),
     ):
         bars = fetch_symbol_bars(
@@ -194,7 +202,7 @@ def test_fetch_symbol_bars_converts_mt5_rates_to_bars() -> None:
     assert len(bars) == 1
     assert bars[0].open == 1.10
     assert bars[0].volume == 100.0
-    assert bars[0].spread == 2.0
+    assert bars[0].spread == 2.0  # raw spread(points)=2 * point=1.0
 
 
 def test_fetch_symbol_bars_raises_when_symbol_unavailable() -> None:
@@ -208,12 +216,48 @@ def test_fetch_symbol_bars_raises_when_symbol_unavailable() -> None:
 def test_fetch_symbol_bars_raises_when_no_data_returned() -> None:
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info()),
         patch("data.download_history.mt5.copy_rates_range", return_value=None),
     ):
         with pytest.raises(RuntimeError):
             fetch_symbol_bars(
                 "EURUSD", "M15", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC)
             )
+
+
+# --- spread points-to-price conversion (Bug: MT5 reports spread in points) ----------
+
+
+@pytest.mark.parametrize(
+    "raw_spread_points,point,expected_price_spread",
+    [
+        (2, 0.00001, 0.00002),  # EURUSD-like: tight FX spread, 5-decimal point
+        (100, 0.01, 1.0),  # USTEC-like: index CFD, 2-decimal point
+        (0, 0.00001, 0.0),  # zero spread stays zero regardless of point size
+    ],
+)
+def test_fetch_symbol_bars_converts_spread_points_to_price(
+    raw_spread_points: int, point: float, expected_price_spread: float
+) -> None:
+    rates = _fake_rates(
+        [(1735689600, 1.10, 1.15, 1.05, 1.12, 100, raw_spread_points)]
+    )
+    with (
+        patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info(point)),
+        patch("data.download_history.mt5.copy_rates_range", return_value=rates),
+    ):
+        bars = fetch_symbol_bars(
+            "TEST", "M15", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC)
+        )
+
+    assert bars[0].spread == pytest.approx(expected_price_spread)
+
+
+def test_get_symbol_point_raises_when_symbol_info_unavailable() -> None:
+    with patch("data.download_history.mt5.symbol_info", return_value=None):
+        with pytest.raises(RuntimeError):
+            _get_symbol_point("UNKNOWN")
 
 
 # --- _iter_chunk_windows / fetch_symbol_bars_chunked (multi-chunk merge) -------------
@@ -267,6 +311,7 @@ def test_fetch_symbol_bars_chunked_merges_multiple_chunk_responses() -> None:
 
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info()),
         patch(
             "data.download_history.mt5.copy_rates_range",
             side_effect=[chunk1, chunk2, chunk3],
@@ -297,6 +342,7 @@ def test_fetch_symbol_bars_chunked_skips_empty_chunk_without_aborting() -> None:
 
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info()),
         patch(
             "data.download_history.mt5.copy_rates_range",
             side_effect=[empty_chunk, real_chunk],
@@ -321,6 +367,7 @@ def test_fetch_symbol_bars_chunked_skips_empty_chunk_without_aborting() -> None:
 def test_fetch_symbol_bars_chunked_raises_when_all_chunks_empty() -> None:
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info()),
         patch("data.download_history.mt5.copy_rates_range", return_value=None),
     ):
         with pytest.raises(RuntimeError):
@@ -353,6 +400,7 @@ def test_fetch_symbol_bars_chunked_then_validate_dedupes_chunk_boundary_overlap(
 
     with (
         patch("data.download_history.mt5.symbol_select", return_value=True),
+        patch("data.download_history.mt5.symbol_info", return_value=_fake_symbol_info()),
         patch(
             "data.download_history.mt5.copy_rates_range",
             side_effect=[stale_chunk, real_chunk],
