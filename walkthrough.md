@@ -538,3 +538,26 @@ MT5 terminalı artıq quraşdırılıb və qoşulub (MetaQuotes-Demo hesabı, lo
 `USTECH100M` (mikro-lot variantı) da mövcuddur. Nəticə: Strategiya #2 EURUSD-ə uyğunlaşdırma
 TƏLƏB ETMİR, `USTEC` üzərində birbaşa portlana bilər — amma `data/history/`-də hələ USTEC CSV-si
 yoxdur, backtest üçün əvvəlcə `mt5/history_downloader.py` ilə endirilməlidir.
+
+## Bug #24 (aşağı-orta prioritet, TƏXİRƏ SALINDI): `CSVDataProvider` "spread" sütununu oxumur
+
+USTEC üçün M5 tarixi data endirilərkən (`data/download_history.py`) aşkarlandı ki, MT5-in
+`spread` sahəsi points-dədir (qiymət vahidi deyil) — `_rows_to_bars()` bunu simvolun
+`point` ölçüsünə (məs. EURUSD 0.00001, USTEC 0.01) vurmadan birbaşa `Bar.spread`-ə yazırdı
+(commit `48b1a61`-də düzəldildi). Araşdırma zamanı daha dərin bir tapıntı üzə çıxdı:
+`data/csv_provider.py::CSVDataProvider.load()` CSV oxuyarkən `target_columns` siyahısı ilə
+"spread" sütununu tamamilə atır — nəticədə `Bar.spread` CSV-də nə yazılıb-yazılmamasından
+asılı olmayaraq həmişə `0.0`-dır (birbaşa test edildi: EURUSD-in 99,950 bar-ının hamısı, xam
+CSV-də 50,668-i qeyri-sıfır spread daşısa da, yükləndikdən sonra `Bar.spread == 0.0`). Bunun
+nəticəsində `BacktestEngine._effective_spread()` hər trade üçün CSV-dəki real, zamanla
+dəyişən spread-i deyil, sabit `BacktestConfig.spread` dəyərini işlədir.
+
+**Niyə indi düzəldilmir:** funksional problem yaratmır (Bug #22/#23/`max_break_age_bars`
+EURUSD nəticələri bu səbəbdən təsirlənməyib — sabit spread konfiqurasiyası istənilən halda
+tətbiq olunurdu), sadəcə backtest dəqiqliyini artıra bilər (real, zamanla dəyişən spread
+simulyasiyası). Aşağı-orta prioritet, ayrıca funksionallıq artımı kimi baxılmalıdır.
+
+**Gələcək iş (edildikdə):** `CSVDataProvider.load()`-da `target_columns`-a "spread" əlavə
+et, `Bar` konstruksiyasında `getattr` fallback-ini saxlamaqla (köhnə, spread sütunu olmayan
+CSV-lər üçün geriyə uyğunluq). Differential test tələb olunur: spread sütunlu və sütunsuz
+CSV-lərin hər ikisinin düzgün yükləndiyini yoxlayan.
