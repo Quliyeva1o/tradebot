@@ -15,6 +15,7 @@ from core.exceptions import InvalidNumericDataError, InvalidTimestampError, Miss
 from core.market_data_provider import IMarketDataProvider
 from core.models import Bar
 from utils.logging import setup_logger
+from utils.validators import check_ohlc_consistency
 
 logger = setup_logger("csv_provider")
 
@@ -197,6 +198,14 @@ class CSVDataProvider(IMarketDataProvider):
                     raise InvalidNumericDataError(
                         f"Field '{field}' contains negative or zero price: {val}"
                     )
+
+        # Validate internal OHLC consistency (high >= low, high/low bound open/close)
+        violations = check_ohlc_consistency(bars)
+        if violations:
+            raise InvalidNumericDataError(
+                f"Found {len(violations)} OHLC consistency violation(s), e.g. at "
+                f"{violations[0].timestamp}: {violations[0].reason}"
+            )
 
     def info(self) -> dict[str, Any]:
         """Exposes metadata metrics about this CSV dataset.

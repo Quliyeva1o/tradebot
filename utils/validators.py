@@ -5,8 +5,57 @@ Ensures that price sequences of Bar objects adhere to structural and semantic pa
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
 from core.models import Bar
+
+
+@dataclass(frozen=True)
+class OHLCViolation:
+    """A bar whose internal OHLC relationship is physically impossible."""
+
+    timestamp: datetime
+    reason: str
+
+
+def check_ohlc_consistency(bars: Sequence[Bar]) -> list[OHLCViolation]:
+    """Flags bars whose OHLC relationship is physically impossible.
+
+    Checks: high >= low, high >= open/close, low <= open/close. Violations
+    are reported only -- bars are left untouched in the output. Shared
+    between data/download_history.py (reporting: logs every violation,
+    never raises) and CSVDataProvider.validate() (fail-fast: raises if any
+    violation is found).
+
+    Args:
+        bars: Bar sequence to inspect.
+
+    Returns:
+        List of OHLCViolation describing each impossible bar found.
+    """
+    violations: list[OHLCViolation] = []
+    for bar in bars:
+        if bar.high < bar.low:
+            violations.append(
+                OHLCViolation(bar.timestamp, f"high ({bar.high}) < low ({bar.low})")
+            )
+            continue
+        if bar.high < bar.open or bar.high < bar.close:
+            violations.append(
+                OHLCViolation(
+                    bar.timestamp,
+                    f"high ({bar.high}) is below open ({bar.open}) or close ({bar.close})",
+                )
+            )
+        if bar.low > bar.open or bar.low > bar.close:
+            violations.append(
+                OHLCViolation(
+                    bar.timestamp,
+                    f"low ({bar.low}) is above open ({bar.open}) or close ({bar.close})",
+                )
+            )
+    return violations
 
 
 def validate_non_empty(bars: Sequence[Bar]) -> None:

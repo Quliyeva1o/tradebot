@@ -107,3 +107,57 @@ class TestValidate:
         )
 
         provider.validate([good_bar])  # must not raise
+
+
+class TestValidateOHLCConsistency:
+    """provider.validate() catches internally-inconsistent OHLC bars
+    (Bug #31 -- previously only checked non-positive prices, missing a
+    whole class of physically-impossible bars: high < low, or a close/open
+    outside the [low, high] range)."""
+
+    def test_validate_raises_on_high_below_low(self) -> None:
+        from core.models import Bar
+
+        provider = CSVDataProvider(filepath="unused.csv")
+        bad_bar = Bar(
+            timestamp=datetime(2026, 1, 1),
+            open=1.10,
+            high=1.05,
+            low=1.15,
+            close=1.10,
+            volume=100.0,
+        )
+
+        with pytest.raises(InvalidNumericDataError, match="OHLC consistency"):
+            provider.validate([bad_bar])
+
+    def test_validate_raises_on_close_outside_range(self) -> None:
+        from core.models import Bar
+
+        provider = CSVDataProvider(filepath="unused.csv")
+        bad_bar = Bar(
+            timestamp=datetime(2026, 1, 1),
+            open=1.10,
+            high=1.12,
+            low=1.08,
+            close=1.20,  # above high
+            volume=100.0,
+        )
+
+        with pytest.raises(InvalidNumericDataError, match="OHLC consistency"):
+            provider.validate([bad_bar])
+
+    def test_validate_passes_for_internally_consistent_bar(self) -> None:
+        from core.models import Bar
+
+        provider = CSVDataProvider(filepath="unused.csv")
+        good_bar = Bar(
+            timestamp=datetime(2026, 1, 1),
+            open=1.10,
+            high=1.12,
+            low=1.08,
+            close=1.105,
+            volume=100.0,
+        )
+
+        provider.validate([good_bar])  # must not raise

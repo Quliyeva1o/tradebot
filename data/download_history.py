@@ -21,6 +21,7 @@ import MetaTrader5 as mt5  # noqa: N813
 from core.models import Bar, Timeframe
 from mt5.connector import MT5Connector
 from utils.logging import setup_logger
+from utils.validators import OHLCViolation, check_ohlc_consistency
 
 logger = setup_logger("download_history")
 
@@ -64,14 +65,6 @@ class GapRecord:
     next_timestamp: datetime
     gap_duration: timedelta
     likely_reason: str
-
-
-@dataclass(frozen=True)
-class OHLCViolation:
-    """A bar whose internal OHLC relationship is physically impossible."""
-
-    timestamp: datetime
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -312,42 +305,6 @@ def detect_gaps(bars: list[Bar], timeframe: str) -> list[GapRecord]:
             )
         )
     return gaps
-
-
-def check_ohlc_consistency(bars: list[Bar]) -> list[OHLCViolation]:
-    """Flags bars whose OHLC relationship is physically impossible.
-
-    Checks: high >= low, high >= open/close, low <= open/close.
-    Violations are reported only -- bars are left untouched in the output.
-
-    Args:
-        bars: Bar list to inspect.
-
-    Returns:
-        List of OHLCViolation describing each impossible bar found.
-    """
-    violations: list[OHLCViolation] = []
-    for bar in bars:
-        if bar.high < bar.low:
-            violations.append(
-                OHLCViolation(bar.timestamp, f"high ({bar.high}) < low ({bar.low})")
-            )
-            continue
-        if bar.high < bar.open or bar.high < bar.close:
-            violations.append(
-                OHLCViolation(
-                    bar.timestamp,
-                    f"high ({bar.high}) is below open ({bar.open}) or close ({bar.close})",
-                )
-            )
-        if bar.low > bar.open or bar.low > bar.close:
-            violations.append(
-                OHLCViolation(
-                    bar.timestamp,
-                    f"low ({bar.low}) is above open ({bar.open}) or close ({bar.close})",
-                )
-            )
-    return violations
 
 
 def validate_bars(bars: list[Bar], symbol: str, timeframe: str) -> tuple[list[Bar], ValidationReport]:
