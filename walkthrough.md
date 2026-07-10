@@ -490,3 +490,51 @@ overfitting-i gizlədə bilər).
    təkrar iş riskindən (düzəlişi həm köhnə, həm yeni strukturda etmək) qaçmaq üçün.
 2. **Bug #19/#20/#21** — Mərhələ A/B/C-ni BLOKLAMIR (bunlar `research/` paketindədir,
    `strategy/`-yə asılılığı yoxdur). YALNIZ Mərhələ D-dən əvvəl məcburidir.
+
+---
+
+# Mərhələ C — Strategiya #1: AccumulationBreakoutStrategy (commit `564b6d4`, `7ca0293`)
+
+İstifadəçinin "5 Candle Accumulation Breakout Retest" Pine Script strategiyası
+`strategy/accumulation_breakout.py`-a portlandı (`TradeSetupStrategy` interfeysinə uyğun,
+sessiya-əsaslı state machine, [strategy/continuation.py](strategy/continuation.py)-dan fərqli
+olaraq bar-lar arası daxili yaddaş saxlayır). Detallar üçün commit mesajlarına bax.
+
+**Sessiya vaxtı düzəlişi (commit `7ca0293`):** ilkin versiya `session_start`/`session_end`-i
+birbaşa UTC saat kimi müqayisə edirdi. İstifadəçi düzəldi: orijinal Pine sessiyası ("0930-1100")
+əslində **NY birja vaxtı**dır, sabit UTC saat DEYİL. Düzəliş: `zoneinfo`/`America/New_York` ilə
+hər bar-ın UTC vaxtı DST-ə görə (yay/qış) düzgün NY yerli vaxtına çevrilir
+(`session_timezone` konfiqurasiya edilə bilir, default `"America/New_York"`).
+
+## EURUSD Tam Tarixi Nəticəsi — Sessiya Müqayisəsi
+
+Backtest EURUSD tam tarixində (99,950 bar) HƏM sabit-UTC (düzəlişdən əvvəlki, texniki səhv),
+HƏM DƏ DST-düzgün (əsl NY, düzəlişdən sonrakı) versiyalarla aparıldı:
+
+| Ssenari | Trade | Win Rate | PF | Net Profit | Max DD |
+|---|---|---|---|---|---|
+| **DST-düzgün (əsl NY), volume_filter=True** | 52 | 28.9% | 0.68 | -$1,225.39 | 15.31% |
+| **DST-düzgün (əsl NY), volume_filter=False** | 70 | 34.3% | **0.87** | -$642.79 | 15.71% |
+| _Arxiv — sabit-UTC (London-a təsadüf), volume_filter=True_ | 68 | 35.3% | 0.92 | -$393.24 | 9.78% |
+| _Arxiv — sabit-UTC (London-a təsadüf), volume_filter=False_ | 79 | 27.9% | 0.65 | -$2,014.55 | 23.99% |
+
+**Əsas nəticə (istifadəçinin qərarına görə): DST-düzgün NY-sessiya nəticələridir** — sabit-UTC
+versiya strategiyanın əsl formasını əks etdirmir, texniki səhvin təsadüfi məhsuludur, qərar üçün
+istifadə edilməməlidir.
+
+**Gələcək araşdırma namizədi (İNDİ TƏQİB EDİLMİR):** sabit-UTC pəncərəsi (09:30-11:00 UTC, London
+sessiyasına təsadüf edir) empirik olaraq NY sessiyasından xeyli üstün çıxdı (PF 0.92 vs 0.68,
+volume_filter=True müqayisəsində). İstifadəçi qərarı: bu, **overfitting riski** daşıyır — çoxlu
+konfiqurasiya sınağından təsadüfən yaxşı çıxan tək bir nəticədir, Mərhələ D-nin qoruma prinsiplərinə
+(statistik əhəmiyyətlilik + out-of-sample doğrulama + çoxlu-müqayisə düzəlişi) uyğun diqqətli
+sınaq TƏLƏB EDİR. İndi təqib edilmir, yalnız qeydə alınır.
+
+## Strategiya #2 (NASDAQ Midline Sweep) üçün simvol yoxlaması
+
+MT5 terminalı artıq quraşdırılıb və qoşulub (MetaQuotes-Demo hesabı, login `5052764320`).
+`mt5.symbols_get()` ilə broker-in tam simvol siyahısı (12,698 simvol) axtarıldı:
+**`USTEC`** ("US Tech 100 Index") tapıldı — point=0.01, digits=2, tarixi M15 datası
+(`mt5.copy_rates_from_pos`) real qiymətlərlə (~29,500-29,600 səviyyəsi) mövcuddur.
+`USTECH100M` (mikro-lot variantı) da mövcuddur. Nəticə: Strategiya #2 EURUSD-ə uyğunlaşdırma
+TƏLƏB ETMİR, `USTEC` üzərində birbaşa portlana bilər — amma `data/history/`-də hələ USTEC CSV-si
+yoxdur, backtest üçün əvvəlcə `mt5/history_downloader.py` ilə endirilməlidir.
