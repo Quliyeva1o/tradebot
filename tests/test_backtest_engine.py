@@ -899,5 +899,114 @@ def test_pending_order_configurable_expiry(state_builder: MarketStateBuilder) ->
     assert trade.exit_bar_index == 3
 
 
+# --- Bug #25: multiple strategies proposing setups on the same bar ------------------
+
+
+def _make_setup(setup_id: str, direction: SignalDirection = SignalDirection.BUY) -> TradeSetup:
+    return TradeSetup(
+        setup_id=setup_id,
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=direction,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1060),
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason=setup_id,
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+
+def test_conflicting_setups_on_same_bar_are_counted_and_first_wins(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    """Two strategies proposing a setup on the same bar: only setups[0] is
+    taken (unchanged behavior), but the drop is now counted, not silent."""
+    setup_a = _make_setup("setup_a")
+    setup_b = _make_setup("setup_b", direction=SignalDirection.SELL)
+
+    evaluator = MockEvaluator([[setup_a, setup_b], [], []])
+    engine = BacktestEngine(config=base_config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert result.conflicting_setups_dropped == 1
+    assert len(result.trades) == 1
+    assert result.trades[0].setup_id == "setup_a"
+
+
+def test_no_conflict_counted_when_single_setup_proposed(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    setup = _make_setup("setup_only")
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=base_config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert result.conflicting_setups_dropped == 0
+
+
+def test_conflict_policy_log_and_first_logs_a_warning(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder, caplog
+) -> None:
+    setup_a = _make_setup("setup_a")
+    setup_b = _make_setup("setup_b", direction=SignalDirection.SELL)
+
+    evaluator = MockEvaluator([[setup_a, setup_b], [], []])
+    engine = BacktestEngine(config=base_config, conflict_policy="log_and_first")
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    with caplog.at_level("WARNING"):
+        result = engine.run(candles, evaluator, state_builder)
+
+    assert result.conflicting_setups_dropped == 1
+    assert any("conflicting" in r.message.lower() for r in caplog.records)
+
+
+def test_conflict_policy_first_does_not_log(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder, caplog
+) -> None:
+    setup_a = _make_setup("setup_a")
+    setup_b = _make_setup("setup_b", direction=SignalDirection.SELL)
+
+    evaluator = MockEvaluator([[setup_a, setup_b], [], []])
+    engine = BacktestEngine(config=base_config)  # default conflict_policy="first"
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    with caplog.at_level("WARNING"):
+        result = engine.run(candles, evaluator, state_builder)
+
+    assert result.conflicting_setups_dropped == 1  # still counted...
+    assert len(caplog.records) == 0  # ...but not logged under the default policy
+
+
 
 

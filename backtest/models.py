@@ -77,4 +77,5 @@ class BacktestResult:
     daily_loss_limit_hits: int = 0
     stopped_early: bool = False
     stop_reason: str | None = None
+    conflicting_setups_dropped: int = 0
 

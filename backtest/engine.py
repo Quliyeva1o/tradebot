@@ -7,6 +7,9 @@ from backtest.models import BacktestConfig, BacktestResult, BacktestTrade, Trade
 from core.models import Bar, SignalDirection
 from market_structure.structure_models import MarketState
 from strategy.models import TradeSetup
+from utils.logging import setup_logger
+
+logger = setup_logger("backtest_engine")
 
 
 @runtime_checkable
@@ -60,15 +63,26 @@ class BacktestEngine:
         self,
         config: BacktestConfig,
         position_sizer: PositionSizer | None = None,
+        conflict_policy: str = "first",
     ) -> None:
         """Initializes the BacktestEngine.
 
         Args:
             config: Backtest configuration metrics.
             position_sizer: Position sizer strategy.
+            conflict_policy: How to resolve multiple strategies proposing a
+                setup on the same bar. "first" (default) keeps the existing
+                behavior (take setups[0], silently ignore the rest) --
+                dropped setups are always counted in
+                BacktestResult.conflicting_setups_dropped regardless of
+                policy, so the silent-drop is at least observable. "log_and_first"
+                additionally logs a warning for every conflicting bar. Only
+                "first" and "log_and_first" are implemented; other values
+                behave like "first".
         """
         self.config = config
         self.position_sizer = position_sizer or SimplePositionSizer()
+        self.conflict_policy = conflict_policy
 
     def _effective_spread(self, candle: Bar) -> float:
         """Determines the spread to use, overriding with candle's spread if set."""
@@ -124,6 +138,7 @@ class BacktestEngine:
         day_limit_reached = False
         stopped_early = False
         stop_reason = None
+        conflicting_setups_dropped = 0
 
         for idx, candle in enumerate(candles):
             # 1. Update MarketStateBuilder first
@@ -381,6 +396,20 @@ class BacktestEngine:
             if active_trade is None and pending_setup is None and not account_blown and not day_limit_reached:
                 setups = strategy_engine.run(market_state)
                 if setups:
+                    if len(setups) > 1:
+                        dropped = len(setups) - 1
+                        conflicting_setups_dropped += dropped
+                        if self.conflict_policy == "log_and_first":
+                            logger.warning(
+                                "Bar %d (%s): %d strategies proposed setups; keeping "
+                                "setups[0] (%s), dropping %d conflicting setup(s): %s",
+                                idx,
+                                candle.timestamp,
+                                len(setups),
+                                setups[0].setup_id,
+                                dropped,
+                                [s.setup_id for s in setups[1:]],
+                            )
                     pending_setup = setups[0]
                     pending_setup_idx = idx
 
@@ -413,5 +442,6 @@ class BacktestEngine:
             daily_loss_limit_hits=daily_loss_limit_hits,
             stopped_early=stopped_early,
             stop_reason=stop_reason,
+            conflicting_setups_dropped=conflicting_setups_dropped,
         )
 
