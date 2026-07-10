@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from config.settings import Settings
-from core.exceptions import InvalidTimestampError, MissingColumnError
+from core.exceptions import InvalidNumericDataError, InvalidTimestampError, MissingColumnError
 from core.market_data_provider import IMarketDataProvider
 from core.models import Bar
 from utils.logging import setup_logger
@@ -168,8 +168,12 @@ class CSVDataProvider(IMarketDataProvider):
 
         policy = self.settings.MISSING_VALUE_POLICY
         if policy == "raise":
-            # Will be verified in validate phase, raise now to be safe
-            pass
+            nan_counts = df[cols_to_check].isna().sum()
+            affected = {col: int(n) for col, n in nan_counts.items() if n > 0}
+            raise InvalidNumericDataError(
+                f"Missing/NaN values found in {self.filepath} with MISSING_VALUE_POLICY="
+                f"'raise': {affected}"
+            )
         elif policy == "drop":
             before = len(df)
             df.dropna(subset=cols_to_check, inplace=True)
@@ -190,8 +194,6 @@ class CSVDataProvider(IMarketDataProvider):
             for field in ("open", "high", "low", "close"):
                 val = getattr(bar, field)
                 if val <= 0:
-                    from core.exceptions import InvalidNumericDataError
-
                     raise InvalidNumericDataError(
                         f"Field '{field}' contains negative or zero price: {val}"
                     )
