@@ -355,7 +355,7 @@ halı STRUKTURAL olaraq heç vaxt baş verə bilməzdi. Düzəliş: mitigation i
 zonanın ƏKS TƏRƏFİNDƏN TAM bağlananda (`close < zone.low` bullish üçün və s.) tetiklənir —
 sadə toxunma/retest artıq zonanı etibarsız etmir. Detallar üçün commit mesajına bax.
 
-## Bug #23 (Yüksək prioritet, AYRICA sessiya tələb edir — İNDİ DÜZƏLDİLMƏYİB): trend/break asinxronluğu
+## Bug #23 (Yüksək prioritet, AYRICA sessiya tələb edir — DÜZƏLDİLDİ, bax aşağıda "Bug #23 Düzəlişi"): trend/break asinxronluğu
 
 Bug #22 araşdırması zamanı İKİNCİ, MÜSTƏQİL bir bloklayıcı problem aşkarlandı: konkret
 nümunələrdə (məs. `2022-07-05`, 15+ ardıcıl bar) `structure_state.trend == BULLISH` olduğu
@@ -388,6 +388,57 @@ görmək üçün əvvəlcə Bug #22-nin nəticələrini müşahidə etmək lazı
 artıq bütün pipeline-ı (OB→FVG→likvidlik→displacement→R:R→duplikat) keçdiyini sübut edir.
 AMMA `no_trend`/`wrong_zone`/`last_break_not_bos`/`break_wrong_swing_type` demək olar
 dəyişməyib — **Bug #23 hələ də dominant maneədir**, Bug #22-dən qat-qat böyük təsirə malikdir.
+
+## Bug #23 Düzəlişi (commit `ecaad0c`) və `max_break_age_bars` Ölçüsü
+
+**Seçilən istiqamət:** əvvəlki dizayn təhlilindəki 5 istiqamətdən **2/4** (ən aşağı risk) —
+`breaks_history[-1]`-i kor-koranə götürmək əvəzinə, strategiyalarda paylaşılan
+`_find_latest_matching_bos()` helper-i (`strategy/continuation.py`) `breaks_history`-də geriyə
+axtarıb **trend-ə uyğun istiqamətdə olan ən son BOS**-u tapır (CHoCH-ları və əks-istiqamətli
+BOS-ları keçərək). `max_break_age_bars` (Bug #9) tapılan bu BOS-un yaşına dəyişiklik olmadan
+tətbiq olunur (`last_break` dəyişəni artıq tapılan break-i saxlayır).
+
+**Doğrulama (EURUSD tam tarixi, 99,950 bar):** `setups_generated` 48-dən **68**-ə qalxdı (+42%),
+`last_break_not_bos` kəskin azaldı (Bullish 2,795→645, Bearish 2,656→438) — düzəlişin gözlənilən
+effekti dəqiq təsdiqləndi.
+
+**AMMA tam backtest (real trade simulyasiyası) gözlənilməyən nəticə göstərdi: gəlirlilik
+YAXŞILAŞMADI, PİSLƏŞDİ:**
+
+| Ssenari | Trade | Win Rate | PF | Net Profit | Max DD |
+|---|---|---|---|---|---|
+| Baseline (Bug #23-dən əvvəl) | 48 | 39.6% | **0.91** | -$280.09 | 8.84% |
+| Bug #23 fix, yaş limiti yox | 68 | 32.4% | 0.65 | -$1,621.35 | 16.21% |
+
+**`max_break_age_bars` ölçüsü:** `_find_latest_matching_bos`-un tapdığı BOS-ların yaş
+paylanması ölçüldü (bütün 68 setup, bar sayı ilə) — min=11, p25=20, **median=29**, p75=41.2,
+**p90=54.6**, max=99. Bu ölçüyə əsasən 3 namizəd (median=29, p75=41, p90=55) EURUSD tam
+tarixində ayrıca tam backtest edildi:
+
+| Ssenari | Trade | Win Rate | PF | Net Profit | Max DD |
+|---|---|---|---|---|---|
+| A (median, age≤29) | 35 | 31.4% | 0.60 | -$1,010.38 | 12.68% |
+| B (p75, age≤41) | 51 | 31.4% | 0.61 | -$1,391.10 | 16.00% |
+| C (p90, age≤55) | 61 | 34.4% | 0.72 | -$1,162.52 | 11.63% |
+
+**Qərar: `max_break_age_bars` default `None` olaraq saxlanıldı, heç bir namizəd tətbiq
+edilmədi.** Səbəb: **heç bir namizəd orijinal baseline-ı (PF 0.91) bərpa etmir** — ən yaxşısı
+belə (C, age≤55, PF 0.72) ondan aşağı qalır, daha çox trade açır və daha yüksək drawdown
+daşıyır. Üstəlik ən sərt namizəd (A, median=29) ən PİS PF-i verdi (0.60) — yəni sərtliyin
+özü keyfiyyəti bərpa etmir, sadəcə sayı azaldır.
+
+**Kök nəticə: yaş həddi kök problemi həll etmir, çünki problem BOS-un YAŞINDA deyil,
+KEYFİYYƏTİNDƏDİR.** `_find_latest_matching_bos` strukturca "düzgün" (trend-ə uyğun istiqamətli
+BOS) bar-ları tapır, amma bu BOS-un TAPILDIĞI kontekstin (hansı hərəkətin/leg-in nəticəsi
+olduğunun) keyfiyyətini qiymətləndirmir — sadəcə "nə qədər köhnədir" sualına cavab verir,
+"bu strukturca güclüdürmü" sualına yox.
+
+**VACİB ƏLAQƏ — Bug #11-in prioriteti YENİDƏN qiymətləndirilməlidir.** Bu tapıntı, əvvəllər
+təxirə salınmış [Bug #11: Eyni Displacement Leg Tələbi](#bug-11-eyni-displacement-leg-tələbi--təxirə-salındı)-nin
+nə üçün lazım olduğunu göstərir: real backtest datası göstərir ki, sadə yaş-filtri (BOS nə
+qədər köhnədir) kifayət deyil — BOS-un strukturla ƏLAQƏSİ (hansı displacement leg-ə aid
+olduğu) əsl keyfiyyət göstəricisi ola bilər, sırf bar-sayı yaşı yox. Bug #11 Mərhələ A
+refaktorundan sonra (yeni strategiya çərçivəsi daxilində) yenidən nəzərdən keçirilməlidir.
 
 ---
 
