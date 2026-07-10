@@ -30,6 +30,14 @@ class RejectionReason(str, Enum):
     RR_GATE_FAILED = "rr_gate_failed"
     DUPLICATE_SETUP = "duplicate_setup"
 
+    # AccumulationBreakoutStrategy gates (5 Candle Accumulation Breakout Retest)
+    NOT_IN_SESSION = "not_in_session"
+    ACCUMULATION_NOT_READY = "accumulation_not_ready"
+    NO_BREAKOUT = "no_breakout"
+    NO_VOLUME_SPIKE = "no_volume_spike"
+    NO_RETEST = "no_retest"
+    TRADE_ALREADY_TAKEN = "trade_already_taken"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""
