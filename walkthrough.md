@@ -561,3 +561,27 @@ simulyasiyası). Aşağı-orta prioritet, ayrıca funksionallıq artımı kimi b
 et, `Bar` konstruksiyasında `getattr` fallback-ini saxlamaqla (köhnə, spread sütunu olmayan
 CSV-lər üçün geriyə uyğunluq). Differential test tələb olunur: spread sütunlu və sütunsuz
 CSV-lərin hər ikisinin düzgün yükləndiyini yoxlayan.
+
+## Strategiya #3 (Opening Range Breakout) — USTEC/XAUUSD M1 Nəticəsi
+
+`strategy/opening_range_breakout.py`-da portlandı (bax commit `37ed7b2`). M1 tarixi datası
+yalnız broker limitinə görə ~3.3-3.5 ay geriyə gedir (USTEC: 2026-03-30-dan, XAUUSD:
+2026-03-25-dan). 4 kombinasiya (2 simvol × 2 risk_reward) tam tarixdə backtest edildi:
+
+| Ssenari | Trade | Win Rate | PF | Net Profit | Max DD |
+|---|---|---|---|---|---|
+| USTEC-2R | 52 | 26.9% | 0.66 | -$1,311.55 | 13.87% |
+| **USTEC-3R** | 45 | 28.9% | **1.09** | **+$359.75** | 12.14% |
+| XAUUSD-2R | 75 | 29.3% | 0.62 | -$2,032.37 | 23.01% |
+| XAUUSD-3R | 73 | 21.9% | 0.67 | -$1,971.30 | 23.43% |
+
+**VACİB QEYD — USTEC-3R (PF 1.09, +$359.75, 45 trade/~3.3 ay) YALNIZ İLKİN, KİÇİK-NÜMUNƏ
+göstəricisidir, TƏSDİQ ÜÇÜN DEYİL.** Statistik əhəmiyyətlilik üçün minimum bunlar lazımdır:
+(a) daha uzun tarixi dövr (broker limitinə görə hazırda mümkün deyil, YALNIZ vaxt keçdikcə
+broker-in M1 tarixçəsi uzanacaq), (b) ya da eyni strategiyanın DİGƏR indekslər/simvollarda
+(əgər mövcuddursa) təsdiqlənməsi. Bu nəticəyə əsasən HEÇ BİR kommersiya/canlı-ticarət qərarı
+verilməməlidir.
+
+Bug #28 ölçüsü: `pending_order_expiry_bars=1` default-unun bu strategiyaya təsiri ölçüldü
+(`setups_generated` vs faktiki `total_trades`) — fərq cəmi ~2% (USTEC-2R: 53→52, USTEC-3R:
+46→45), 15-20% həddindən çox aşağı. Dəyişiklik tələb olunmur, default saxlanıldı.
