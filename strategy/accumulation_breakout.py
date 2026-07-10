@@ -25,16 +25,21 @@ config/settings.py Settings.TIMEZONE, default "UTC", and CSVDataProvider
 localizes/converts to it). The original Pine script's session string
 ("0930-1100") is evaluated against the *chart's* session timezone, which for
 an FX pair on TradingView is typically the exchange/instrument timezone
-(often America/New_York), NOT necessarily UTC. session_start/session_end
-here are compared directly against Bar.timestamp.time(), i.e. as literal UTC
-clock time -- if the intent was New York session hours, the caller must pass
-the UTC-equivalent times (e.g. 13:30-15:00 UTC during EDT, 14:30-16:00 UTC
-during EST) instead of the defaults.
+(commonly America/New_York), NOT UTC. session_start/session_end are
+therefore interpreted as **New York local clock time** (default
+"09:30"-"11:00" NY), and each bar's UTC timestamp is converted to NY local
+time via `zoneinfo` before comparison -- so the UTC-equivalent boundary
+shifts correctly across the DST transition (13:30-15:00 UTC in EDT / roughly
+March-November, 14:30-16:00 UTC in EST / roughly November-March), rather
+than using one fixed UTC offset year-round. session_timezone is
+configurable in case a future ported strategy needs a different exchange
+session.
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from core.models import Bar, SignalDirection
 from market_structure.structure_models import MarketState
@@ -52,6 +57,7 @@ class AccumulationBreakoutConfig:
     require_volume_filter: bool = True
     session_start: time = time(9, 30)
     session_end: time = time(11, 0)
+    session_timezone: str = "America/New_York"
     body_multiplier: float = 1.3
     accumulation_bars: int = 5
     sma_period: int = 20
@@ -72,6 +78,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         require_volume_filter: bool = True,
         session_start: time = time(9, 30),
         session_end: time = time(11, 0),
+        session_timezone: str = "America/New_York",
         body_multiplier: float = 1.3,
         accumulation_bars: int = 5,
         sma_period: int = 20,
@@ -85,8 +92,14 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             require_volume_filter: Whether the volume-spike gate is enforced.
                 Disable for Forex data where tick-volume does not represent
                 real traded volume.
-            session_start: UTC time-of-day the scan session opens (inclusive).
-            session_end: UTC time-of-day the scan session closes (exclusive).
+            session_start: Local time-of-day (in session_timezone) the scan
+                session opens (inclusive).
+            session_end: Local time-of-day (in session_timezone) the scan
+                session closes (exclusive).
+            session_timezone: IANA timezone name used to convert each bar's
+                (UTC) timestamp before comparing against session_start/end,
+                so the DST transition is handled correctly (default: the NY
+                exchange session the original Pine script scans).
             body_multiplier: Breakout candle body threshold as a multiple of SMA-20 body.
             accumulation_bars: Number of contained candles required to arm the range.
             sma_period: Lookback window for the body/volume moving averages.
@@ -98,6 +111,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             self.require_volume_filter = config.require_volume_filter
             self.session_start = config.session_start
             self.session_end = config.session_end
+            self.session_timezone = config.session_timezone
             self.body_multiplier = config.body_multiplier
             self.accumulation_bars = config.accumulation_bars
             self.sma_period = config.sma_period
@@ -107,10 +121,12 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             self.require_volume_filter = require_volume_filter
             self.session_start = session_start
             self.session_end = session_end
+            self.session_timezone = session_timezone
             self.body_multiplier = body_multiplier
             self.accumulation_bars = accumulation_bars
             self.sma_period = sma_period
 
+        self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
         self._reset_session_state()
         self._was_in_session = False
@@ -137,9 +153,14 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         return None
 
     def _in_session(self, timestamp: datetime) -> bool:
-        """Whether the given (UTC) timestamp falls in [session_start, session_end)."""
-        t = timestamp.time()
-        return self.session_start <= t < self.session_end
+        """Whether the given timestamp falls in [session_start, session_end).
+
+        Converts to session_timezone (DST-aware via zoneinfo) before
+        comparing time-of-day, so a fixed NY local session (e.g. 09:30-11:00)
+        maps to the correct UTC window on both sides of the DST transition.
+        """
+        local_time = timestamp.astimezone(self._session_tz).time()
+        return self.session_start <= local_time < self.session_end
 
     def _update_accumulation(self, bar: Bar, prev_bar: Bar | None) -> None:
         """Extends or restarts the accumulation range for one in-session bar.

@@ -56,7 +56,7 @@ class TestAccumulationDetection:
 
     def test_five_valid_candles_arm_the_range(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         results = _feed_accumulation(state, strategy)
 
         # Bars 1-4: range not yet ready.
@@ -72,7 +72,7 @@ class TestAccumulationDetection:
 
     def test_containment_break_restarts_the_run(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
 
         _feed(state, strategy, ACCUMULATION_BARS[0])
         _feed(state, strategy, ACCUMULATION_BARS[1])
@@ -89,7 +89,7 @@ class TestAccumulationDetection:
     def test_no_setup_outside_session(self) -> None:
         """Bars entirely outside the session window never arm the range."""
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
 
         outside_bars = [
             _bar(12, 0, 1.1000, 1.1010, 1.0995, 1.1005),
@@ -111,7 +111,7 @@ class TestBreakoutAndRetest:
 
     def test_breakout_and_immediate_retest_generates_setup(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
 
         # Strong bullish candle: body=0.0025 (>1.3x avg body 0.0005), volume=200
@@ -135,7 +135,7 @@ class TestBreakoutAndRetest:
         the accumulation-building step -- not the breakout/retest check -- is
         wrapped in `if inSession`)."""
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
 
         # Gap-up breakout: low (1.1020) is already above range_high (1.1012),
@@ -157,7 +157,9 @@ class TestBreakoutAndRetest:
 
     def test_no_volume_spike_rejection(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5, require_volume_filter=True)
+        strategy = AccumulationBreakoutStrategy(
+            sma_period=5, require_volume_filter=True, session_timezone="UTC"
+        )
         _feed_accumulation(state, strategy)
 
         # Strong body and price beyond range, but volume stays at baseline (100).
@@ -170,7 +172,9 @@ class TestBreakoutAndRetest:
 
     def test_volume_filter_disabled_ignores_low_volume(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5, require_volume_filter=False)
+        strategy = AccumulationBreakoutStrategy(
+            sma_period=5, require_volume_filter=False, session_timezone="UTC"
+        )
         _feed_accumulation(state, strategy)
 
         weak_volume_breakout = _bar(10, 45, 1.1005, 1.1032, 1.1004, 1.1030, volume=100.0)
@@ -181,7 +185,7 @@ class TestBreakoutAndRetest:
 
     def test_no_breakout_rejection_when_body_too_small(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
         # Bar 5 itself already falls through to the breakout check (range_ready
         # becomes true and is re-evaluated the same bar) and records its own
@@ -204,7 +208,7 @@ class TestOneTradePerSession:
 
     def test_trade_already_taken_blocks_further_signals_same_session(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
 
         breakout_bar = _bar(10, 45, 1.1005, 1.1032, 1.1004, 1.1030, volume=200.0)
@@ -221,7 +225,7 @@ class TestOneTradePerSession:
 
     def test_new_session_resets_state_and_allows_a_new_trade(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
 
         breakout_bar = _bar(10, 45, 1.1005, 1.1032, 1.1004, 1.1030, volume=200.0)
@@ -249,7 +253,7 @@ class TestDiagnosticsAndConfig:
 
     def test_reset_clears_diagnostics_and_session_state(self) -> None:
         state = _new_state()
-        strategy = AccumulationBreakoutStrategy(sma_period=5)
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
         assert strategy._range_ready is True
 
@@ -284,3 +288,47 @@ class TestDiagnosticsAndConfig:
         assert strategy.body_multiplier == 1.5
         assert strategy.accumulation_bars == 4
         assert strategy.sma_period == 10
+
+
+class TestDSTAwareSession:
+    """The default NY session (09:30-11:00 local) must map to different UTC
+    clock windows depending on whether the bar falls in EDT or EST, since
+    Bar.timestamp is UTC but the Pine script's session is exchange-local."""
+
+    def test_ny_session_boundary_shifts_between_winter_and_summer(self) -> None:
+        strategy = AccumulationBreakoutStrategy()  # default session_timezone="America/New_York"
+
+        # January (EST, UTC-5): 09:30-11:00 NY == 14:30-16:00 UTC.
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 1, 5, 15, 59, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 16, 0, tzinfo=timezone.utc)) is False
+
+        # July (EDT, UTC-4): 09:30-11:00 NY == 13:30-15:00 UTC -- one hour
+        # earlier in UTC than the January window above.
+        assert strategy._in_session(datetime(2026, 7, 5, 13, 30, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 13, 15, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 59, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 15, 0, tzinfo=timezone.utc)) is False
+
+    def test_same_utc_instant_differs_across_the_dst_boundary(self) -> None:
+        """The identical UTC clock time (14:15) is outside the NY session in
+        January (09:15 EST, before 09:30 open) but inside it in July (10:15
+        EDT, within 09:30-11:00) -- proving the session window is computed
+        per-bar-date via zoneinfo, not a single fixed UTC offset."""
+        strategy = AccumulationBreakoutStrategy()
+
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 15, tzinfo=timezone.utc)) is True
+
+    def test_utc_session_timezone_bypasses_dst_conversion(self) -> None:
+        """session_timezone='UTC' (used by the other tests in this file)
+        treats session_start/session_end as literal UTC clock time, with no
+        DST shift -- the January/July boundary difference above does not
+        apply."""
+        strategy = AccumulationBreakoutStrategy(session_timezone="UTC")
+
+        assert strategy._in_session(datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 9, 30, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 30, tzinfo=timezone.utc)) is False
