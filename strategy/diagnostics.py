@@ -44,6 +44,12 @@ class RejectionReason(str, Enum):
     WRONG_SIDE_OF_MID = "wrong_side_of_mid"
     NO_SWEEP = "no_sweep"
 
+    # OpeningRangeBreakoutStrategy gates (Strategy #3)
+    # Reuses NO_BREAKOUT, NO_VOLUME_SPIKE above for its own breakout/volume gates.
+    RANGE_NOT_READY = "range_not_ready"
+    WRONG_CLOSE_SIDE = "wrong_close_side"
+    TRADE_ALREADY_TAKEN_TODAY = "trade_already_taken_today"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""
