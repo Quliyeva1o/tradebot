@@ -361,6 +361,172 @@ class TestBearishContinuationDiagnostics:
         assert strategy.diagnostics.rejections == {}
 
 
+class TestBug23TrendBreakAsynchrony:
+    """Differential tests for Bug #23 (trend/break asynchrony).
+
+    Reproduces the scenario recorded in walkthrough.md: `structure_engine.
+    check_structural_break()` is bar-driven and fires on a raw bar close
+    crossing a MAJOR level, independent of `update()`'s swing-driven trend
+    machine. A transient bar can cross a MAJOR low and get permanently
+    recorded as a CHoCH while `current_trend` happens to be BULLISH, then
+    the trend keeps reconfirming BULLISH off newer swings for many bars
+    without any new break event -- leaving that stale CHoCH as
+    `breaks_history[-1]` long after it stopped being structurally relevant.
+
+    Old behavior (`breaks[-1]` taken unconditionally) rejected these bars
+    with LAST_BREAK_NOT_BOS even when a valid, trend-confirming BOS was
+    sitting earlier in the same history. The fix (`_find_latest_matching_bos`)
+    scans backward for the latest BOS matching the trend direction instead.
+    """
+
+    def test_skips_stale_choch_to_find_earlier_matching_bos_bullish(self) -> None:
+        """Bar 41 CHoCH (stale) is last; a real bullish BOS sits earlier -> found."""
+        state = create_valid_bullish_market_state()
+        valid_bos = state.structure_state.breaks_history[-1]
+        assert valid_bos.break_id == "break_bos_bullish"
+        assert valid_bos.break_type == BreakType.BOS
+        assert valid_bos.broken_swing.type == SwingType.HIGH
+
+        # Simulate the "Bar 41" stale CHoCH: a raw bar-close crossing a MAJOR
+        # low while trend was already BULLISH, recorded chronologically AFTER
+        # the real BOS, with no new swing/BOS event since.
+        stale_low_swing = Swing(
+            id="swing_27_low",
+            timestamp=state.bars[27].timestamp,
+            index=27,
+            price=1.0950,
+            type=SwingType.LOW,
+            classification=SwingClassification.MAJOR,
+        )
+        stale_choch = StructureBreak(
+            break_id="break_choch_stale",
+            break_type=BreakType.CHoCH,
+            broken_swing=stale_low_swing,
+            breaking_bar=state.bars[28],
+            timestamp=state.bars[28].timestamp,
+        )
+        state.structure_state.breaks_history.append(stale_choch)
+        assert state.structure_state.breaks_history[-1] is stale_choch
+
+        strategy = BullishContinuationStrategy()
+        setup = strategy.evaluate(state)
+
+        # Old code (breaks[-1] == stale_choch, type CHoCH) would have
+        # rejected this as LAST_BREAK_NOT_BOS. The fix finds the earlier
+        # matching BOS instead, so the setup is generated.
+        assert setup is not None
+        assert strategy.diagnostics.rejections == {}
+        assert setup.related_structure_break.break_id == "break_bos_bullish"
+
+    def test_skips_stale_choch_to_find_earlier_matching_bos_bearish(self) -> None:
+        """Bearish mirror: stale CHoCH-HIGH is last, real bearish BOS sits earlier."""
+        state = create_valid_bearish_market_state()
+        valid_bos = state.structure_state.breaks_history[-1]
+        assert valid_bos.break_id == "break_bos_bearish"
+
+        stale_high_swing = Swing(
+            id="swing_27_high",
+            timestamp=state.bars[27].timestamp,
+            index=27,
+            price=1.1050,
+            type=SwingType.HIGH,
+            classification=SwingClassification.MAJOR,
+        )
+        stale_choch = StructureBreak(
+            break_id="break_choch_stale",
+            break_type=BreakType.CHoCH,
+            broken_swing=stale_high_swing,
+            breaking_bar=state.bars[28],
+            timestamp=state.bars[28].timestamp,
+        )
+        state.structure_state.breaks_history.append(stale_choch)
+
+        strategy = BearishContinuationStrategy()
+        setup = strategy.evaluate(state)
+
+        assert setup is not None
+        assert strategy.diagnostics.rejections == {}
+        assert setup.related_structure_break.break_id == "break_bos_bearish"
+
+    def test_no_matching_bos_anywhere_in_history_still_rejected(self) -> None:
+        """No real BOS exists in either entry -> must still reject (no false accept)."""
+        state = create_valid_bullish_market_state()
+        # Downgrade the one valid BOS to a CHoCH, then append the stale
+        # CHoCH exactly as in the "found" test above: neither entry is a
+        # matching BOS anywhere in history, so the fix must not invent one.
+        old_bos = state.structure_state.breaks_history[-1]
+        state.structure_state.breaks_history[-1] = StructureBreak(
+            break_id=old_bos.break_id,
+            break_type=BreakType.CHoCH,
+            broken_swing=old_bos.broken_swing,
+            breaking_bar=old_bos.breaking_bar,
+            timestamp=old_bos.timestamp,
+        )
+        stale_low_swing = Swing(
+            id="swing_27_low",
+            timestamp=state.bars[27].timestamp,
+            index=27,
+            price=1.0950,
+            type=SwingType.LOW,
+            classification=SwingClassification.MAJOR,
+        )
+        state.structure_state.breaks_history.append(
+            StructureBreak(
+                break_id="break_choch_stale",
+                break_type=BreakType.CHoCH,
+                broken_swing=stale_low_swing,
+                breaking_bar=state.bars[28],
+                timestamp=state.bars[28].timestamp,
+            )
+        )
+
+        strategy = BullishContinuationStrategy()
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.LAST_BREAK_NOT_BOS] == 1
+
+    def test_multiple_breaks_wrong_direction_bos_rejected_as_wrong_swing_type(self) -> None:
+        """A BOS exists in history, but breaking a LOW (wrong direction for bullish);
+        must reject as BREAK_WRONG_SWING_TYPE, not silently match it."""
+        state = create_valid_bullish_market_state()
+        old_bos = state.structure_state.breaks_history[-1]
+        wrong_direction_low = Swing(
+            id="swing_10_low_wrong",
+            timestamp=old_bos.broken_swing.timestamp,
+            index=old_bos.broken_swing.index,
+            price=1.0900,
+            type=SwingType.LOW,
+            classification=SwingClassification.MAJOR,
+        )
+        state.structure_state.breaks_history[-1] = StructureBreak(
+            break_id=old_bos.break_id,
+            break_type=BreakType.BOS,
+            broken_swing=wrong_direction_low,
+            breaking_bar=old_bos.breaking_bar,
+            timestamp=old_bos.timestamp,
+        )
+        stale_low_swing = Swing(
+            id="swing_27_low",
+            timestamp=state.bars[27].timestamp,
+            index=27,
+            price=1.0950,
+            type=SwingType.LOW,
+            classification=SwingClassification.MAJOR,
+        )
+        state.structure_state.breaks_history.append(
+            StructureBreak(
+                break_id="break_choch_stale",
+                break_type=BreakType.CHoCH,
+                broken_swing=stale_low_swing,
+                breaking_bar=state.bars[28],
+                timestamp=state.bars[28].timestamp,
+            )
+        )
+
+        strategy = BullishContinuationStrategy()
+        assert strategy.evaluate(state) is None
+        assert strategy.diagnostics.rejections[RejectionReason.BREAK_WRONG_SWING_TYPE] == 1
+
+
 class TestStrategyEngineDiagnosticsAggregation:
     """Verifies StrategyEngine.get_diagnostics() aggregates per-strategy summaries."""
 

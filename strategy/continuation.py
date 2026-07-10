@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core.models import SignalDirection
-from market_structure.structure_models import BreakType, MarketState, StructureTrend
+from market_structure.structure_models import BreakType, MarketState, StructureBreak, StructureTrend
 from market_structure.swing_models import SwingType
 from smc.fvg import FairValueGap, FVGDirection
 from smc.liquidity import LiquidityType
@@ -14,6 +14,36 @@ from smc.premium_discount import ZoneType
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+
+
+def _find_latest_matching_bos(
+    breaks_history: list[StructureBreak], expected_swing_type: SwingType
+) -> StructureBreak | None:
+    """Finds the most recent BOS break in the trend-aligned direction (Bug #23).
+
+    `breaks_history` is append-only and its entries are never reclassified:
+    a break's `break_type` reflects `current_trend` at the instant it was
+    detected, but `current_trend` keeps advancing off the latest confirmed
+    swing afterward (see structure_engine.py `update` vs
+    `check_structural_break`). This means the true most-recent entry
+    (`breaks_history[-1]`) can be a stale CHoCH (or a BOS of the wrong
+    direction) left over from before the trend last flipped, while a valid,
+    trend-confirming BOS sits earlier in the list. Scanning backward for the
+    latest BOS whose broken swing matches the expected direction (instead of
+    blindly trusting the last element) finds that confirming break directly,
+    without needing to fix the engine's two-state-machine asynchrony itself.
+
+    Args:
+        breaks_history: Chronological list of structure breaks (oldest first).
+        expected_swing_type: HIGH for bullish continuation, LOW for bearish.
+
+    Returns:
+        The most recent matching BOS, or None if none exists in the history.
+    """
+    for brk in reversed(breaks_history):
+        if brk.break_type == BreakType.BOS and brk.broken_swing.type == expected_swing_type:
+            return brk
+    return None
 
 
 def _select_best_order_block(
@@ -161,13 +191,16 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.WRONG_ZONE)
 
         # --- Rule 2 & 3: Break Check ---
+        # Bug #23: search for the latest trend-aligned BOS instead of trusting
+        # breaks_history[-1], which can be a stale/mismatched entry (see
+        # _find_latest_matching_bos docstring).
         breaks = market_state.structure_state.breaks_history
         if not breaks:
             return self._reject(RejectionReason.NO_BREAK_HISTORY)
-        last_break = breaks[-1]
-        if last_break.break_type != BreakType.BOS:
-            return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
-        if last_break.broken_swing.type != SwingType.HIGH:
+        last_break = _find_latest_matching_bos(breaks, SwingType.HIGH)
+        if last_break is None:
+            if not any(b.break_type == BreakType.BOS for b in breaks):
+                return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
             return self._reject(RejectionReason.BREAK_WRONG_SWING_TYPE)
 
         # Get latest closed bar
@@ -371,13 +404,16 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.WRONG_ZONE)
 
         # --- Rule 2 & 3: Break Check ---
+        # Bug #23: search for the latest trend-aligned BOS instead of trusting
+        # breaks_history[-1], which can be a stale/mismatched entry (see
+        # _find_latest_matching_bos docstring).
         breaks = market_state.structure_state.breaks_history
         if not breaks:
             return self._reject(RejectionReason.NO_BREAK_HISTORY)
-        last_break = breaks[-1]
-        if last_break.break_type != BreakType.BOS:
-            return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
-        if last_break.broken_swing.type != SwingType.LOW:
+        last_break = _find_latest_matching_bos(breaks, SwingType.LOW)
+        if last_break is None:
+            if not any(b.break_type == BreakType.BOS for b in breaks):
+                return self._reject(RejectionReason.LAST_BREAK_NOT_BOS)
             return self._reject(RejectionReason.BREAK_WRONG_SWING_TYPE)
 
         # Get latest closed bar
