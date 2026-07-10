@@ -20,6 +20,7 @@ logs/
 *.log
 data/**/*.csv
 data/**/*.sqlite
+artifacts/diagnostics_results.json
 
 # IDEs & System files
 .vscode/
