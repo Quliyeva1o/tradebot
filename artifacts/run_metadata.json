@@ -1,14 +1,14 @@
 {
     "symbol": "EURUSD",
-    "timeframe": "H1",
-    "start_date": "2026-01-01 00:00:00",
-    "end_date": "2026-01-05 04:00:00",
-    "execution_timestamp": "2026-07-08 16:53:27",
-    "elapsed_time_seconds": 0.0013032997958362103,
+    "timeframe": "M15",
+    "start_date": "2022-06-29 22:15:00",
+    "end_date": "2026-07-09 00:00:00",
+    "execution_timestamp": "2026-07-10 11:45:10",
+    "elapsed_time_seconds": 2215.2376020999995,
     "initial_balance": 10000.0,
-    "final_balance": 10000.0,
-    "total_trades": 0,
-    "win_rate": 0.0,
+    "final_balance": 8378.649286962125,
+    "total_trades": 68,
+    "win_rate": 0.3235294117647059,
     "stopped_early": false,
     "stop_reason": null
 }
