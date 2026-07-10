@@ -46,6 +46,7 @@ from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+from strategy.session_utils import is_in_session
 
 
 @dataclass(frozen=True)
@@ -159,8 +160,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         comparing time-of-day, so a fixed NY local session (e.g. 09:30-11:00)
         maps to the correct UTC window on both sides of the DST transition.
         """
-        local_time = timestamp.astimezone(self._session_tz).time()
-        return self.session_start <= local_time < self.session_end
+        return is_in_session(timestamp, self.session_start, self.session_end, self._session_tz)
 
     def _update_accumulation(self, bar: Bar, prev_bar: Bar | None) -> None:
         """Extends or restarts the accumulation range for one in-session bar.

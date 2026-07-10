@@ -38,6 +38,12 @@ class RejectionReason(str, Enum):
     NO_RETEST = "no_retest"
     TRADE_ALREADY_TAKEN = "trade_already_taken"
 
+    # NasdaqMidlineSweepStrategy gates (NASDAQ Midline Sweep Strategy v2)
+    # Reuses NO_DISPLACEMENT above for its own displacement/strong-move gate.
+    ZONE_NOT_READY = "zone_not_ready"
+    WRONG_SIDE_OF_MID = "wrong_side_of_mid"
+    NO_SWEEP = "no_sweep"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

@@ -1,0 +1,289 @@
+"""NasdaqMidlineSweepStrategy: port of the user's "NASDAQ Midline Sweep
+Strategy v2 (Filtered)" TradingView Pine Script strategy.
+
+Original Pine logic (daily-scoped state machine, run natively on M5 -- see
+"Multi-timeframe" note below):
+1. During a fixed build session (default "0930-0950" NY), accumulate the
+   running average of closes.
+2. At the bar the build session ends, freeze that average as `mid`, and
+   derive a fixed zone [`mid` - range_size, `mid` + range_size].
+3. On any later bar (same day), a long signal fires when: price closes well
+   above the midline (> mid + mid_buffer), the bar's low dipped below the
+   upper zone edge but its close reclaimed above it (a sweep+reclaim of the
+   upper edge), and the candle's body is a strong displacement (>1.2x SMA-20
+   body). The short signal mirrors this around the lower edge.
+4. Only one trade per day; all state resets at the next build session.
+
+Multi-timeframe note: the original Pine script pulls 5-minute data via
+`request.security(syminfo.tickerid, "5", ...)` regardless of the chart's own
+timeframe, while its `avgBody` displacement filter is computed from the
+*chart's own* (potentially different-timeframe) bars -- an inconsistency in
+the source script if the chart isn't already M5. Per the user's decision,
+this strategy is ported to run **natively on M5** (single MarketState, no
+"chart timeframe" concept): this removes the request.security dependency
+entirely (this codebase's TradeSetupStrategy interface takes one MarketState
+at a time) and resolves the avgBody ambiguity, since "chart" and "5-minute"
+bars become the same series. It also better matches the 20-minute build
+session, which produces a meaningfully coarse 1-2 bar average on any
+timeframe coarser than M5.
+
+Day-reset note: the original Pine resets on `ta.change(time("D"))` (calendar
+day change). This is ported as a transition-based reset (not build-session ->
+build-session, mirroring AccumulationBreakoutStrategy) rather than a literal
+calendar-date comparison: since mid/upper/lower/zone_ready/trade_taken are
+only ever written during or immediately after the build session, and the
+build session always precedes the next day's trading activity, resetting at
+"the next build session opens" is behaviorally equivalent to resetting at
+midnight for every bar that is ever evaluated for a signal, while avoiding a
+separate calendar-day-boundary code path.
+"""
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+from core.models import SignalDirection
+from market_structure.structure_models import MarketState
+from strategy.diagnostics import RejectionReason, StrategyDiagnostics
+from strategy.interfaces import TradeSetupStrategy
+from strategy.models import TradeSetup
+from strategy.session_utils import is_in_session
+
+
+@dataclass(frozen=True)
+class NasdaqMidlineSweepConfig:
+    """Configuration class for NasdaqMidlineSweepStrategy."""
+
+    range_size: float = 10.0
+    risk_reward: float = 2.0
+    mid_buffer: float = 5.0
+    body_multiplier: float = 1.2
+    sma_period: int = 20
+    build_session_start: time = time(9, 30)
+    build_session_end: time = time(9, 50)
+    session_timezone: str = "America/New_York"
+
+
+class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
+    """Ports the "NASDAQ Midline Sweep Strategy v2 (Filtered)" Pine script.
+
+    Evaluates whether the running daily-scoped state (fixed midline/zone,
+    trade-taken guard) plus the current M5 bar satisfy a valid sweep+reclaim
+    setup, without mutating MarketState.
+    """
+
+    def __init__(
+        self,
+        range_size: float = 10.0,
+        risk_reward: float = 2.0,
+        mid_buffer: float = 5.0,
+        body_multiplier: float = 1.2,
+        sma_period: int = 20,
+        build_session_start: time = time(9, 30),
+        build_session_end: time = time(9, 50),
+        session_timezone: str = "America/New_York",
+        config: NasdaqMidlineSweepConfig | None = None,
+    ) -> None:
+        """Initializes the NasdaqMidlineSweepStrategy with parameters or config.
+
+        Args:
+            range_size: Fixed +/- offset from the midline defining the zone edges.
+            risk_reward: Fixed reward:risk multiple applied to the stop distance.
+            mid_buffer: Minimum distance beyond the midline the close must reach
+                before a sweep on that side is considered.
+            body_multiplier: Breakout candle body threshold as a multiple of SMA-20 body.
+            sma_period: Lookback window (in M5 bars) for the body moving average.
+            build_session_start: Local time-of-day (in session_timezone) the
+                midline-building window opens (inclusive).
+            build_session_end: Local time-of-day (in session_timezone) the
+                midline-building window closes (exclusive); the midline is
+                frozen on the first bar after this.
+            session_timezone: IANA timezone name the build session is defined
+                in (default: the NY exchange session the original Pine script
+                scans).
+            config: NasdaqMidlineSweepConfig options overlay.
+        """
+        if config is not None:
+            self.range_size = config.range_size
+            self.risk_reward = config.risk_reward
+            self.mid_buffer = config.mid_buffer
+            self.body_multiplier = config.body_multiplier
+            self.sma_period = config.sma_period
+            self.build_session_start = config.build_session_start
+            self.build_session_end = config.build_session_end
+            self.session_timezone = config.session_timezone
+        else:
+            self.range_size = range_size
+            self.risk_reward = risk_reward
+            self.mid_buffer = mid_buffer
+            self.body_multiplier = body_multiplier
+            self.sma_period = sma_period
+            self.build_session_start = build_session_start
+            self.build_session_end = build_session_end
+            self.session_timezone = session_timezone
+
+        self._session_tz = ZoneInfo(self.session_timezone)
+        self.diagnostics = StrategyDiagnostics()
+        self._reset_day_state()
+        self._was_in_build_session = False
+
+    def _reset_day_state(self) -> None:
+        """Resets the Pine `var` daily-scoped state (mirrors `if newDay`)."""
+        self._sum_close = 0.0
+        self._count_close = 0
+        self._mid: float | None = None
+        self._upper: float | None = None
+        self._lower: float | None = None
+        self._zone_ready = False
+        self._trade_taken = False
+
+    def reset(self) -> None:
+        """Resets diagnostics and all daily-scoped state (fresh backtest run)."""
+        self.diagnostics.reset()
+        self._reset_day_state()
+        self._was_in_build_session = False
+
+    def _reject(self, reason: RejectionReason) -> None:
+        """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""
+        self.diagnostics.record_rejection(reason)
+        return None
+
+    def _in_build_session(self, timestamp: datetime) -> bool:
+        """Whether the given timestamp falls in [build_session_start, build_session_end)."""
+        return is_in_session(
+            timestamp, self.build_session_start, self.build_session_end, self._session_tz
+        )
+
+    def evaluate(self, market_state: MarketState) -> TradeSetup | None:
+        """Evaluates rules for the fixed-range midline sweep setup.
+
+        Required checks:
+        1. Daily zone is ready (build session has completed and frozen a midline)
+        2. No trade already taken this day
+        3. Close is beyond the midline by at least mid_buffer, on one side
+        4. That side's zone edge was swept (low/high crossed it) and reclaimed
+        5. Strong displacement body (>body_multiplier x SMA-N body)
+        6. Positive risk distance and a valid risk_reward configuration
+        """
+        self.diagnostics.record_evaluation()
+
+        latest_bar = market_state.get_latest_bar()
+        if latest_bar is None:
+            return self._reject(RejectionReason.NO_LATEST_BAR)
+
+        prev_in_build_session = self._was_in_build_session
+        in_build_session = self._in_build_session(latest_bar.timestamp)
+        new_build_session = in_build_session and not prev_in_build_session
+        session_end = (not in_build_session) and prev_in_build_session
+        if new_build_session:
+            self._reset_day_state()
+        self._was_in_build_session = in_build_session
+
+        # --- Rule 1a: Accumulate the build-session midline ---
+        if in_build_session:
+            self._sum_close += latest_bar.close
+            self._count_close += 1
+
+        # --- Rule 1b: Freeze the midline/zone at build-session end ---
+        if session_end and self._count_close > 0:
+            self._mid = self._sum_close / self._count_close
+            self._upper = self._mid + self.range_size
+            self._lower = self._mid - self.range_size
+            self._zone_ready = True
+
+        if not self._zone_ready:
+            return self._reject(RejectionReason.ZONE_NOT_READY)
+
+        # --- Rule 2: One Trade Per Day Guard ---
+        if self._trade_taken:
+            return self._reject(RejectionReason.TRADE_ALREADY_TAKEN)
+
+        # --- Rule 3: Mid-Buffer Side Filter ---
+        long_ok = latest_bar.close > self._mid + self.mid_buffer
+        short_ok = latest_bar.close < self._mid - self.mid_buffer
+
+        if not long_ok and not short_ok:
+            return self._reject(RejectionReason.WRONG_SIDE_OF_MID)
+
+        # --- Rule 4: Sweep+Reclaim Check ---
+        long_sweep = latest_bar.low < self._upper and latest_bar.close > self._upper
+        short_sweep = latest_bar.high > self._lower and latest_bar.close < self._lower
+
+        if long_ok and not long_sweep:
+            return self._reject(RejectionReason.NO_SWEEP)
+        if short_ok and not short_sweep:
+            return self._reject(RejectionReason.NO_SWEEP)
+
+        # --- Rule 5: Displacement Check ---
+        recent_bars = market_state.bars_view()
+        window = recent_bars[-self.sma_period :]
+        have_full_window = len(recent_bars) >= self.sma_period
+        body = abs(latest_bar.close - latest_bar.open)
+        avg_body = sum(abs(b.close - b.open) for b in window) / len(window) if window else 0.0
+        strong_move = have_full_window and body > avg_body * self.body_multiplier
+
+        if not strong_move:
+            return self._reject(RejectionReason.NO_DISPLACEMENT)
+
+        direction = SignalDirection.BUY if (long_ok and long_sweep) else SignalDirection.SELL
+
+        # --- Calculate Entry/Stop/Target ---
+        entry = latest_bar.close
+        if direction == SignalDirection.BUY:
+            sl = self._lower
+            risk_dist = entry - sl
+        else:
+            sl = self._upper
+            risk_dist = sl - entry
+
+        if risk_dist <= 0.0:
+            return self._reject(RejectionReason.NON_POSITIVE_RISK)
+        if self.risk_reward <= 0.0:
+            return self._reject(RejectionReason.RR_GATE_FAILED)
+
+        reward_dist = risk_dist * self.risk_reward
+        tp = entry + reward_dist if direction == SignalDirection.BUY else entry - reward_dist
+
+        self._trade_taken = True
+
+        mid, upper, lower = self._mid, self._upper, self._lower
+        direction_label = "Bullish" if direction == SignalDirection.BUY else "Bearish"
+        edge_label = "upper" if direction == SignalDirection.BUY else "lower"
+        edge_price = upper if direction == SignalDirection.BUY else lower
+
+        unique_id = uuid.uuid4().hex[:8]
+        ts_str = latest_bar.timestamp.strftime("%Y%m%d_%H%M%S_%f")
+        setup_id = (
+            f"setup_midline_sweep_{market_state.symbol}_{market_state.timeframe.value}_"
+            f"{direction.name}_{unique_id}_{ts_str}"
+        )
+
+        self.diagnostics.record_setup_generated()
+        return TradeSetup(
+            setup_id=setup_id,
+            symbol=market_state.symbol,
+            timeframe=market_state.timeframe,
+            direction=direction,
+            entry_zone=(round(entry, 5), round(entry, 5)),
+            stop_zone=(round(sl, 5), round(sl, 5)),
+            target_zone=(round(tp, 5), round(tp, 5)),
+            confidence_score=1.0,
+            confluence=[
+                "Fixed opening-range midline (build session)",
+                f"{direction_label} sweep+reclaim of {edge_label} zone boundary",
+                f"Displacement confirmed (body>{self.body_multiplier}x avg)",
+            ],
+            trigger_reason=(
+                f"{direction_label} midline sweep: {edge_label} boundary ({edge_price:.5f}) "
+                f"swept and reclaimed at {entry:.5f}, mid={mid:.5f}"
+            ),
+            invalidations=[
+                "Price closes back across the midline",
+                "Price breaches Stop Loss zone",
+            ],
+            related_structure_break=None,
+            related_order_block=None,
+            related_fvg=None,
+            timestamp=latest_bar.timestamp,
+        )
