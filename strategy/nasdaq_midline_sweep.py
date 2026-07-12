@@ -43,12 +43,12 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from core.models import SignalDirection
+from core.models import SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
-from strategy.session_utils import is_in_session
+from strategy.session_utils import is_in_session, session_length_in_bars
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,7 @@ class NasdaqMidlineSweepConfig:
     build_session_start: time = time(9, 30)
     build_session_end: time = time(9, 50)
     session_timezone: str = "America/New_York"
+    day_session_end: time | None = None
 
 
 class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
@@ -83,6 +84,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         build_session_start: time = time(9, 30),
         build_session_end: time = time(9, 50),
         session_timezone: str = "America/New_York",
+        day_session_end: time | None = None,
         config: NasdaqMidlineSweepConfig | None = None,
     ) -> None:
         """Initializes the NasdaqMidlineSweepStrategy with parameters or config.
@@ -102,6 +104,14 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
             session_timezone: IANA timezone name the build session is defined
                 in (default: the NY exchange session the original Pine script
                 scans).
+            day_session_end: Local time-of-day (in session_timezone) the traded
+                instrument's daily session is considered to close, used only by
+                recommended_max_holding_bars() to derive a bar count from
+                [build_session_start, day_session_end). Default None preserves
+                the pre-existing unlimited-holding behavior (returns None) --
+                set explicitly once the real instrument's hours are known (a
+                classic cash-market close, or a CFD/index/metal's much longer
+                session), since this can't be assumed from the strategy alone.
             config: NasdaqMidlineSweepConfig options overlay.
         """
         if config is not None:
@@ -113,6 +123,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
             self.build_session_start = config.build_session_start
             self.build_session_end = config.build_session_end
             self.session_timezone = config.session_timezone
+            self.day_session_end = config.day_session_end
         else:
             self.range_size = range_size
             self.risk_reward = risk_reward
@@ -122,6 +133,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
             self.build_session_start = build_session_start
             self.build_session_end = build_session_end
             self.session_timezone = session_timezone
+            self.day_session_end = day_session_end
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
@@ -143,6 +155,15 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         self.diagnostics.reset()
         self._reset_day_state()
         self._was_in_build_session = False
+
+    def recommended_max_holding_bars(self, timeframe: Timeframe) -> int | None:
+        """Bar count for [build_session_start, day_session_end) if
+        day_session_end is set, otherwise None (unlimited holding, unchanged
+        default).
+        """
+        if self.day_session_end is None:
+            return None
+        return session_length_in_bars(self.build_session_start, self.day_session_end, timeframe)
 
     def _reject(self, reason: RejectionReason) -> None:
         """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""

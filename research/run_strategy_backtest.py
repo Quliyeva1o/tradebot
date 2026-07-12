@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import sys
+from datetime import time
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.01,
         help="Fraction of account balance risked per trade (default: 0.01).",
     )
+    parser.add_argument(
+        "--max-holding-bars",
+        type=int,
+        default=None,
+        help=(
+            "Force-close a trade after this many bars (gap-risk cap). If omitted, "
+            "falls back to the strategy's own recommended_max_holding_bars() (None "
+            "unless the strategy is explicitly configured with a session length -- "
+            "see --params day_session_end / limit_holding_to_session). Explicit "
+            "values here always win. Use the measured_avg_bars_per_day figure in "
+            "the output to pick a sensible value for the real traded instrument."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -133,10 +147,50 @@ def split_bars(bars: list[Bar], split: str, split_ratio: float) -> list[Bar]:
     return bars[split_index:]
 
 
+# Constructor kwargs across the session-scoped strategies that take a
+# datetime.time -- not JSON-representable, so --params accepts "HH:MM"
+# strings for these and they're coerced here before construction.
+TIME_PARAM_NAMES = {
+    "session_start",
+    "session_end",
+    "build_session_start",
+    "build_session_end",
+    "day_session_end",
+}
+
+
+def _coerce_time_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Converts "HH:MM" strings in known time-typed kwargs to datetime.time."""
+    coerced = dict(params)
+    for key in TIME_PARAM_NAMES:
+        value = coerced.get(key)
+        if isinstance(value, str):
+            hour, minute = value.split(":")
+            coerced[key] = time(int(hour), int(minute))
+    return coerced
+
+
 def build_strategy(strategy_name: str, params: dict[str, Any]) -> TradeSetupStrategy:
     """Constructs the strategy instance named by --strategy with --params kwargs."""
     strategy_cls = STRATEGY_REGISTRY[strategy_name]
-    return strategy_cls(**params)
+    return strategy_cls(**_coerce_time_params(params))
+
+
+def measure_avg_bars_per_day(bars: list[Bar]) -> float | None:
+    """Average bar count per 24h period, measured directly from bar timestamps.
+
+    This is a data-driven substitute for assuming a fixed session length
+    (e.g. classic 6.5h NYSE hours): CFD/index/metal instruments commonly
+    trade far longer (near-continuous on weekdays), so the real bar density
+    can only be read off the actual data, not guessed from the strategy.
+    Returns None when there aren't at least two bars spanning positive time.
+    """
+    if len(bars) < 2:
+        return None
+    span_days = (bars[-1].timestamp - bars[0].timestamp).total_seconds() / 86400
+    if span_days <= 0:
+        return None
+    return len(bars) / span_days
 
 
 def run_backtest(
@@ -150,6 +204,7 @@ def run_backtest(
     spread: float,
     commission: float,
     risk_per_trade: float,
+    max_holding_bars: int | None = None,
 ) -> dict[str, Any]:
     """Loads data, runs the split backtest, and returns a JSON-serializable result dict."""
     provider = CSVDataProvider(filepath=data_file)
@@ -165,12 +220,19 @@ def run_backtest(
     strategy_engine = StrategyEngine()
     strategy_engine.register_strategy(strategy)
 
+    resolved_max_holding_bars = (
+        max_holding_bars
+        if max_holding_bars is not None
+        else strategy.recommended_max_holding_bars(timeframe)
+    )
+
     backtest_config = BacktestConfig(
         initial_balance=initial_balance,
         risk_per_trade=risk_per_trade,
         spread=spread,
         commission=commission,
         slippage=0.0,
+        max_holding_bars=resolved_max_holding_bars,
     )
     engine = BacktestEngine(config=backtest_config)
     result = engine.run(bars, strategy_engine, state_builder)
@@ -193,6 +255,8 @@ def run_backtest(
         "profit_factor": metrics.profit_factor,
         "net_profit": metrics.net_profit,
         "max_drawdown": metrics.max_drawdown,
+        "max_holding_bars": resolved_max_holding_bars,
+        "measured_avg_bars_per_day": measure_avg_bars_per_day(all_bars),
         "params": params,
     }
 
@@ -213,6 +277,7 @@ def main(argv: list[str] | None = None) -> None:
         spread=args.spread,
         commission=args.commission,
         risk_per_trade=args.risk_per_trade,
+        max_holding_bars=args.max_holding_bars,
     )
     print(json.dumps(output, indent=2))
 

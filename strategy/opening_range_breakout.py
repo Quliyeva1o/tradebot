@@ -42,11 +42,12 @@ from dataclasses import dataclass
 from datetime import date, time
 from zoneinfo import ZoneInfo
 
-from core.models import SignalDirection
+from core.models import SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+from strategy.session_utils import session_length_in_bars
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class OpeningRangeBreakoutConfig:
     range_bars: int = 5
     session_start: time = time(9, 30)
     session_timezone: str = "America/New_York"
+    day_session_end: time | None = None
 
 
 class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
@@ -77,6 +79,7 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
         range_bars: int = 5,
         session_start: time = time(9, 30),
         session_timezone: str = "America/New_York",
+        day_session_end: time | None = None,
         config: OpeningRangeBreakoutConfig | None = None,
     ) -> None:
         """Initializes the OpeningRangeBreakoutStrategy with parameters or config.
@@ -90,6 +93,14 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
                 range begins forming.
             session_timezone: IANA timezone name the session is defined in
                 (default: the NY exchange open).
+            day_session_end: Local time-of-day (in session_timezone) the traded
+                instrument's daily session is considered to close, used only by
+                recommended_max_holding_bars() to derive a bar count from
+                [session_start, day_session_end). Default None preserves the
+                pre-existing unlimited-holding behavior (returns None) -- set
+                explicitly once the real instrument's hours are known (a
+                classic cash-market close, or a CFD/index/metal's much longer
+                session), since this can't be assumed from the strategy alone.
             config: OpeningRangeBreakoutConfig options overlay.
         """
         if config is not None:
@@ -99,6 +110,7 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
             self.range_bars = config.range_bars
             self.session_start = config.session_start
             self.session_timezone = config.session_timezone
+            self.day_session_end = config.day_session_end
         else:
             self.volume_multiplier = volume_multiplier
             self.volume_lookback = volume_lookback
@@ -106,6 +118,7 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
             self.range_bars = range_bars
             self.session_start = session_start
             self.session_timezone = session_timezone
+            self.day_session_end = day_session_end
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
@@ -127,6 +140,14 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
         self.diagnostics.reset()
         self._reset_day_state()
         self._last_range_date = None
+
+    def recommended_max_holding_bars(self, timeframe: Timeframe) -> int | None:
+        """Bar count for [session_start, day_session_end) if day_session_end
+        is set, otherwise None (unlimited holding, unchanged default).
+        """
+        if self.day_session_end is None:
+            return None
+        return session_length_in_bars(self.session_start, self.day_session_end, timeframe)
 
     def _reject(self, reason: RejectionReason) -> None:
         """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""

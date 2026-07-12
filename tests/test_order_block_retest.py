@@ -70,7 +70,10 @@ class TestOrderBlockTouch:
         assert setup.entry_zone == (1.1010, 1.1010)  # ob.high
         assert setup.stop_zone == (1.0990, 1.0990)  # ob.low
         # risk = 1.1010 - 1.0990 = 0.0020; reward = 0.0020 * 2.0 (default rr)
-        assert setup.target_zone == (round(1.1010 + 0.0020 * 2.0, 5), round(1.1010 + 0.0020 * 2.0, 5))
+        assert setup.target_zone == (
+            round(1.1010 + 0.0020 * 2.0, 5),
+            round(1.1010 + 0.0020 * 2.0, 5),
+        )
         assert setup.related_order_block is BULLISH_OB
         assert setup.strategy_name == "OrderBlockRetestStrategy"
 
@@ -190,3 +193,15 @@ class TestDiagnosticsAndConfig:
 
         assert result is None
         assert strategy.diagnostics.rejections[RejectionReason.NON_POSITIVE_RISK] == 1
+
+
+class TestRecommendedMaxHoldingBars:
+    """OrderBlockRetestStrategy doesn't override recommended_max_holding_bars()
+    (it's not a fixed-time-of-day session strategy) -- must inherit the
+    TradeSetupStrategy Protocol's default of None (unlimited holding).
+    """
+
+    def test_default_is_none(self) -> None:
+        strategy = OrderBlockRetestStrategy()
+        assert strategy.recommended_max_holding_bars(Timeframe.M15) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) is None

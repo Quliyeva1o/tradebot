@@ -13,7 +13,16 @@ from strategy.diagnostics import RejectionReason
 from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 
 
-def _bar(hour: int, minute: int, o: float, h: float, l: float, c: float, volume: float = 100.0, day: int = 5) -> Bar:
+def _bar(
+    hour: int,
+    minute: int,
+    o: float,
+    h: float,
+    l: float,
+    c: float,
+    volume: float = 100.0,
+    day: int = 5,
+) -> Bar:
     return Bar(
         timestamp=datetime(2026, 1, day, hour, minute, tzinfo=UTC),
         open=o,
@@ -236,3 +245,39 @@ class TestDiagnosticsAndConfig:
         assert strategy.range_bars == 3
         assert strategy.session_start == time(8, 0)
         assert strategy.session_timezone == "UTC"
+
+    def test_config_overlay_applies_day_session_end(self) -> None:
+        from datetime import time
+
+        from strategy.opening_range_breakout import OpeningRangeBreakoutConfig
+
+        config = OpeningRangeBreakoutConfig(day_session_end=time(16, 0))
+        strategy = OpeningRangeBreakoutStrategy(config=config)
+        assert strategy.day_session_end == time(16, 0)
+
+
+class TestRecommendedMaxHoldingBars:
+    """recommended_max_holding_bars() must default to None (unlimited
+    holding, identical to pre-existing behavior) unless the caller opts in
+    via day_session_end -- no hardcoded wall-clock assumption.
+    """
+
+    def test_default_is_none_regardless_of_timeframe(self) -> None:
+        strategy = OpeningRangeBreakoutStrategy()
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.M5) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.H1) is None
+
+    def test_opt_in_computes_bars_for_classic_cash_session(self) -> None:
+        from datetime import time
+
+        strategy = OpeningRangeBreakoutStrategy(day_session_end=time(16, 0))
+        # session_start 09:30 -> day_session_end 16:00 = 390 minutes.
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) == 390
+
+    def test_opt_in_computes_bars_for_near_continuous_cfd_session(self) -> None:
+        from datetime import time
+
+        strategy = OpeningRangeBreakoutStrategy(day_session_end=time(23, 0))
+        # session_start 09:30 -> day_session_end 23:00 = 810 minutes.
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) == 810

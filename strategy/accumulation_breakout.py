@@ -41,12 +41,12 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from core.models import Bar, SignalDirection
+from core.models import Bar, SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
-from strategy.session_utils import is_in_session
+from strategy.session_utils import is_in_session, session_length_in_bars
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,7 @@ class AccumulationBreakoutConfig:
     body_multiplier: float = 1.3
     accumulation_bars: int = 5
     sma_period: int = 20
+    limit_holding_to_session: bool = False
 
 
 class AccumulationBreakoutStrategy(TradeSetupStrategy):
@@ -83,6 +84,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         body_multiplier: float = 1.3,
         accumulation_bars: int = 5,
         sma_period: int = 20,
+        limit_holding_to_session: bool = False,
         config: AccumulationBreakoutConfig | None = None,
     ) -> None:
         """Initializes the AccumulationBreakoutStrategy with parameters or config.
@@ -104,6 +106,11 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             body_multiplier: Breakout candle body threshold as a multiple of SMA-20 body.
             accumulation_bars: Number of contained candles required to arm the range.
             sma_period: Lookback window for the body/volume moving averages.
+            limit_holding_to_session: Whether recommended_max_holding_bars()
+                derives a bar count from [session_start, session_end). Default
+                False preserves the pre-existing unlimited-holding behavior
+                (returns None); opt in explicitly once the traded instrument's
+                real session length is known.
             config: AccumulationBreakoutConfig options overlay.
         """
         if config is not None:
@@ -116,6 +123,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             self.body_multiplier = config.body_multiplier
             self.accumulation_bars = config.accumulation_bars
             self.sma_period = config.sma_period
+            self.limit_holding_to_session = config.limit_holding_to_session
         else:
             self.risk_reward = risk_reward
             self.volume_multiplier = volume_multiplier
@@ -126,6 +134,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             self.body_multiplier = body_multiplier
             self.accumulation_bars = accumulation_bars
             self.sma_period = sma_period
+            self.limit_holding_to_session = limit_holding_to_session
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
@@ -147,6 +156,14 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         self.diagnostics.reset()
         self._reset_session_state()
         self._was_in_session = False
+
+    def recommended_max_holding_bars(self, timeframe: Timeframe) -> int | None:
+        """Bar count for [session_start, session_end) if limit_holding_to_session
+        is enabled, otherwise None (unlimited holding, unchanged default).
+        """
+        if not self.limit_holding_to_session:
+            return None
+        return session_length_in_bars(self.session_start, self.session_end, timeframe)
 
     def _reject(self, reason: RejectionReason) -> None:
         """Records a rejection reason and returns None (for use in `return self._reject(...)`)."""
@@ -293,7 +310,9 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
 
         range_high, range_low = self._range_high, self._range_low
         direction_label = "Bullish" if direction == SignalDirection.BUY else "Bearish"
-        volume_note = "volume spike confirmed" if self.require_volume_filter else "volume filter disabled"
+        volume_note = (
+            "volume spike confirmed" if self.require_volume_filter else "volume filter disabled"
+        )
 
         unique_id = uuid.uuid4().hex[:8]
         ts_str = latest_bar.timestamp.strftime("%Y%m%d_%H%M%S_%f")

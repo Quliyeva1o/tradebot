@@ -244,3 +244,39 @@ class TestDiagnosticsAndConfig:
         assert strategy.build_session_start == time(8, 0)
         assert strategy.build_session_end == time(8, 20)
         assert strategy.session_timezone == "UTC"
+
+    def test_config_overlay_applies_day_session_end(self) -> None:
+        from datetime import time
+
+        from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepConfig
+
+        config = NasdaqMidlineSweepConfig(day_session_end=time(16, 0))
+        strategy = NasdaqMidlineSweepStrategy(config=config)
+        assert strategy.day_session_end == time(16, 0)
+
+
+class TestRecommendedMaxHoldingBars:
+    """recommended_max_holding_bars() must default to None (unlimited
+    holding, identical to pre-existing behavior) unless the caller opts in
+    via day_session_end -- no hardcoded wall-clock assumption.
+    """
+
+    def test_default_is_none_regardless_of_timeframe(self) -> None:
+        strategy = NasdaqMidlineSweepStrategy()
+        assert strategy.recommended_max_holding_bars(Timeframe.M5) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.H1) is None
+
+    def test_opt_in_computes_bars_for_classic_cash_session(self) -> None:
+        from datetime import time
+
+        strategy = NasdaqMidlineSweepStrategy(day_session_end=time(16, 0))
+        # build_session_start 09:30 -> day_session_end 16:00 = 390 minutes.
+        assert strategy.recommended_max_holding_bars(Timeframe.M5) == 78
+
+    def test_opt_in_computes_bars_for_near_continuous_cfd_session(self) -> None:
+        from datetime import time
+
+        strategy = NasdaqMidlineSweepStrategy(day_session_end=time(23, 0))
+        # build_session_start 09:30 -> day_session_end 23:00 = 810 minutes.
+        assert strategy.recommended_max_holding_bars(Timeframe.M5) == 162

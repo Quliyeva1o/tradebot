@@ -14,6 +14,18 @@ time-of-day, so the correct UTC-equivalent window is picked up per bar-date.
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+from core.models import Timeframe
+
+TIMEFRAME_MINUTES: dict[Timeframe, int] = {
+    Timeframe.M1: 1,
+    Timeframe.M5: 5,
+    Timeframe.M15: 15,
+    Timeframe.M30: 30,
+    Timeframe.H1: 60,
+    Timeframe.H4: 240,
+    Timeframe.D1: 1440,
+}
+
 
 def is_in_session(
     timestamp: datetime, session_start: time, session_end: time, session_tz: ZoneInfo
@@ -33,3 +45,29 @@ def is_in_session(
     """
     local_time = timestamp.astimezone(session_tz).time()
     return session_start <= local_time < session_end
+
+
+def session_length_in_bars(start: time, end: time, timeframe: Timeframe) -> int:
+    """Number of `timeframe`-sized bars between two same-day local times.
+
+    Used to turn a strategy's own configured session window into a bar count
+    (e.g. for BacktestConfig.max_holding_bars), rather than assuming a fixed
+    wall-clock session length that may not match the traded instrument's
+    actual hours (CFDs/indices/metals often trade far longer than a classic
+    NYSE cash session).
+
+    Args:
+        start: Local time-of-day the window opens (inclusive).
+        end: Local time-of-day the window closes (exclusive). Must be later
+            than `start` on the same calendar day (no overnight wraparound).
+        timeframe: Bar timeframe the count is expressed in.
+
+    Returns:
+        The number of whole `timeframe` bars spanning [start, end).
+    """
+    start_minutes = start.hour * 60 + start.minute
+    end_minutes = end.hour * 60 + end.minute
+    span_minutes = end_minutes - start_minutes
+    if span_minutes <= 0:
+        raise ValueError(f"end ({end}) must be later than start ({start}) on the same day")
+    return span_minutes // TIMEFRAME_MINUTES[timeframe]

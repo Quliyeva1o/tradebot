@@ -664,9 +664,24 @@ def test_strategy_timestamp_determinism_and_bar_time() -> None:
     assert setup2 is not None
 
     # Verify TradeSetup timestamp is deterministic
-    assert setup1.timestamp == setup2.timestamp, "TradeSetup timestamps must be identical for identical inputs"
+    assert setup1.timestamp == setup2.timestamp, (
+        "TradeSetup timestamps must be identical for identical inputs"
+    )
 
     # Verify TradeSetup timestamp matches the latest bar timestamp exactly
-    assert setup1.timestamp == latest_bar.timestamp, "TradeSetup timestamp must match the latest bar's timestamp"
+    assert setup1.timestamp == latest_bar.timestamp, (
+        "TradeSetup timestamp must match the latest bar's timestamp"
+    )
 
 
+def test_continuation_strategies_recommended_max_holding_bars_defaults_to_none():
+    """BullishContinuationStrategy/BearishContinuationStrategy aren't fixed-
+    time-of-day session strategies and don't override
+    recommended_max_holding_bars() -- must inherit the TradeSetupStrategy
+    Protocol's default of None (unlimited holding).
+    """
+    bullish = BullishContinuationStrategy()
+    bearish = BearishContinuationStrategy()
+
+    assert bullish.recommended_max_holding_bars(Timeframe.M15) is None
+    assert bearish.recommended_max_holding_bars(Timeframe.M15) is None

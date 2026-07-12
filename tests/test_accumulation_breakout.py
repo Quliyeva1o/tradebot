@@ -14,7 +14,16 @@ from strategy.accumulation_breakout import AccumulationBreakoutStrategy
 from strategy.diagnostics import RejectionReason
 
 
-def _bar(hour: int, minute: int, o: float, h: float, l: float, c: float, volume: float = 100.0, day: int = 5) -> Bar:
+def _bar(
+    hour: int,
+    minute: int,
+    o: float,
+    h: float,
+    l: float,
+    c: float,
+    volume: float = 100.0,
+    day: int = 5,
+) -> Bar:
     return Bar(
         timestamp=datetime(2026, 1, day, hour, minute, tzinfo=UTC),
         open=o,
@@ -80,7 +89,9 @@ class TestAccumulationDetection:
 
         # A candle closing outside the previous candle's [low, high] breaks
         # containment and must restart the run from itself (count -> 1).
-        breaking_bar = _bar(10, 0, 1.1000, 1.1050, 1.0950, 1.1040)  # close=1.1040 > prev high 1.1012
+        breaking_bar = _bar(
+            10, 0, 1.1000, 1.1050, 1.0950, 1.1040
+        )  # close=1.1040 > prev high 1.1012
         _feed(state, strategy, breaking_bar)
         assert strategy._count == 1
         assert strategy._range_high == 1.1050
@@ -290,6 +301,66 @@ class TestDiagnosticsAndConfig:
         assert strategy.body_multiplier == 1.5
         assert strategy.accumulation_bars == 4
         assert strategy.sma_period == 10
+
+    def test_config_overlay_applies_limit_holding_to_session(self) -> None:
+        from strategy.accumulation_breakout import AccumulationBreakoutConfig
+
+        config = AccumulationBreakoutConfig(limit_holding_to_session=True)
+        strategy = AccumulationBreakoutStrategy(config=config)
+        assert strategy.limit_holding_to_session is True
+
+
+class TestRecommendedMaxHoldingBars:
+    """recommended_max_holding_bars() must default to None (unlimited
+    holding, identical to pre-existing behavior) unless the caller opts in
+    via limit_holding_to_session -- no hardcoded wall-clock assumption.
+    """
+
+    def test_default_is_none_regardless_of_timeframe(self) -> None:
+        strategy = AccumulationBreakoutStrategy()
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.M15) is None
+        assert strategy.recommended_max_holding_bars(Timeframe.H1) is None
+
+    def test_opt_in_computes_bars_from_session_window(self) -> None:
+        strategy = AccumulationBreakoutStrategy(limit_holding_to_session=True)
+        # Default session 09:30-11:00 = 90 minutes.
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) == 90
+        assert strategy.recommended_max_holding_bars(Timeframe.M15) == 6
+
+    def test_opt_in_respects_custom_session_bounds(self) -> None:
+        from datetime import time
+
+        strategy = AccumulationBreakoutStrategy(
+            session_start=time(8, 0), session_end=time(8, 30), limit_holding_to_session=True
+        )
+        assert strategy.recommended_max_holding_bars(Timeframe.M1) == 30
+
+    def test_limit_holding_to_session_does_not_alter_trading_logic(self) -> None:
+        """Differential/regression check: the new opt-in flag must only affect
+        recommended_max_holding_bars(), never evaluate()/reset() behavior --
+        the two instances must produce byte-identical trade setups (aside from
+        the uuid-derived setup_id) for the same bar sequence.
+        """
+        state_default = _new_state()
+        state_opt_in = _new_state()
+        strategy_default = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
+        strategy_opt_in = AccumulationBreakoutStrategy(
+            sma_period=5, session_timezone="UTC", limit_holding_to_session=True
+        )
+        _feed_accumulation(state_default, strategy_default)
+        _feed_accumulation(state_opt_in, strategy_opt_in)
+
+        breakout_bar = _bar(10, 45, 1.1005, 1.1032, 1.1004, 1.1030, volume=200.0)
+        setup_default = _feed(state_default, strategy_default, breakout_bar)
+        setup_opt_in = _feed(state_opt_in, strategy_opt_in, breakout_bar)
+
+        assert setup_default is not None
+        assert setup_opt_in is not None
+        assert setup_default.direction == setup_opt_in.direction
+        assert setup_default.entry_zone == setup_opt_in.entry_zone
+        assert setup_default.stop_zone == setup_opt_in.stop_zone
+        assert setup_default.target_zone == setup_opt_in.target_zone
 
 
 class TestDSTAwareSession:
