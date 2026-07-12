@@ -1,7 +1,8 @@
 """Unit tests for CSVDataProvider's MISSING_VALUE_POLICY handling and
 provider.validate() (Bug #28-new: policy="raise" previously did nothing --
 NaN values silently flowed into Bar objects unless a separate DataEngine
-wrapper happened to be used downstream)."""
+wrapper happened to be used downstream).
+"""
 
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,8 @@ class TestMissingValuePolicy:
     """load() must actually enforce MISSING_VALUE_POLICY, not just for
     "drop"/"fill" -- "raise" must raise directly, not rely on a separate
     downstream validator that may never run (e.g. run_backtest.py calls
-    CSVDataProvider.load() directly, without DataEngine)."""
+    CSVDataProvider.load() directly, without DataEngine).
+    """
 
     def test_raise_policy_raises_on_nan(self, tmp_path: Path) -> None:
         csv_file = _write_csv_with_nan(tmp_path)
@@ -75,7 +77,8 @@ class TestMissingValuePolicy:
 
 class TestValidate:
     """provider.validate() catches non-positive prices -- now actually
-    invoked by run_backtest.py after load(), previously never called there."""
+    invoked by run_backtest.py after load(), previously never called there.
+    """
 
     def test_validate_raises_on_zero_price(self) -> None:
         from core.models import Bar
@@ -113,7 +116,8 @@ class TestValidateOHLCConsistency:
     """provider.validate() catches internally-inconsistent OHLC bars
     (Bug #31 -- previously only checked non-positive prices, missing a
     whole class of physically-impossible bars: high < low, or a close/open
-    outside the [low, high] range)."""
+    outside the [low, high] range).
+    """
 
     def test_validate_raises_on_high_below_low(self) -> None:
         from core.models import Bar

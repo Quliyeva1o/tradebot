@@ -39,7 +39,7 @@ how a day's bars are gapped.
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, time
 from zoneinfo import ZoneInfo
 
 from core.models import SignalDirection

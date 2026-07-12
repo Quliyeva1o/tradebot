@@ -6,7 +6,7 @@ and keeps its own session-scoped state -- it has no dependency on swings,
 structure, or SMC state.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from core.models import Bar, SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
@@ -16,7 +16,7 @@ from strategy.diagnostics import RejectionReason
 
 def _bar(hour: int, minute: int, o: float, h: float, l: float, c: float, volume: float = 100.0, day: int = 5) -> Bar:
     return Bar(
-        timestamp=datetime(2026, 1, day, hour, minute, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 1, day, hour, minute, tzinfo=UTC),
         open=o,
         high=h,
         low=l,
@@ -134,7 +134,8 @@ class TestBreakoutAndRetest:
         """Breakout flag is sticky: retest can confirm on a later bar, and is
         not gated by the session window (mirrors the Pine script, where only
         the accumulation-building step -- not the breakout/retest check -- is
-        wrapped in `if inSession`)."""
+        wrapped in `if inSession`).
+        """
         state = _new_state()
         strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
         _feed_accumulation(state, strategy)
@@ -294,42 +295,45 @@ class TestDiagnosticsAndConfig:
 class TestDSTAwareSession:
     """The default NY session (09:30-11:00 local) must map to different UTC
     clock windows depending on whether the bar falls in EDT or EST, since
-    Bar.timestamp is UTC but the Pine script's session is exchange-local."""
+    Bar.timestamp is UTC but the Pine script's session is exchange-local.
+    """
 
     def test_ny_session_boundary_shifts_between_winter_and_summer(self) -> None:
         strategy = AccumulationBreakoutStrategy()  # default session_timezone="America/New_York"
 
         # January (EST, UTC-5): 09:30-11:00 NY == 14:30-16:00 UTC.
-        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=timezone.utc)) is False
-        assert strategy._in_session(datetime(2026, 1, 5, 15, 59, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 1, 5, 16, 0, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=UTC)) is False
+        assert strategy._in_session(datetime(2026, 1, 5, 15, 59, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 16, 0, tzinfo=UTC)) is False
 
         # July (EDT, UTC-4): 09:30-11:00 NY == 13:30-15:00 UTC -- one hour
         # earlier in UTC than the January window above.
-        assert strategy._in_session(datetime(2026, 7, 5, 13, 30, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 7, 5, 13, 15, tzinfo=timezone.utc)) is False
-        assert strategy._in_session(datetime(2026, 7, 5, 14, 59, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 7, 5, 15, 0, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 13, 30, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 13, 15, tzinfo=UTC)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 59, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 15, 0, tzinfo=UTC)) is False
 
     def test_same_utc_instant_differs_across_the_dst_boundary(self) -> None:
         """The identical UTC clock time (14:15) is outside the NY session in
         January (09:15 EST, before 09:30 open) but inside it in July (10:15
         EDT, within 09:30-11:00) -- proving the session window is computed
-        per-bar-date via zoneinfo, not a single fixed UTC offset."""
+        per-bar-date via zoneinfo, not a single fixed UTC offset.
+        """
         strategy = AccumulationBreakoutStrategy()
 
-        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=timezone.utc)) is False
-        assert strategy._in_session(datetime(2026, 7, 5, 14, 15, tzinfo=timezone.utc)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 15, tzinfo=UTC)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 15, tzinfo=UTC)) is True
 
     def test_utc_session_timezone_bypasses_dst_conversion(self) -> None:
         """session_timezone='UTC' (used by the other tests in this file)
         treats session_start/session_end as literal UTC clock time, with no
         DST shift -- the January/July boundary difference above does not
-        apply."""
+        apply.
+        """
         strategy = AccumulationBreakoutStrategy(session_timezone="UTC")
 
-        assert strategy._in_session(datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 7, 5, 9, 30, tzinfo=timezone.utc)) is True
-        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)) is False
-        assert strategy._in_session(datetime(2026, 7, 5, 14, 30, tzinfo=timezone.utc)) is False
+        assert strategy._in_session(datetime(2026, 1, 5, 9, 30, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 7, 5, 9, 30, tzinfo=UTC)) is True
+        assert strategy._in_session(datetime(2026, 1, 5, 14, 30, tzinfo=UTC)) is False
+        assert strategy._in_session(datetime(2026, 7, 5, 14, 30, tzinfo=UTC)) is False

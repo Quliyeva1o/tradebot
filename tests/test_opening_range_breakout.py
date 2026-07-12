@@ -5,7 +5,7 @@ approach as the other ported strategies' tests, since this strategy reads
 only raw M1 bars and keeps its own daily-scoped state.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from core.models import Bar, SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
@@ -15,7 +15,7 @@ from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 
 def _bar(hour: int, minute: int, o: float, h: float, l: float, c: float, volume: float = 100.0, day: int = 5) -> Bar:
     return Bar(
-        timestamp=datetime(2026, 1, day, hour, minute, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 1, day, hour, minute, tzinfo=UTC),
         open=o,
         high=h,
         low=l,

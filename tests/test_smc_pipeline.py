@@ -1,13 +1,12 @@
 """Unit tests for the SMC analysis pipeline zone pruning."""
 
 from datetime import datetime, timedelta
-import pytest
 
 from core.models import Bar, Timeframe
 from market_structure.structure_models import MarketState, SMCState
-from smc.pipeline import SMCPipeline
-from smc.order_block import OrderBlock, OBDirection
 from smc.fvg import FairValueGap, FVGDirection
+from smc.order_block import OBDirection, OrderBlock
+from smc.pipeline import SMCPipeline
 
 
 def _create_bar(idx: int, close: float) -> Bar:

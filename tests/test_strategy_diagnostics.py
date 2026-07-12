@@ -12,9 +12,6 @@ from market_structure.structure_models import (
     SwingGraph,
 )
 from market_structure.swing_models import Swing, SwingClassification, SwingType
-from smc.fvg import FairValueGap, FVGDirection
-from smc.liquidity import LiquidityLevel, LiquidityType
-from smc.order_block import OBDirection, OrderBlock
 from smc.premium_discount import PremiumDiscountZone, ZoneType
 from strategy.continuation import (
     BearishContinuationStrategy,
@@ -488,7 +485,8 @@ class TestBug23TrendBreakAsynchrony:
 
     def test_multiple_breaks_wrong_direction_bos_rejected_as_wrong_swing_type(self) -> None:
         """A BOS exists in history, but breaking a LOW (wrong direction for bullish);
-        must reject as BREAK_WRONG_SWING_TYPE, not silently match it."""
+        must reject as BREAK_WRONG_SWING_TYPE, not silently match it.
+        """
         state = create_valid_bullish_market_state()
         old_bos = state.structure_state.breaks_history[-1]
         wrong_direction_low = Swing(

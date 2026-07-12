@@ -33,7 +33,8 @@ def test_parse_mt5_login_invalid_text_defaults_to_zero_and_warns(
 def test_settings_load_with_malformed_mt5_login_does_not_raise(monkeypatch) -> None:
     """Reproduces the reported crash: a malformed MT5_LOGIN in .env must not
     raise ValueError at import/class-definition time -- Settings.load()
-    should come back with MT5_LOGIN=0 instead."""
+    should come back with MT5_LOGIN=0 instead.
+    """
     monkeypatch.setenv("MT5_LOGIN", "invalid_text")
     try:
         reloaded = importlib.reload(settings_module)

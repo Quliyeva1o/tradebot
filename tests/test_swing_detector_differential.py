@@ -6,14 +6,12 @@ exactly, especially under swing upgrades (MINOR -> MAJOR) and duplicate swing re
 
 import math
 from datetime import datetime, timedelta
-import pytest
 
-from core.models import Bar, Timeframe
-from market_structure.swing_models import SwingConfig, SwingClassification, SwingType
-from market_structure.swing_detector import SwingDetector
-from market_structure.structure_models import SwingGraph, StructureConfig
+from core.models import Bar
 from market_structure.structure_engine import MarketStructureEngine
-from application.services.market_state_builder import MarketStateBuilder
+from market_structure.structure_models import StructureConfig, SwingGraph
+from market_structure.swing_detector import SwingDetector
+from market_structure.swing_models import SwingConfig
 
 
 def _generate_bars(length: int, base_price: float = 1.1000) -> list[Bar]:
@@ -160,7 +158,7 @@ def test_batch_incremental_swing_detection_equivalence() -> None:
     batch_final_structure = engine_batch.get_structure_state()
 
     # --- Instrumentation Printout ---
-    print(f"\n[Differential Test Stats]")
+    print("\n[Differential Test Stats]")
     print(f"Total bars: {length}")
     print(f"Replacement count: {replacement_count}")
     print(f"Upgrade count: {upgraded_count}")

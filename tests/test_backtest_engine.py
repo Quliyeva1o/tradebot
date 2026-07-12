@@ -926,7 +926,8 @@ def test_conflicting_setups_on_same_bar_are_counted_and_first_wins(
     base_config: BacktestConfig, state_builder: MarketStateBuilder
 ) -> None:
     """Two strategies proposing a setup on the same bar: only setups[0] is
-    taken (unchanged behavior), but the drop is now counted, not silent."""
+    taken (unchanged behavior), but the drop is now counted, not silent.
+    """
     setup_a = _make_setup("setup_a")
     setup_b = _make_setup("setup_b", direction=SignalDirection.SELL)
 

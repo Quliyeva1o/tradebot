@@ -6,7 +6,7 @@ so tests supply fixture OrderBlock objects rather than running full OB
 detection).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from core.models import Bar, SignalDirection, Timeframe
 from market_structure.structure_models import MarketState
@@ -17,7 +17,7 @@ from strategy.order_block_retest import OrderBlockRetestStrategy
 
 def _bar(minute: int, o: float, h: float, l: float, c: float) -> Bar:
     return Bar(
-        timestamp=datetime(2026, 1, 5, 10, minute, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 1, 5, 10, minute, tzinfo=UTC),
         open=o,
         high=h,
         low=l,
@@ -39,7 +39,7 @@ def _ob(
         high=high,
         low=low,
         direction=direction,
-        timestamp=datetime(2026, 1, 5, 9, bar_index, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 1, 5, 9, bar_index, tzinfo=UTC),
     )
 
 

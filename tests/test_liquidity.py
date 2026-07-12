@@ -147,7 +147,7 @@ def test_update_incremental_skips_full_nodes_copy_when_no_new_swing() -> None:
     # Make `.nodes` explode if accessed -- proves the no-op path never copies.
     original_nodes_getter = type(graph).nodes.fget
 
-    def _forbidden_nodes(self):  # noqa: ANN001
+    def _forbidden_nodes(self):
         raise AssertionError("`.nodes` (full copy) must not be accessed when no new swing was added")
 
     type(graph).nodes = property(_forbidden_nodes)
@@ -177,7 +177,7 @@ def test_update_incremental_bug15_differential_matches_reference() -> None:
     class _ReferenceOldLiquidityDetector(LiquidityDetector):
         """Verbatim pre-Bug#15 behavior: unconditionally copies swing_graph.nodes."""
 
-        def update_incremental(self, swing_graph):  # noqa: ANN001
+        def update_incremental(self, swing_graph):
             nodes = swing_graph.nodes
             if not nodes:
                 self._last_processed_swing_index = -1
@@ -282,8 +282,9 @@ def test_update_incremental_bug15_differential_matches_reference() -> None:
 
 def test_liquidity_performance_large_dataset() -> None:
     """Verifies at least 5x speedup — measured ~7.7x on 15k bar synthetic dataset with cyclic swing generation; actual speedup depends on swing density."""
-    import time
     import math
+    import time
+
     from core.models import Bar
 
     # Generate 15,000 bars with sinusoidal shape to generate plenty of swings
@@ -305,8 +306,8 @@ def test_liquidity_performance_large_dataset() -> None:
         )
 
     # Build the swing graph first using SwingDetector
-    from market_structure.swing_models import SwingConfig
     from market_structure.swing_detector import SwingDetector
+    from market_structure.swing_models import SwingConfig
     swing_config = SwingConfig(
         left_bars=3,
         right_bars=3,
@@ -373,7 +374,7 @@ def test_liquidity_performance_large_dataset() -> None:
 
     speedup = time_batch / time_inc if time_inc > 0 else float('inf')
 
-    print(f"[Performance Results]")
+    print("[Performance Results]")
     print(f"Batch Time: {time_batch:.4f} seconds")
     print(f"Incremental Time: {time_inc:.4f} seconds")
     print(f"Speedup: {speedup:.2f}x")
