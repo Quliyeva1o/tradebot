@@ -585,3 +585,119 @@ verilməməlidir.
 Bug #28 ölçüsü: `pending_order_expiry_bars=1` default-unun bu strategiyaya təsiri ölçüldü
 (`setups_generated` vs faktiki `total_trades`) — fərq cəmi ~2% (USTEC-2R: 53→52, USTEC-3R:
 46→45), 15-20% həddindən çox aşağı. Dəyişiklik tələb olunmur, default saxlanıldı.
+
+---
+
+# Bug #16 (TƏXİRƏ SALINDI, kod dəyişməyib): MarketStructureEngine Tam Rebuild Optimallaşdırılması
+
+**Başlıq:** `MarketStructureEngine` tam rebuild-in optimallaşdırılması (performans, funksionallığa
+təsiri yoxdur).
+
+**Kontekst:** [application/services/market_state_builder.py](application/services/market_state_builder.py)-da
+bir swing `is_replacement` halında əvəzlənəndə (yəni əvvəlki eyni-tipli swing daha ekstremal bir
+swing ilə əvəz olunanda), hazırkı kod `self.structure_engine.reset()` çağırıb **bütün** swing
+tarixini yenidən "oynadır" (hər swing-i yenidən `update()`-dən keçirir). Bu, bar-ların yalnız
+~2%-ində baş verir, amma hər hadisə cari swing sayı ilə mütənasib xərcə malikdir — profiling-də
+ümumi vaxtın ~17-19%-ni təşkil edən bir O(n²) mənbəyi kimi müəyyənləşdirilmişdi (Bug #15/#17
+performans sessiyası, FAZA 3.3-dən sonra).
+
+**Niyə təxirə salınıb:** Partial rebuild (yalnız dəyişən swing-dən sonrakı hissəni yenidən emal
+etmək) nəzəri cəhətdən mümkün görünür, AMMA iki ciddi risk aşkarlanıb:
+1. `handle_upgrade()` (Bug #1 düzəlişi) müstəqil şəkildə `structure_engine.last_major_high`/`low`
+   göstəricilərini dəyişə bilər — bu, snapshot/restore sxemində "snapshot nə vaxt götürülüb,
+   upgrade nə vaxt olub" sıralamasını kövrək edir.
+2. Bu dəqiq ssenari artıq [tests/test_swing_detector_differential.py](tests/test_swing_detector_differential.py)-da
+   (upgrade+replacement qarşılıqlı təsiri, Bug #1+#2 interaction) test olunub və "kövrək" olduğu
+   sübut edilib — mövcud tam-rebuild yanaşması bu qarışıq halda DÜZGÜN nəticə verdiyini sübut
+   edir, partial rebuild isə bunu YENİDƏN sübut etməli olacaq, uğursuz olarsa Bug #1/#2-nin
+   qorunmasını poza bilər.
+
+**Qərar:** Performans qazancı (17-19%) real olsa da, correctness riski ilə tərazidə YOXLAMA
+(qeyri-mümkün) statusunda saxlanıldı — kod yazılmadı, YALNIZ sənədləşdirildi. Əgər gələcəkdə
+(məsələn Walk-Forward/Monte Carlo mərhələsində) bu, YENİDƏN kritik performans maneəsi kimi üzə
+çıxarsa, o zaman snapshot/restore məntiqini diqqətlə, əlavə differential testlərlə yenidən
+qiymətləndirmək olar.
+
+---
+
+## Bug #25: Sükutla Atılan Çoxlu-Strategiya Konflikti (commit `6b58b8f`)
+
+`BacktestEngine`, `strategy_engine.run()` eyni bar üzrə birdən çox setup qaytardıqda
+`setups[0]`-ı götürüb qalanını sükutla atırdı — tək strategiya qeydiyyatdaykən problemsiz idi, amma
+indi 4 strategiya (continuation×2, AccumulationBreakout, NasdaqMidlineSweep, OpeningRangeBreakout)
+mövcud olduğundan, bir bar-da bir neçəsinin eyni anda işə düşməsi izsiz siqnal itkisinə səbəb ola
+bilərdi.
+
+Əlavə edildi: `BacktestResult.conflicting_setups_dropped` (policy-dən asılı olmayaraq `len(setups) >
+1` olduqda artırılır — beləliklə atılma həmişə görünür), `BacktestEngine(conflict_policy=...)`
+(default `"first"` əvvəlki davranışı dəqiq saxlayır — tam suite + yeni sıfır-reqressiya testi ilə
+təsdiqləndi; `"log_and_first"` əlavə olaraq saxlanan/atılan `setup_id`-ləri xəbərdarlıq kimi
+loglayır). Digər tie-break siyasətləri (məs. `confidence_score`-a görə seçim) konkret ehtiyac
+yaranana qədər əlavə edilmədi.
+
+4 yeni test: konflikt sayılır və `setups[0]` yenə qalib gəlir, tək setup heç vaxt konflikt
+sayılmır, `log_and_first` xəbərdarlıq yaradır, default siyasət (log baxımından) səssiz qalır amma
+yenə sayır.
+
+**Status: DÜZƏLDİLDİ.**
+
+## Bug #26: `MT5_LOGIN` Kövrəkliyi (commit `1739f4f`)
+
+`Settings.MT5_LOGIN`-in `int(os.getenv(...))` çevrilməsi import vaxtı (dataclass field default
+vasitəsilə) işləyirdi, `try/except` olmadan — `.env`-də yanlış (qeyri-rəqəm) `MT5_LOGIN` dəyəri
+`import config.settings`-i, o cümlədən MT5 ilə heç bir əlaqəsi olmayan modulları da (məs.
+`CSVDataProvider`) import edərkən `ValueError` ilə çökdürürdü.
+
+`_parse_mt5_login()` funksiyası çıxarıldı — `ValueError`-u tutur, xarab xam dəyəri adlandıran
+xəbərdarlıq loglayır, exception-u ötürmək əvəzinə `0`-a default edir.
+
+6 test: helper birbaşa (düzgün sətir, `"0"`, yanlış mətn → `0` + logged warning), və
+`importlib.reload()`-əsaslı iki test — `Settings.load()`-un özünün xarab `MT5_LOGIN` ilə uçdan-uca
+sağ qaldığını və düzgün dəyəri bərpa etdiyini təsdiqləyir (hər biri `finally` blokunda modul
+vəziyyətini bərpa edir ki, sonrakı testlər normal `Settings` sinfini görsün).
+
+**Status: DÜZƏLDİLDİ.**
+
+## Bug #27: `TradeSetup.strategy_name` Doldurulmurdu (commit `66d173e`)
+
+`BacktestEngine` artıq dolan trade qeyd edərkən `getattr(pending_setup, "strategy_name", "")`
+oxuyurdu, amma `TradeSetup` heç vaxt bu sahəni təyin etmirdi — hər `BacktestTrade.strategy_name`
+həmişə sükutla `""` idi. `TradeSetup`-a `strategy_name: str = ""` əlavə edildi və hər konstruksiya
+nöqtəsində (hər iki continuation strategiyası, `AccumulationBreakoutStrategy`,
+`NasdaqMidlineSweepStrategy`, `OpeningRangeBreakoutStrategy`) `self.__class__.__name__` ilə təyin
+olundu. Bir neçə strategiya birgə qeydiyyatda olduğundan, per-trade atributsiya
+(`trades.csv`/backtest hesabatlarında) bundan sonra bərpaolunmaz idi.
+
+Hər strategiya faylı üzrə bir setup-yaradan testə `strategy_name` assertion-u əlavə edildi — sahə
+default dəyərə malik olduğundan tam suite başqa cür təsirlənmədi.
+
+**Status: DÜZƏLDİLDİ.**
+
+---
+
+# Mərhələ C — Strategiya #4: OrderBlockRetestStrategy (commit `33c1d6c`)
+
+Mövcud SMC pipeline-ının artıq aşkarladığı Order Block-ları (`market_state.smc_state.order_blocks`)
+yenidən aşkarlamaq əvəzinə birbaşa istifadə edir: bullish OB-in kənarı (`ob.high`) yuxarıdan
+toxunulanda BUY, bearish OB-in kənarı (`ob.low`) aşağıdan toxunulanda SELL tetiklənir, giriş kənar
+səviyyəsində, SL OB-in əks kənarında, sabit 2R hədəf (konfiqurasiya edilə bilər), sessiya
+məhdudiyyəti yoxdur.
+
+Hər Order Block bu strategiya tərəfindən ən çox bir dəfə ticarət edilir (`self._used_ob_ids` ilə
+izlənir) — `OrderBlock.is_mitigated`-dən **qəsdən** müstəqil, çünki mitigasiya (Bug #22: qiymət
+əks kənardan tam keçəndə) "bu strategiya artıq bu OB-də hərəkət edib" anlayışından fərqlidir və
+`is_mitigated`-ə təkrar-istifadə qoruyucusu kimi güvənmək həm yanlış olardı (strategiya-spesifik
+deyil), həm etibarsız (bu strategiyanın artıq ticarət etdiyi bir OB heç vaxt mitigasiya
+olunmaya bilər).
+
+Ortaq `RejectionReason` enum-undan istifadə edir (yeni üzvlər: `NO_ORDER_BLOCKS`,
+`NO_TOUCH_DETECTED`, `OB_ALREADY_USED`; mövcud `NO_LATEST_BAR`, `NON_POSITIVE_RISK`,
+`RR_GATE_FAILED`-i təkrar istifadə edir) və digər 4 strategiya kimi `TradeSetup.strategy_name`-i
+(Bug #27) təyin edir.
+
+9 unit test: bullish/bearish toxunma düzgün giriş/SL/TP ilə, order block yoxdur, toxunma yoxdur,
+hər-OB-ə-bir-dəfə təkrar-istifadə rəddi (`is_mitigated`-dən müstəqilliyi açıq təsdiqləyərək), ilk OB
+istifadə olunduqdan sonra ikinci toxunulmamış OB-in ticarətə açıq qalması, və degenerativ
+(sıfır-risk) OB.
+
+**Status: DÜZƏLDİLDİ (əlavə edildi).**
