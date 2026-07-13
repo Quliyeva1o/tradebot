@@ -1,6 +1,5 @@
 """Research Dashboard and PDF Reporting module."""
 
-from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
@@ -17,6 +16,7 @@ from reportlab.platypus import (
 )
 
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("dashboard")
 
@@ -137,7 +137,7 @@ class ResearchDashboard:
 
     def _export_markdown(self, symbol: str, timeframe: str, results: dict[str, Any], scores: dict[str, Any]) -> None:
         """Exports MD research dashboard."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         md_path = artifacts_dir / "research_dashboard.md"
 
         md = f"""# Research & Validation Dashboard
@@ -179,7 +179,7 @@ class ResearchDashboard:
 
     def _export_pdf(self, symbol: str, timeframe: str, results: dict[str, Any], scores: dict[str, Any]) -> None:
         """Exports PDF summary using ReportLab."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         pdf_path = artifacts_dir / "research_summary.pdf"
 
         doc = SimpleDocTemplate(

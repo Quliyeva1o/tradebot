@@ -1,7 +1,6 @@
 """Parameter Stability Analysis module."""
 
 import csv
-from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -19,6 +18,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("stability")
 
@@ -111,7 +111,7 @@ class ParameterStabilityAnalyzer:
         buffer_grid: list[float],
     ) -> None:
         """Exports parameter_stability.csv and stability_heatmap.png."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Export parameter_stability.csv (as tabular data)

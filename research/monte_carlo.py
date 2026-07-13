@@ -1,13 +1,13 @@
 """Monte Carlo Simulation module."""
 
 import random
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from backtest.models import BacktestResult
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("monte_carlo")
 
@@ -115,7 +115,7 @@ class MonteCarloSimulator:
 
     def _export_report(self, summary: dict[str, Any], initial_balance: float) -> None:
         """Exports the Monte Carlo summary report as Markdown."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         report_path = artifacts_dir / "monte_carlo_report.md"

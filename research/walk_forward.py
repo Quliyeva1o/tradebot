@@ -1,7 +1,6 @@
 """Walk-Forward Validation module."""
 
 import csv
-from pathlib import Path
 from typing import Any
 
 from application.services.market_state_builder import MarketStateBuilder
@@ -16,6 +15,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("walk_forward")
 
@@ -132,7 +132,7 @@ class WalkForwardRunner:
 
     def _export_artifacts(self, folds: list[dict[str, Any]]) -> None:
         """Exports segment outputs to artifacts/ folder."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Export walk_forward_summary.csv

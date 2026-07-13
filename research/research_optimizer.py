@@ -4,7 +4,6 @@ import csv
 import itertools
 import json
 import random
-from pathlib import Path
 from typing import Any
 
 from application.services.market_state_builder import MarketStateBuilder
@@ -19,6 +18,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("optimizer")
 
@@ -148,7 +148,7 @@ class ParameterOptimizer:
 
     def _export_artifacts(self, trials: list[dict[str, Any]], best_params: dict[str, Any], keys: list[str]) -> None:
         """Exports trials CSV, best parameters JSON, and parameter heatmap CSV."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Export optimization_results.csv

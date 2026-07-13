@@ -30,6 +30,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import PROJECT_ROOT
 
 logger = setup_logger("run_research")
 
@@ -56,11 +57,11 @@ def check_and_get_data(config: dict[str, Any]) -> list[Bar]:
         end_dt = datetime.strptime(end_dt, "%Y-%m-%d %H:%M:%S")
 
     # Target path format: data/history/{symbol}_{timeframe}_{year}.csv
-    export_dir = Path("c:/Users/Microsol/Desktop/trade/data/history")
+    export_dir = PROJECT_ROOT / "data" / "history"
     file_name = f"{symbol}_{tf_str}_{start_dt.year}.csv"
     csv_path = export_dir / file_name
 
-    fallback_path = Path(f"c:/Users/Microsol/Desktop/trade/data/{symbol}_{tf_str}.csv")
+    fallback_path = PROJECT_ROOT / "data" / f"{symbol}_{tf_str}.csv"
 
     if not csv_path.exists():
         logger.info("Target data file %s not found. Invoking MT5 downloader...", file_name)
@@ -112,7 +113,7 @@ def main() -> None:
     logger.info("Starting Research Validation Suite (Sprint 12)")
     logger.info("==================================================")
 
-    config_path = "c:/Users/Microsol/Desktop/trade/config/backtest.yaml"
+    config_path = str(PROJECT_ROOT / "config" / "backtest.yaml")
     try:
         config = load_config(config_path)
         candles = check_and_get_data(config)

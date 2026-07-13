@@ -59,6 +59,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import PROJECT_ROOT, get_artifacts_dir
 
 logger = setup_logger("run_campaign")
 
@@ -180,7 +181,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Load campaign configuration
-    config_path = Path("c:/Users/Microsol/Desktop/trade/config/research_campaign.yaml")
+    config_path = PROJECT_ROOT / "config" / "research_campaign.yaml"
     if not config_path.exists():
         logger.error("Configuration file not found at %s", config_path)
         sys.exit(1)
@@ -196,12 +197,12 @@ def main() -> None:
 
     # Determine paths and timestamps
     time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    campaign_dir = Path(f"c:/Users/Microsol/Desktop/trade/artifacts/research_campaign/{time_str}")
-    latest_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts/research_campaign/latest")
+    campaign_dir = get_artifacts_dir() / "research_campaign" / time_str
+    latest_dir = get_artifacts_dir() / "research_campaign" / "latest"
     campaign_dir.mkdir(parents=True, exist_ok=True)
     latest_dir.mkdir(parents=True, exist_ok=True)
 
-    state_path = Path("c:/Users/Microsol/Desktop/trade/artifacts/campaign_state.json")
+    state_path = get_artifacts_dir() / "campaign_state.json"
     state = {}
     if state_path.exists() and not args.force:
         logger.info("Resuming research campaign from last checkpoint...")
@@ -252,7 +253,7 @@ def main() -> None:
             end_date = datetime(year, 12, 31)
 
             csv_name = f"{symbol}_{timeframe}_{year}.csv"
-            csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / csv_name
+            csv_path = (PROJECT_ROOT / "data" / "history") / csv_name
 
             if not csv_path.exists():
                 logger.info("Downloading historical rates for %s [%s] for %d...", symbol, timeframe, year)
@@ -299,7 +300,7 @@ def main() -> None:
         for symbol in symbols:
             for year in years:
                 csv_name = f"{symbol}_{timeframe}_{year}.csv"
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / csv_name
+                csv_path = (PROJECT_ROOT / "data" / "history") / csv_name
 
                 if not csv_path.exists():
                     logger.warning("Skipping year segment %s for symbol %s (download failed).", year, symbol)
@@ -352,7 +353,7 @@ def main() -> None:
         for symbol in symbols:
             all_bars = []
             for year in years:
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / f"{symbol}_{timeframe}_{year}.csv"
+                csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
                     all_bars.extend(provider.load())
@@ -390,7 +391,7 @@ def main() -> None:
         for symbol in symbols:
             all_bars = []
             for year in years:
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / f"{symbol}_{timeframe}_{year}.csv"
+                csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
                     all_bars.extend(provider.load())
@@ -424,7 +425,7 @@ def main() -> None:
         for symbol in symbols:
             all_bars = []
             for year in years:
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / f"{symbol}_{timeframe}_{year}.csv"
+                csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
                     all_bars.extend(provider.load())
@@ -459,7 +460,7 @@ def main() -> None:
         for symbol in symbols:
             all_bars = []
             for year in years:
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / f"{symbol}_{timeframe}_{year}.csv"
+                csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
                     all_bars.extend(provider.load())
@@ -487,7 +488,7 @@ def main() -> None:
         for symbol in symbols:
             all_bars = []
             for year in years:
-                csv_path = Path("c:/Users/Microsol/Desktop/trade/data/history") / f"{symbol}_{timeframe}_{year}.csv"
+                csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
                     all_bars.extend(provider.load())
@@ -580,7 +581,7 @@ def main() -> None:
             writer.writerow([seg["symbol"], seg["year"], f"{seg['net_profit']:.2f}", seg["trades"], f"{seg['win_rate']*100:.2f}%", f"{seg['max_drawdown']*100:.2f}%"])
 
     # 2. walk_forward_summary.csv
-    shutil.copy(Path("c:/Users/Microsol/Desktop/trade/artifacts/walk_forward_summary.csv"), campaign_dir / "walk_forward_summary.csv")
+    shutil.copy(get_artifacts_dir() / "walk_forward_summary.csv", campaign_dir / "walk_forward_summary.csv")
 
     # 3. optimization_summary.csv
     with open(campaign_dir / "optimization_summary.csv", "w", newline="", encoding="utf-8") as opt_file:
@@ -791,7 +792,7 @@ def main() -> None:
     story.append(t_meta)
 
     # Plot Plateaus and curves if available
-    stability_plot = Path("c:/Users/Microsol/Desktop/trade/artifacts/stability_heatmap.png")
+    stability_plot = get_artifacts_dir() / "stability_heatmap.png"
     if stability_plot.exists():
         story.append(Spacer(1, 8))
         story.append(Paragraph("Parameter Stability Plateau Heatmap", h1_style))

@@ -1,13 +1,13 @@
 """MT5 Historical Data Downloader."""
 
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import MetaTrader5 as mt5  # noqa: N813
 import pandas as pd
 
 from mt5.connector import MT5Connector
 from utils.logging import setup_logger
+from utils.paths import PROJECT_ROOT
 
 logger = setup_logger("history_downloader")
 
@@ -98,7 +98,7 @@ class MT5HistoryDownloader:
             logger.info("Retrieved %d rates from MT5 terminal.", len(rates))
 
             # Export directory
-            export_dir = Path("c:/Users/Microsol/Desktop/trade/data/history")
+            export_dir = PROJECT_ROOT / "data" / "history"
             export_dir.mkdir(parents=True, exist_ok=True)
 
             # Build filename format e.g. EURUSD_H1_2026.csv

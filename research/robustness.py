@@ -2,7 +2,6 @@
 
 import json
 import random
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,6 +18,7 @@ from strategy.continuation import (
 )
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
+from utils.paths import get_artifacts_dir
 
 logger = setup_logger("robustness")
 
@@ -168,7 +168,7 @@ class RobustnessTester:
 
     def _export_artifacts(self, metrics: dict[str, Any]) -> None:
         """Exports robustness_report.md and robustness_metrics.json."""
-        artifacts_dir = Path("c:/Users/Microsol/Desktop/trade/artifacts")
+        artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Export robustness_metrics.json
