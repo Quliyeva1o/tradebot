@@ -586,6 +586,114 @@ Bug #28 ölçüsü: `pending_order_expiry_bars=1` default-unun bu strategiyaya t
 (`setups_generated` vs faktiki `total_trades`) — fərq cəmi ~2% (USTEC-2R: 53→52, USTEC-3R:
 46→45), 15-20% həddindən çox aşağı. Dəyişiklik tələb olunmur, default saxlanıldı.
 
+### USTEC-3R In-Sample / Out-of-Sample Bölgüsü (`research/run_strategy_backtest.py`)
+
+Yuxarıdakı USTEC-3R tam-data nəticəsinin (PF 1.09, 45 trade) təsadüfi/overfitting olub-olmadığını
+yoxlamaq üçün, EYNİ parametrlərlə (`risk_reward=3.0`, digər hər şey `run_strategy_backtest.py`
+default-ları: spread=0.0002, commission=0, risk_per_trade=0.01, initial_balance=10000), heç bir
+tənzimləmə edilmədən, data xronoloji olaraq 70/30 bölündü (`--split in_sample/out_of_sample`,
+`--split-ratio 0.7`). Metodologiyanı təsdiqləmək üçün eyni skriptlə tam-data (`--split full`)
+da YENİDƏN icra edildi:
+
+| Metrika | Tam data (bu skriptlə YENİDƏN icra) | Tam data (əvvəlki sənəd, fərqli parametrlər) | In-Sample (ilk 70%) | Out-of-Sample (son 30%) |
+|---|---|---|---|---|
+| Trade sayı | 45 | 45 | 30 | 15 |
+| Win Rate | 28.9% | 28.9% | 40.0% | 13.3% |
+| Profit Factor | 1.18 | 1.09 | 1.92 | 0.47 |
+| Net Profit | +$646.57 | +$359.75 | +$1,898.16 | -$690.38 |
+| Max Drawdown | 11.41% | 12.14% | 4.90% | 10.47% |
+| Tarix aralığı | 2026-03-30 → 2026-07-09 (~3.3 ay) | 2026-03-30 → ~2026-07-09 (~3.3 ay) | 2026-03-30 → 2026-06-09 | 2026-06-09 → 2026-07-09 |
+
+**Qeyd — tam-data reproduksiyasında uyğunsuzluq:** trade sayı (45) və win rate (28.9%) əvvəlki
+sənədləşdirilmiş nəticə ilə DƏQİQ üst-üstə düşür (eyni siqnallar/eyni qərarlar), AMMA PF (1.18 vs
+1.09) və Net Profit ($646.57 vs $359.75) fərqlidir. Bunun ehtimal olunan səbəbi: `BacktestConfig.spread`
+mütləq qiymət vahidindədir (Ask−Bid) və `run_strategy_backtest.py`-in default-u (`0.0002`) FX
+cütləri üçün kalibrlənib (məs. EURUSD ~1.10 qiymət səviyyəsində 2 pip-ə bərabərdir). USTEC-in qiymət
+səviyyəsi (~29,500) ilə müqayisədə 0.0002 mütləq spread demək olar ki sıfıra bərabərdir — əvvəlki
+sənədləşdirilmiş nəticə isə görünür fərqli (USTEC-ə uyğun miqyaslanmış) spread/xərc parametrləri ilə
+alınıb. Bu fərq mütləq PF rəqəmlərinə (1.18, 1.92, 0.47) təsir edir, AMMA in-sample/out-of-sample
+müqayisəsi bu sessiyada EYNİ (bəlkə də qeyri-real dərəcədə aşağı) spread ilə, hər iki seqmentə
+eyni şəkildə tətbiq olunduğu üçün, İKİSİ ARASINDAKI NİSBİ tənəzzül müşahidəsini etibarsız etmir.
+
+### NasdaqMidlineSweepStrategy — Real Spread ilə USTEC M5 Analizi (Bug #24/#30 tətbiqi)
+
+Bug #24 (`CSVDataProvider.load()` "spread" sütununu atır) hələ də deferred statusundadır (kod
+dəyişməyib) — amma xam CSV-nin "spread" sütunu artıq düzgün qiymət-vahidindədir (Bug #30 fix-i:
+MT5-in points-dəki dəyəri simvolun `point` ölçüsünə vurulub). `data/history/USTEC_M5.csv`-in
+99,859 sətrindən ölçülüb: **median = 1.0, mean = 0.9743** (M1 datasındakı ilə eyni miqyas — 100
+point × 0.01 point-size = 1.0, `tests/test_data_downloader.py:235` fixture-u ilə üst-üstə düşür).
+Bu, `--spread 1.0` kimi `run_strategy_backtest.py`-ə birbaşa ötürüldü (default `0.0002` YOX).
+
+`NasdaqMidlineSweepStrategy` default parametrlərlə (`{}`: range_size=10.0, risk_reward=2.0,
+mid_buffer=5.0, body_multiplier=1.2, sma_period=20), USTEC M5 (2024-12-10 → 2026-07-09, ~19 ay,
+99,859 bar) üzərində, EYNİ real spread ilə tam-data + 70/30 in-sample/out-of-sample bölgüsündə:
+
+| Metrika | Tam data | In-Sample (ilk 70%) | Out-of-Sample (son 30%) |
+|---|---|---|---|
+| Trade sayı | 339 | 232 | 107 |
+| Win Rate | 35.4% | 35.8% | 34.6% |
+| Profit Factor | 1.03 | 1.05 | 0.99 |
+| Net Profit | +$615.58 | +$664.24 | -$45.63 |
+| Max Drawdown | 24.9% | — | — |
+| Tarix aralığı | 2024-12-10 → 2026-07-09 | 2024-12-10 → 2026-02-05 | 2026-02-05 → 2026-07-09 |
+
+Konsistentlik: In-Sample (232) + Out-of-Sample (107) = 339, tam-data ilə üst-üstə düşür. Bu ədəd
+(339) istifadəçinin istinad etdiyi əvvəlki nəticə ilə də eynidir.
+
+**ORB-dan fərq:** PF, in-sample-dən (1.05) out-of-sample-ə (0.99) YALNIZ xəfif azalıb — ORB-dakı
+kimi (1.92→0.47) kəskin kollaps yoxdur.
+
+#### Aylıq qruplaşma (339 trade, tam dövr)
+
+| Ay | Trade | Win | Loss | Win Rate | Aylıq P&L |
+|---|---:|---:|---:|---:|---:|
+| 2024-12 | 6 | 1 | 5 | 16.7% | -$311.62 |
+| 2025-01 | 15 | 4 | 11 | 26.7% | -$332.06 |
+| 2025-02 | 19 | 9 | 10 | 47.4% | +$672.96 |
+| 2025-03 | 20 | 3 | 17 | 15.0% | -$1,102.89 |
+| 2025-04 | 20 | 6 | 14 | 30.0% | -$237.48 |
+| 2025-05 | 21 | 4 | 17 | 19.0% | -$801.41 |
+| 2025-06 | 21 | 9 | 12 | 42.9% | +$393.68 |
+| 2025-07 | 10 | 3 | 7 | 30.0% | -$120.63 |
+| 2025-09* | 15 | 6 | 9 | 40.0% | +$182.18 |
+| 2025-10 | 22 | 12 | 10 | 54.5% | +$1,131.82 |
+| 2025-11 | 18 | 8 | 10 | 44.4% | +$492.88 |
+| 2025-12 | 21 | 11 | 10 | 52.4% | +$1,129.61 |
+| 2026-01 | 21 | 5 | 16 | 23.8% | -$730.52 |
+| 2026-02 | 20 | 11 | 9 | 55.0% | +$1,304.55 |
+| 2026-03 | 22 | 10 | 12 | 45.5% | +$836.07 |
+| 2026-04 | 21 | 6 | 15 | 28.6% | -$462.07 |
+| 2026-05 | 18 | 3 | 15 | 16.7% | -$1,092.51 |
+| 2026-06 | 22 | 8 | 14 | 36.4% | +$123.67 |
+| 2026-07 | 7 | 1 | 6 | 14.3% | -$460.57 |
+
+*2025-08-da trade yoxdur (data-da boşluq deyil, sadəcə setup baş verməyib).
+
+#### Pik və pisləşmə başlanğıcı — split nöqtəsi ilə müqayisə
+
+**Qlobal pik: 2026-04-15 (trade #282/339), kumulyativ P&L $2,577.48.** Bu, in-sample/out-of-sample
+sərhədindən (2026-02-05) ~10 HƏFTƏ SONRA, yəni **out-of-sample dövrünün içərisində** baş verib —
+ORB-dan fərqli olaraq, split nöqtəsi özü heç bir dönüş nöqtəsi ilə üst-üstə düşmür (split anındakı
+kumulyativ P&L: son in-sample trade #232 = $664.27, ilk out-of-sample trade #233 = $555.90 —
+kəskin bir sıçrayış/uçurum yoxdur, davamlı xətdir).
+
+Pikdən sona qədər (trade #282 → #339, 57 trade): **15W/43L (win rate 25.9%)**, kumulyativ P&L
+$2,577.48-dən $615.66-ya düşüb (-$1,961.82). Bu tənəzzül dövrü (2026-04-15 → 2026-07-09) aylıq
+cədvəldə də görünür: aprel -$462, may -$1,093, iyun +$124 (qismən bərpa), iyul -$461.
+
+**Nəticə (rəqəmlər, yozumsuz):** Split nöqtəsi (2026-02-05) ilə faktiki pisləşmənin başlanğıcı
+(~2026-04-15) arasında ~10 həftəlik fərq var — ORB-dakı halın əksinə olaraq, burada in-sample/
+out-of-sample bölgüsü təsadüfən pisləşmə anına düşməyib. Tam dövrün ilk yarısında (2025-03, 2025-05,
+2026-01) da bənzər dərəcədə pis aylar mövcuddur (məs. 2025-03: -$1,102.89, 15% WR) — yəni yaxşı/pis
+dövrlər arasında keçid ORB-dakı kimi TƏK bir kəskin sərhəd deyil, təkrarlanan dövriyyə xarakteri
+daşıyır.
+
+Tam 339 trade-lik xronoloji log (tarix, WIN/LOSS, P&L, kumulyativ P&L) CSV olaraq saxlanıldı:
+[artifacts/ustec_midline_sweep_full_trade_log.csv](artifacts/ustec_midline_sweep_full_trade_log.csv).
+
+Konsistentlik yoxlaması: In-Sample (30) + Out-of-Sample (15) = 45 trade, tam-data nəticəsi ilə
+dəqiq üst-üstə düşür (split-in data itkisi/dublikatı yoxdur).
+
 ---
 
 # Bug #16 (TƏXİRƏ SALINDI, kod dəyişməyib): MarketStructureEngine Tam Rebuild Optimallaşdırılması
