@@ -972,3 +972,35 @@ istifadə olunduqdan sonra ikinci toxunulmamış OB-in ticarətə açıq qalmas�
 (sıfır-risk) OB.
 
 **Status: DÜZƏLDİLDİ (əlavə edildi).**
+
+---
+
+## NasdaqMidlineSweepStrategy — FX Universallıq Testi (EURUSD/GBPUSD/USDJPY)
+
+USTEC-də validasiya olunmuş (`body_multiplier=1.5` default) Midline Sweep-in başqa instrumentlərə
+ümumiləşib-ümumiləşmədiyi yoxlandı.
+
+**Addım 1 — default parametrlərlə (real spread, hər simvolun öz median dəyəri: EURUSD=0.00002,
+GBPUSD=0.00004, USDJPY=0.004), tam-data, M5:** hər üç FX cütündə **0 trade**. Kök səbəb:
+`range_size=10.0`/`mid_buffer=5.0` MÜTLƏQ qiymət vahididir, USTEC-in (~29,500) miqyasına
+kalibrlənib — FX-in (EURUSD ~1.08-1.14, GBPUSD ~1.28-1.34, USDJPY ~147-162) miqyasında zona
+([mid±10]) demək olar ki, bütün mümkün qiymətləri əhatə edir, sweep şərti heç vaxt ödənilmir.
+
+**Addım 2 — data-əsaslı miqyaslama (yalnız EURUSD, ilkin mümkünlük yoxlaması):** USTEC-in son
+20 bar-lıq ATR-i (18.4316) ilə `range_size=10.0`-un nisbəti (0.5425) hesablandı, EYNİ nisbət
+EURUSD-in öz ATR-inə (0.000206) tətbiq edildi: `range_size=0.000112`, `mid_buffer=0.000056`.
+
+| Metrika | EURUSD In-Sample (70%) | EURUSD Out-of-Sample (30%) |
+|---|---:|---:|
+| Trade sayı | 219 | 100 |
+| Win Rate | 34.7% | 31.0% |
+| Profit Factor | 0.979 | 0.820 |
+| Net Profit | -$295.93 | -$1,180.36 |
+| Max Drawdown | 13.9% | 12.9% |
+
+**NƏTİCƏ:** Midline Sweep-in EURUSD-də (miqyaslanmış parametrlərlə) sınağı: in-sample PF 0.979,
+out-of-sample PF 0.820 — hər ikisi 1.0-dan aşağı, real edge yoxdur. Midline Sweep strategiyası
+USTEC-ə XAS bir edge göstərir, FX-ə (ən azı EURUSD-ə) ÜMUMİLƏŞDİRİLMİR. GBPUSD/USDJPY sınanmadı,
+bu nəticəyə görə əlavə vaxt sərf edilmədi.
+
+**Status: BAĞLANDI (mənfi nəticə sənədləşdirildi, kod dəyişməyib).**
