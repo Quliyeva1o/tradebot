@@ -750,6 +750,33 @@ parametr arasında ya bir invariant (`mid_buffer` `range_size`-ı üstələyə b
 avtomatik clamp) əlavə edilə bilər, ya da parametrin default aralığı yenidən nəzərdən keçirilə
 bilər — kod indi dəyişməyib, yalnız sənədləşdirildi.
 
+### `day_session_end` / `max_holding_bars` faktiki tətbiqi (USTEC Midline Sweep, tam data)
+
+`research/run_strategy_backtest.py`-də strategiyanın `recommended_max_holding_bars()`-inin
+`BacktestConfig.max_holding_bars`-a ötürülməsi məntiqi əvvəlki sessiyadan mövcud idi (sətir
+223-235), amma bu günə qədər real testdə istifadə edilməmişdi. `BacktestEngine.run()`-un onu
+faktiki tətbiq etdiyi təsdiqləndi (`backtest/engine.py:183-184`). USTEC M5, real spread=1.0, tam
+data üzərində, `day_session_end=time(16,0)` (NYSE 6.5 saatlıq seans → `session_length_in_bars`
+ilə 78 bar) ilə/olmadan müqayisə:
+
+| Metrika | day_session_end=None (limitsiz, indiyədək bütün nəticələr) | day_session_end=16:00 (78 bar) |
+|---|---:|---:|
+| Trade sayı | 339 | 347 |
+| Win Rate | 35.4% | 34.9% |
+| Profit Factor | 1.03 | 1.05 |
+| Net Profit | +$615.58 | +$1,126.93 |
+| Max Drawdown | 24.9% | 24.9% (demək olar dəqiq eyni) |
+
+Trade sayının 339-dan 347-yə artması gözlənilir (reqressiya deyil): limitsiz versiyada gecə/həftəsonu
+boyu açıq qalan bəzi pozisiyalar indi seans sonunda məcburi bağlanır, bu da nəticəni (WIN/LOSS/EXPIRED
+bölgüsünü) dəyişir. Yeni unit test (`tests/test_backtest_engine.py::test_max_holding_bars_forces_close_after_n_bars`,
+sintetik data) bu məcburi bağlanma davranışını təsdiqləyir.
+
+**Ayrıca kod dəyişikliyi:** In-sample tənzimləmə + yekun out-of-sample təsdiqinə əsasən (yuxarıdakı
+bölmə), `NasdaqMidlineSweepStrategy`-nin `body_multiplier` default dəyəri `1.2`-dən `1.5`-ə
+dəyişdirildi (`strategy/nasdaq_midline_sweep.py`). Tam suite (369 test) dəyişiklikdən sonra da
+0 error/0 failure ilə keçdi.
+
 ---
 
 # Bug #16 (TƏXİRƏ SALINDI, kod dəyişməyib): MarketStructureEngine Tam Rebuild Optimallaşdırılması
