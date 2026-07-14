@@ -691,8 +691,64 @@ daşıyır.
 Tam 339 trade-lik xronoloji log (tarix, WIN/LOSS, P&L, kumulyativ P&L) CSV olaraq saxlanıldı:
 [artifacts/ustec_midline_sweep_full_trade_log.csv](artifacts/ustec_midline_sweep_full_trade_log.csv).
 
-Konsistentlik yoxlaması: In-Sample (30) + Out-of-Sample (15) = 45 trade, tam-data nəticəsi ilə
-dəqiq üst-üstə düşür (split-in data itkisi/dublikatı yoxdur).
+### Midline Sweep Parametr Tənzimləməsi (yalnız in-sample) + Yekun Out-of-Sample Təsdiqi
+
+Metodologiya: bütün parametr sınağı YALNIZ in-sample (232 trade, 2024-12-10 → 2026-02-05) datası
+üzərində aparıldı; out-of-sample datasına YALNIZ BİR DƏFƏ, yekun təsdiq üçün toxunuldu.
+
+**Grid (OFAT, 9 kombinasiya, tam faktorial 81 yerinə):** default + `range_size`(8/12),
+`mid_buffer`(3/7), `body_multiplier`(1.0/1.5), `risk_reward`(1.5/2.5), hər dəfə YALNIZ bir
+parametr default-dan fərqləndirilib, real spread=1.0 ilə:
+
+| Kombinasiya | Trade | Win Rate | PF | Net Profit |
+|---|---:|---:|---:|---:|
+| default | 232 | 35.8% | 1.047 | +$664.24 |
+| range_size=8 | 235 | 34.9% | 0.993 | -$92.94 |
+| range_size=12 | 231 | 35.5% | 1.039 | +$568.40 |
+| mid_buffer=3 | 232 | 35.8% | 1.047 | +$664.24 (default ilə eyni — bax aşağıdakı qeyd) |
+| mid_buffer=7 | 232 | 35.8% | 1.047 | +$664.24 (default ilə eyni — bax aşağıdakı qeyd) |
+| body_multiplier=1.0 | 237 | 34.2% | 0.966 | -$472.15 |
+| **body_multiplier=1.5** | 227 | 36.1% | **1.068** | +$932.09 |
+| risk_reward=1.5 | 233 | 40.8% | 0.960 | -$511.05 |
+| risk_reward=2.5 | 231 | 30.7% | 1.043 | +$661.02 |
+
+İstifadəçi in-sample nəticələrinə əsasən **`body_multiplier=1.5`**-i yekun out-of-sample təsdiqi
+üçün seçdi (ən yüksək in-sample PF, 227 trade — statistik cəhətdən kifayət qədər böyük nümunə).
+
+**Yekun, TƏKRARLANMAYAN out-of-sample testi** (`--split=out_of_sample --split-ratio=0.7
+--spread=1.0 --params '{"body_multiplier": 1.5}'`):
+
+| Metrika | Default (out-of-sample) | body_multiplier=1.5 (out-of-sample) |
+|---|---:|---:|
+| Trade sayı | 107 | 106 |
+| Win Rate | 34.6% | 35.8% |
+| Profit Factor | 0.99 | **1.05** |
+| Net Profit | -$45.63 | **+$364.14** |
+| Max Drawdown | 15.6% | 10.1% |
+
+Bütün 5 metrikada (PF, Net Profit, Win Rate, Max DD, trade sayı davamlı qalıb) `body_multiplier=1.5`
+default-u üstələyib — xüsusilə PF 0.99-dan (itki xətti) 1.05-ə (mənfəət xətti) keçib, Net Profit
+mənfidən müsbətə dönüb. Metodologiyaya əsasən bu, YEKUN nəticədir — əlavə kombinasiya sınanmayacaq.
+
+#### Gələcək təkmilləşdirmə qeydi: `mid_buffer` effektiv "ölü kod"-dur (kod dəyişməyib)
+
+In-sample parametr grid axtarışında `mid_buffer=3` və `mid_buffer=7` nəticələri default-la (5)
+onlarlıq kəsirə qədər EYNİ çıxdı (232 trade, PF 1.0470767758223678). Araşdırma (kod
+`strategy/nasdaq_midline_sweep.py`) göstərdi ki, `mid_buffer` parametrinin özü düzgün qəbul
+edilir və istifadə olunur (sətir 130, 224-225) — bug yoxdur. Səbəb riyazidir: setup yalnız HƏM
+`close > mid + mid_buffer` (Rule 3, sətir 224) HƏM DƏ `close > mid + range_size` (Rule 4/sweep,
+sətir 231-232, `range_size` default=10.0) doğru olanda yaranır. `mid_buffer < range_size` olan
+istənilən halda (bütün sınanan dəyərlər: 3, 5, 7 — hamısı 10-dan kiçikdir), Rule 4-ün həddi
+HƏMİŞƏ Rule 3-dən sərtdir, ona görə Rule 3 heç vaxt müstəqil rədd səbəbi olmur. Empirik təsdiq:
+in-sample-də bütün 244 sweep-qapılı setup-un `close-mid` məsafəsi minimum 10.062-dir (heç biri
+7-dən aşağı deyil) — kontrol testi (`mid_buffer=11`, range_size-dən yuxarı) isə 15 setup-u
+blokladı, mexanizmin özünün işlək olduğunu təsdiqlədi.
+
+**Nəticə: `mid_buffer` yalnız `range_size`-dan BÖYÜK dəyərlərdə effektivdir — hazırkı default-lar
+altında (range_size=10, mid_buffer=5) bu parametr faktiki olaraq ölü koddur.** Gələcəkdə bu iki
+parametr arasında ya bir invariant (`mid_buffer` `range_size`-ı üstələyə bilməz xəbərdarlığı və ya
+avtomatik clamp) əlavə edilə bilər, ya da parametrin default aralığı yenidən nəzərdən keçirilə
+bilər — kod indi dəyişməyib, yalnız sənədləşdirildi.
 
 ---
 
