@@ -482,6 +482,178 @@ def test_max_holding_bars_forces_close_after_n_bars(state_builder: MarketStateBu
     assert trade.exit_time == candles[4].timestamp
 
 
+def test_conditional_tp_extension_default_none_is_a_no_op(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    """Differential/regression test: TradeSetup's new conditional_tp_extension_*
+    fields default to None, and every pre-existing strategy constructs
+    TradeSetup without them. This must produce byte-identical results to the
+    pre-change engine -- re-runs test_backtest_winning_trade's exact scenario
+    and asserts the exact same outcome, proving the new opt-in branch in
+    BacktestEngine.run() is a true no-op when unset.
+    """
+    setup = TradeSetup(
+        setup_id="setup_win",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1060),
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+        # conditional_tp_extension_bars/price intentionally omitted (default None)
+    )
+
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=base_config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.WIN
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == 1.1050
+    assert trade.pnl > 0.0
+    assert result.total_profit > 0.0
+    assert result.win_rate == 1.0
+    assert result.profit_factor == float("inf")
+
+
+def test_conditional_tp_extension_extends_when_hit_within_window(
+    state_builder: MarketStateBuilder,
+) -> None:
+    """Verifies the opt-in conditional TP extension mechanism itself.
+
+    TP1 (1.1050) is touched on bar 2, within the 3-bar extension window --
+    the trade must NOT close there; instead take_profit extends to TP2
+    (1.1100), and the trade only closes once TP2 is later touched.
+    """
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+    )
+    setup = TradeSetup(
+        setup_id="setup_extend",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1050),  # TP1 = 1.1050
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+        conditional_tp_extension_bars=3,
+        conditional_tp_extension_price=1.1100,  # TP2
+    )
+
+    # Candle 0: triggers signal
+    # Candle 1: entry fills at 1.1010 (bars_held=0 at fill)
+    # Candle 2: bars_held becomes 1 (<=3 window), high touches TP1 (1.1050) -> extend, no close
+    # Candle 3: bars_held becomes 2, price pulls back, no exit
+    # Candle 4: bars_held becomes 3, high touches TP2 (1.1100) -> WIN at TP2
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1055, 1.1010, 1.1040),
+        _create_bar(3, 1.1040, 1.1045, 1.1020, 1.1030),
+        _create_bar(4, 1.1030, 1.1110, 1.1025, 1.1090),
+    ]
+
+    evaluator = MockEvaluator([[setup], [], [], [], []])
+    engine = BacktestEngine(config=config)
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.WIN
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == pytest.approx(1.1100)  # TP2, not TP1
+    assert trade.exit_time == candles[4].timestamp
+
+
+def test_conditional_tp_extension_stays_at_tp1_outside_window(
+    state_builder: MarketStateBuilder,
+) -> None:
+    """Verifies TP stays at TP1 (no extension) when TP1 is touched AFTER the
+    extension window has elapsed -- the original 1R target is honored as-is,
+    matching the spec's "else: no change" branch.
+    """
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+    )
+    setup = TradeSetup(
+        setup_id="setup_no_extend",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1050),  # TP1 = 1.1050
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+        conditional_tp_extension_bars=3,
+        conditional_tp_extension_price=1.1100,
+    )
+
+    # Candle 1: entry fills, bars_held becomes 1
+    # Candles 2-4: price stays below TP1, bars_held reaches 4 (window of 3 elapsed)
+    # Candle 5: high touches TP1 (1.1050) -> normal WIN at TP1 (no extension, window passed)
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1020, 1.1005, 1.1015),
+        _create_bar(3, 1.1015, 1.1020, 1.1005, 1.1015),
+        _create_bar(4, 1.1015, 1.1020, 1.1005, 1.1015),
+        _create_bar(5, 1.1015, 1.1060, 1.1010, 1.1050),
+    ]
+
+    evaluator = MockEvaluator([[setup], [], [], [], [], []])
+    engine = BacktestEngine(config=config)
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.WIN
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == pytest.approx(1.1050)  # TP1, extension window had passed
+    assert trade.exit_time == candles[5].timestamp
+
+
 def test_bar_spread_override(state_builder: MarketStateBuilder) -> None:
     """Verifies that Bar.spread > 0 overrides BacktestConfig.spread."""
     config = BacktestConfig(

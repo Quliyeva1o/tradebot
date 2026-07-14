@@ -23,6 +23,7 @@ from research.run_strategy_backtest import (
 )
 from strategy.accumulation_breakout import AccumulationBreakoutStrategy
 from strategy.continuation import BearishContinuationStrategy, BullishContinuationStrategy
+from strategy.manipulation_reversal import ManipulationReversalStrategy
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 from strategy.order_block_retest import OrderBlockRetestStrategy
@@ -112,6 +113,7 @@ class TestStrategySelection:
             ("order_block_retest", OrderBlockRetestStrategy),
             ("continuation_bullish", BullishContinuationStrategy),
             ("continuation_bearish", BearishContinuationStrategy),
+            ("manipulation_reversal", ManipulationReversalStrategy),
         ],
     )
     def test_registry_maps_name_to_expected_class(
@@ -161,6 +163,7 @@ class TestCoerceTimeParams:
             "build_session_start",
             "build_session_end",
             "day_session_end",
+            "reference_time",
         ],
     )
     def test_converts_every_known_time_field(self, field_name: str) -> None:

@@ -56,6 +56,13 @@ class RejectionReason(str, Enum):
     NO_TOUCH_DETECTED = "no_touch_detected"
     OB_ALREADY_USED = "ob_already_used"
 
+    # ManipulationReversalStrategy gates (Strategy #5, "9:30 NY Manipulation Reversal")
+    # Reuses NO_LATEST_BAR, NON_POSITIVE_RISK, TRADE_ALREADY_TAKEN above.
+    REFERENCE_CANDLE_NOT_READY = "reference_candle_not_ready"
+    NO_MANIPULATION_SCENARIO = "no_manipulation_scenario"
+    TRAP_NOT_FROZEN = "trap_not_frozen"
+    NO_REVERSAL_YET = "no_reversal_yet"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

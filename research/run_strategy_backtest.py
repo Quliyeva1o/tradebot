@@ -34,6 +34,7 @@ from data.csv_provider import CSVDataProvider
 from strategy.accumulation_breakout import AccumulationBreakoutStrategy
 from strategy.continuation import BearishContinuationStrategy, BullishContinuationStrategy
 from strategy.interfaces import TradeSetupStrategy
+from strategy.manipulation_reversal import ManipulationReversalStrategy
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 from strategy.order_block_retest import OrderBlockRetestStrategy
@@ -46,6 +47,7 @@ STRATEGY_REGISTRY: dict[str, type[TradeSetupStrategy]] = {
     "order_block_retest": OrderBlockRetestStrategy,
     "continuation_bullish": BullishContinuationStrategy,
     "continuation_bearish": BearishContinuationStrategy,
+    "manipulation_reversal": ManipulationReversalStrategy,
 }
 
 
@@ -156,6 +158,7 @@ TIME_PARAM_NAMES = {
     "build_session_start",
     "build_session_end",
     "day_session_end",
+    "reference_time",
 }
 
 

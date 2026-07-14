@@ -179,6 +179,23 @@ class BacktestEngine:
                     if candle.low <= tp:
                         tp_hit = True
 
+                # Conditional TP extension (opt-in, TradeSetup.conditional_tp_extension_*):
+                # if the original TP is touched within N bars of entry, extend it
+                # instead of closing -- exactly once per trade. sl_hit takes
+                # precedence (a same-candle SL+TP conflict is still resolved as a
+                # loss below), so extension only applies when SL was not also hit.
+                if (
+                    tp_hit
+                    and not sl_hit
+                    and active_trade["tp_extension_bars"] is not None
+                    and not active_trade["tp_extension_applied"]
+                    and active_trade["bars_held"] <= active_trade["tp_extension_bars"]
+                ):
+                    active_trade["take_profit"] = active_trade["tp_extension_price"]
+                    active_trade["tp_extension_applied"] = True
+                    tp = active_trade["take_profit"]
+                    tp_hit = False
+
                 # Expiration check
                 if self.config.max_holding_bars is not None:
                     if active_trade["bars_held"] >= self.config.max_holding_bars:
@@ -347,6 +364,9 @@ class BacktestEngine:
                                 "confidence_score": pending_setup.confidence_score,
                                 "entry_bar_index": idx,
                                 "entry_spread": spread,
+                                "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
+                                "tp_extension_price": pending_setup.conditional_tp_extension_price,
+                                "tp_extension_applied": False,
                             }
                 else:  # SELL
                     limit_price = entry_low
@@ -375,6 +395,9 @@ class BacktestEngine:
                                 "confidence_score": pending_setup.confidence_score,
                                 "entry_bar_index": idx,
                                 "entry_spread": spread,
+                                "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
+                                "tp_extension_price": pending_setup.conditional_tp_extension_price,
+                                "tp_extension_applied": False,
                             }
 
                 # Discard or keep pending setup depending on fill or expiry
