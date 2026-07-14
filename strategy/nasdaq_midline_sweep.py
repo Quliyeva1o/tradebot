@@ -58,7 +58,7 @@ class NasdaqMidlineSweepConfig:
     range_size: float = 10.0
     risk_reward: float = 2.0
     mid_buffer: float = 5.0
-    body_multiplier: float = 1.2
+    body_multiplier: float = 1.5
     sma_period: int = 20
     build_session_start: time = time(9, 30)
     build_session_end: time = time(9, 50)
@@ -79,7 +79,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         range_size: float = 10.0,
         risk_reward: float = 2.0,
         mid_buffer: float = 5.0,
-        body_multiplier: float = 1.2,
+        body_multiplier: float = 1.5,
         sma_period: int = 20,
         build_session_start: time = time(9, 30),
         build_session_end: time = time(9, 50),
