@@ -425,6 +425,63 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert trade.exit_price == pytest.approx(1.1018)
 
 
+def test_max_holding_bars_forces_close_after_n_bars(state_builder: MarketStateBuilder) -> None:
+    """Verifies an open position is force-closed as EXPIRED once bars_held reaches max_holding_bars."""
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=3,
+    )
+
+    # SL/TP are set far outside the price range below, so neither is ever hit --
+    # the only way this trade can close is via the max_holding_bars expiry.
+    setup = TradeSetup(
+        setup_id="setup_expiry",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0500, 1.0510),  # far below any candle low
+        target_zone=(1.2000, 1.2010),  # far above any candle high
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    # Candle 0: triggers signal (pending setup proposed)
+    # Candle 1: entry fills at entry_zone[1]=1.1010 (bars_held starts at 0 this bar)
+    # Candle 2: bars_held becomes 1, still open
+    # Candle 3: bars_held becomes 2, still open
+    # Candle 4: bars_held becomes 3 == max_holding_bars -> forced EXPIRED close at this candle's close
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1025, 1.1010, 1.1018),
+        _create_bar(3, 1.1018, 1.1028, 1.1012, 1.1022),
+        _create_bar(4, 1.1022, 1.1032, 1.1016, 1.1026),
+    ]
+
+    evaluator = MockEvaluator([[setup], [], [], [], []])
+    engine = BacktestEngine(config=config)
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.EXPIRED
+    assert trade.bars_held == 3
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == pytest.approx(1.1026)  # candle 4's close, no spread/slippage configured
+    assert trade.exit_time == candles[4].timestamp
+
+
 def test_bar_spread_override(state_builder: MarketStateBuilder) -> None:
     """Verifies that Bar.spread > 0 overrides BacktestConfig.spread."""
     config = BacktestConfig(
