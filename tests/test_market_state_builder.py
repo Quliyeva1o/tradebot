@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from application.services.market_state_builder import MarketStateBuilder
 from core.models import Bar, Timeframe
 from market_structure.structure_engine import MarketStructureEngine
@@ -270,3 +272,100 @@ def test_market_state_builder_fvg_displacement_mitigation() -> None:
 
     assert len(state_mitigated.smc_state.fair_value_gaps) == 1
     assert state_mitigated.smc_state.fair_value_gaps[0].is_mitigated is True
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Bug #29: an unrelated swing replacement (is_replacement=True) wipes "
+        "MarketStructureEngine.breaks_history via reset() and never rebuilds "
+        "it (market_state_builder.py:64-72 replays update() only, never "
+        "check_structural_break()). A previously-recorded break silently "
+        "disappears, and last_broken_high_id/low_id being reset can cause "
+        "the SAME swing to be re-detected as a 'new' break on the very next "
+        "bar if price still sits beyond it -- a duplicate/phantom break with "
+        "a later timestamp than the original. See walkthrough.md Bug #29."
+    ),
+    strict=True,
+)
+def test_bug29_swing_replacement_corrupts_breaks_history() -> None:
+    """Demonstrates that an unrelated swing replacement erases prior break history.
+
+    Bar-by-bar plan (left_bars=2, right_bars=2, minimum_bar_distance=6):
+    - idx 6: MAJOR low swing L0 forms (price=80), upgraded to MAJOR at bar 10.
+      Exists only so last_major_low is set (check_structural_break requires
+      both last_major_high AND last_major_low to be non-None).
+    - idx 20: MAJOR high swing H1 forms (price=110), upgraded to MAJOR at bar 24.
+    - idx 25-28: a flat plateau at close=111 (> H1). The FIRST plateau bar (25)
+      triggers a legitimate BOS break of H1 -- recorded in breaks_history.
+      (Flat/equal-height plateau, not a single spike, so no bar in it becomes
+      a new swing-high candidate that would replace H1 itself -- keeps this
+      scenario isolated to the *unrelated* swing replacement below.)
+    - idx 32: a new MINOR low swing L1 forms (price=85), appended normally
+      (becomes the swing graph's last node).
+    - idx 40: a MORE EXTREME low L2 forms (price=70) at the same graph slot
+      as L1 -> is_replacement=True. L1 is unrelated to H1 or its break.
+    - idx 42: the bar that confirms/replaces L1->L2 also closes at 111 (still
+      beyond H1). This is where the corruption manifests.
+
+    Expected (correct) behavior: breaks_history should still contain the
+    original bar-25 BOS break of H1 after the bar-42 replacement (plus
+    possibly a second, distinctly-identifiable entry -- but the original
+    must not vanish).
+
+    Actual (buggy) behavior: breaks_history contains exactly ONE break, a
+    duplicate of the SAME swing (H1) timestamped at bar 42 -- the original
+    bar-25 break is gone.
+    """
+    swing_config = SwingConfig(
+        left_bars=2, right_bars=2, minimum_bar_distance=6, classification_enabled=True
+    )
+    struct_config = StructureConfig(minimum_confirmations=1, major_only=False)
+
+    builder = MarketStateBuilder(
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        swing_detector=SwingDetector(swing_config),
+        structure_engine=MarketStructureEngine(struct_config),
+    )
+
+    def flat(i: int) -> Bar:
+        return _create_bar(i, 100.0, 100.5, 99.0, 100.0)
+
+    bars = [flat(i) for i in range(43)]
+    bars[6] = _create_bar(6, 100.0, 100.5, 80.0, 100.0)  # L0 (major low) pivot
+    bars[20] = _create_bar(20, 100.0, 110.0, 99.0, 100.0)  # H1 (major high) pivot
+    for j in range(25, 29):
+        bars[j] = _create_bar(j, 100.0, 111.0, 99.0, 111.0)  # flat break plateau
+    bars[32] = _create_bar(32, 100.0, 100.5, 85.0, 100.0)  # L1 (minor low) pivot
+    bars[40] = _create_bar(40, 100.0, 100.5, 70.0, 100.0)  # L2 (replaces L1)
+    bars[42] = _create_bar(42, 100.0, 112.0, 99.0, 111.0)  # replacement-confirming bar
+
+    # Phase 1: through the original H1 break (bar 25). This part is expected
+    # to pass even today -- it establishes the "before" state.
+    builder.initialize(bars[:26])
+    breaks_before = builder.market_state.structure_state.breaks_history
+    assert len(breaks_before) == 1
+    original_break = breaks_before[0]
+    assert original_break.break_type == BreakType.BOS
+    assert original_break.broken_swing.index == 20
+
+    # Phase 2: continue through the unrelated L1->L2 replacement (bar 42).
+    for b in bars[26:]:
+        state = builder.append_bar(b)
+
+    breaks_after = state.structure_state.breaks_history
+
+    # The original break (bar 25, H1) must still be present -- this is the
+    # assertion that fails today: breaks_after ends up as a single *new*
+    # break (bar 42) referencing the same swing, not the original one.
+    assert any(
+        b.break_type == BreakType.BOS
+        and b.broken_swing.index == 20
+        and b.timestamp == original_break.timestamp
+        for b in breaks_after
+    ), (
+        f"Original break at {original_break.timestamp} for swing index 20 is "
+        f"missing from breaks_history after the unrelated swing replacement. "
+        f"breaks_history now contains: "
+        f"{[(b.break_type, b.broken_swing.index, b.timestamp) for b in breaks_after]}"
+    )

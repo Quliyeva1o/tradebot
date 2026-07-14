@@ -866,6 +866,86 @@ default dəyərə malik olduğundan tam suite başqa cür təsirlənmədi.
 
 ---
 
+## Bug #29: `is_replacement` zamanı `breaks_history` korrupsiyası — TƏSDİQLƏNMİŞ (failing test ilə), DÜZƏLİŞ TƏTBİQ OLUNMAYIB
+
+**Kontekst:** əvvəlki bir auditdə tapılmış tapıntı: `application/services/market_state_builder.py:64-72`-də
+bir swing `is_replacement=True` halında əvəzlənəndə, `self.structure_engine.reset()` çağırılır və
+BÜTÜN swing tarixi yenidən `update()`-dən keçirilir — AMMA `check_structural_break()` bu təkrar-
+oynatma zamanı YENİDƏN ÇAĞIRILMIR. `MarketStructureEngine.reset()` (`structure_engine.py:110-143`)
+`breaks_history`, `last_broken_high_id`, `last_broken_low_id` sahələrini sıfırlayır, replay isə
+(yalnız `update()` çağırdığı üçün) bu üç sahəni HEÇ VAXT bərpa etmir.
+
+### Tapıntının mahiyyəti (tam dizayn təhlili — kod dəyişməyib)
+
+1. `reset()`-in sıfırladığı 17 sahədən 14-ü (`history`, `highs/lows_history`, `last_major/minor_*`,
+   `current_hh/hl/lh/ll`, `last_*_relationship`, `current_trend`, `confirmations_count`,
+   `processed_ids`, `last_index`) replay-in `update()` çağırışları ilə DÜZGÜN bərpa olunur. YALNIZ
+   `breaks_history`, `last_broken_high_id`, `last_broken_low_id` bərpa olunmur — çünki bunlara
+   YALNIZ `check_structural_break()` toxunur, replay isə onu çağırmır.
+2. Nəticə: ƏVVƏLKİ break-lər (əvvəlki bar-larda düzgün aşkarlanmış) həmişəlik itir. Əlavə olaraq,
+   `last_broken_*_id` unudulduğu üçün, əgər cari bar hələ də köhnə major high/low-dan kənardadırsa,
+   `market_state_builder.py:74`-dəki tək `check_structural_break(bar)` çağırışı EYNİ swing üçün
+   YENİ, DUBLİKAT bir break yaradır (əvvəlkindən GEC tarixli, potensial olaraq FƏRQLİ tipdə —
+   BOS↔CHoCH, çünki `break_type` replay-dən sonrakı YENİ `current_trend`-ə görə hesablanır).
+3. Praktiki təsir (`strategy/continuation.py::_find_latest_matching_bos`, Bug #23 düzəlişi): (a)
+   YALANÇI-MƏNFİ — `breaks_history` boşaldığından sonra yeni break yığılana qədər real continuation
+   setup-ları `NO_BREAK_HISTORY`/`BREAK_WRONG_SWING_TYPE` ilə səhvən rədd oluna bilər; (b) YALANÇI-
+   MÜSBƏT (daha təhlükəli) — fantom təkrar-aşkarlanan break-in tipi YENİ trend kontekstinə görə
+   `CHoCH`-dan `BOS`-a "sürüşərsə", `_find_latest_matching_bos()` bunu əsassız şəkildə etibarlı
+   continuation-təsdiqi kimi qəbul edə bilər. Qismən qoruyucu: Rule 9 (`max_break_age_bars`)
+   `broken_swing.index`-dən hesablandığı üçün (break-in öz indeksindən yox) bu konkret korrupsiyaya
+   kor deyil.
+4. Tezlik: `is_replacement` bar-ların ~2%-ində baş verir (Bug #16 profiling sessiyası). Amma faktiki
+   korrupsiya YALNIZ `breaks_history` artıq boş olmadıqda maddi təsir göstərir — trend-li istənilən
+   simvolda bu, demək olar ki, HƏR `is_replacement` hadisəsində baş verir (statik ilkin dövrlərdən
+   başqa).
+5. **Mövcud test şəbəkəsi bunu tuta bilmirdi:** `tests/test_swing_detector_differential.py:207`
+   `len(incremental_structure.breaks_history) == len(batch_final_structure.breaks_history)` yoxlayır.
+   AMMA `MarketStructureEngine.analyze()` (batch, sətir 336-350) `check_structural_break()`-i HEÇ
+   ÇAĞIRMIR — `batch_final_structure.breaks_history` HƏMİŞƏ boşdur, assertion faktiki "0==0" yoxlayır.
+
+### Düzəliş istiqamətləri (TƏTBİQ OLUNMAYIB — hər ikisinin əlavə riski var)
+
+- **Variant A (qismən reset):** break-tracking sahələrini (`breaks_history`, `last_broken_*_id`)
+  reset+replay-dən istisna et. Risk: əvəzlənən swing məhz `last_broken_high_id`-in istinad etdiyi
+  swing olarsa, saxlanılan ID artıq qrafda olmayan bir ID-yə işarə edə bilər — `swing_detector.py`-də
+  əvəzlənmənin ID-ni saxlayıb-saxlamadığı ƏLAVƏ araşdırma tələb edir.
+- **Variant B (tam interleaved replay):** `check_structural_break()`-i də bar-bar təkrar-oynat.
+  Risk: bu, Bug #16-da artıq QEYD OLUNMUŞ eyni kövrək sahəyə toxunur (`handle_upgrade()`/Bug #1
+  interaksiyası, `test_swing_detector_differential.py`-nın artıq "kövrək" elan etdiyi ssenari) VƏ
+  Bug #16-nın performans narahatlığını geri gətirir.
+
+### Bu sessiyada edilən (YALNIZ test infrastrukturu, kod düzəlişi YOX)
+
+1. **Differential test-i gücləndirmək üçün TƏKLİF** (kod yazılmadı, istifadəçi qərarını gözləyir):
+   test-only "oracle" `MarketStructureEngine` — hər `is_replacement`-də bar+swing-i tam interleaved
+   replay edərək HƏQİQİ ground-truth `breaks_history` qurur (Variant B-nin test-only versiyası,
+   production kodu toxunmur), production-un (ucuz reset+update-only) engine-i ilə element-by-element
+   (`break_type`/`broken_swing.id`/`timestamp`) müqayisə edilir.
+2. **Real, işləyən "qırmızı" test yazıldı:**
+   [`tests/test_market_state_builder.py::test_bug29_swing_replacement_corrupts_breaks_history`](tests/test_market_state_builder.py)
+   — real `MarketStateBuilder`/`MarketStructureEngine`/`SwingDetector` vasitəsilə, 43 bar-lıq əl ilə
+   qurulmuş ssenari: MAJOR high H1 (bar 20) → legitim BOS break (bar 25) → ƏLAQƏSİZ bir MINOR low
+   swing-in (bar 32) daha ekstremal biri ilə əvəzlənməsi (bar 40-42, `is_replacement=True`) → H1-in
+   ÖZÜ dəyişməsə də, `check_structural_break` bar 42-də EYNİ swing üçün YENİ, dublikat break yaradır.
+   Assertion (orijinal bar-25 break-in `breaks_history`-də qalması) HAZIRKI KODLA UĞURSUZ OLUR —
+   `@pytest.mark.xfail(strict=True)` ilə işarələnib ki, tam suite yaşıl qalsın, amma bug
+   SƏNƏDLƏŞDİRİLMİŞ, TƏSDİQLƏNMİŞ statusda izlənilsin.
+
+### Qərar (bağlanış)
+
+Bu sessiyada NƏ Variant A, NƏ DƏ B tətbiq olunmur — hər ikisi əlavə araşdırma (ID-davamlılığı,
+Bug #16 ilə kəsişmə) tələb edir. Addım 1-in (differential test gücləndirməsi, "oracle") tətbiqinə
+də İNDİ başlanmır — bu, ayrıca, böyük bir iş paketidir, Variant A/B-dən biri seçiləndə lazım olacaq.
+
+**Status: TƏSDİQLƏNMİŞ (xfail test ilə sübut edilib), DÜZƏLİŞ TƏTBİQ OLUNMAYIB — Variant A/B hər
+ikisi əlavə araşdırma (ID-davamlılığı, Bug #16 ilə kəsişmə) tələb edir. Praktiki risk: trend-li
+instrumentlərdə (USTEC/EURUSD) sıx-sıx, AMMA hələ HEÇ BİR canlı/backtest nəticəsində KONKRET,
+SÜBUT EDİLMİŞ səhv NƏTİCƏYƏ rast gəlinməyib (yalnız NƏZƏRİ risk sübut edilib). Bug #29 bağlanır —
+gələcəkdə (Mərhələ A refaktorunda, ya da real bir problem müşahidə edilsə) yenidən açılacaq.**
+
+---
+
 # Mərhələ C — Strategiya #4: OrderBlockRetestStrategy (commit `33c1d6c`)
 
 Mövcud SMC pipeline-ının artıq aşkarladığı Order Block-ları (`market_state.smc_state.order_blocks`)
