@@ -1098,3 +1098,62 @@ seçici şəkildə süzdüyü demək DEYİL, sadəcə fərqli seçilmiş nümun�
 ölçüsü (10 və 0 trade) statistik olaraq mənasızdır.
 
 **Status: BAĞLANDI (kod dəyişikliyi tətbiq olunub, test edilib, real datada doğrulanıb).**
+
+---
+
+## Bug #48: `WalkForwardRunner` strategiya-nöqtəsi hardcode-dur — TƏXİRƏ SALINDI
+
+**Kontekst:** Roadmap #9 (Midline Sweep üzərində Walk-Forward validasiyası) planlaşdırılarkən
+`research/walk_forward.py` təhlil edildi.
+
+**Tapıntı:** `WalkForwardRunner._simulate()` (walk_forward.py:114-125) strategiya seçimini
+parametrləşdirmir — hər seqment simulyasiyasında birbaşa `BullishContinuationStrategy` və
+`BearishContinuationStrategy`-ni (`strategy/continuation.py`) qeydiyyatdan keçirir:
+
+```python
+strategy_engine.register_strategy(BullishContinuationStrategy(config=strat_config))
+strategy_engine.register_strategy(BearishContinuationStrategy(config=strat_config))
+```
+
+`run()`-un tip işarəsi də (`strat_config: StrategyConfig`) konkret olaraq
+`strategy.continuation.StrategyConfig`-i gözləyir. Nəticədə `NasdaqMidlineSweepConfig`
+(`strategy/nasdaq_midline_sweep.py`) ötürülsə, `BullishContinuationStrategy.__init__`-dəki
+construction-time `isinstance(config, StrategyConfig)` yoxlaması (Bug #24-cü seriyanın
+gücləndirdiyi validasiya) dərhal `TypeError: config must be a StrategyConfig, got
+NasdaqMidlineSweepConfig` xətası atır. Əlavə struktur fərqi: Continuation İKİ ayrı class-a
+(Bullish/Bearish) bölünüb, Midline Sweep isə TƏK class-dır (`long_ok`/`short_ok`-u özü idarə
+edir) — deməli `_simulate()`-in register etdiyi strategiya sayı/tipi də dəyişməlidir.
+
+Eyni hardcoding `research/research_optimizer.py::ParameterOptimizer`-də də mövcuddur (Roadmap #9
+üçün bu, istifadə olunmayacaq, amma gələcəkdə qarışıqlıq yaratmasın deyə qeyd olunur).
+
+**Yoxlanılıb, TƏHLÜKƏSİZ tapılıb (bu bloker BUNLARA aid deyil):**
+
+- `_simulate()` hər çağırışda (fold başına 2 dəfə: train + val) tamamilə TƏZƏ
+  `StrategyEngine` və təzə strategiya instansları yaradır — paylaşılan state yoxdur, `reset()`
+  çağırışına ehtiyac yoxdur. Gələcək refaktor bu "hər çağırışda təzə instans" nümunəsini
+  qorumalıdır.
+- `search_space` parametri yalnız `ParameterOptimizer.optimize()`-a aiddir (məcburi arqument,
+  default `None` deyil) və `WalkForwardRunner` bu class-ı heç idxal etmir — gizli grid-search
+  riski yoxdur.
+
+**Təxirə salınma səbəbi:** generic etmək (strategiya sinfini/factory-ni parametr kimi qəbul
+edən refaktor) gözlədiyimizdən böyük iş çıxdı, ayrıca planlaşdırma tələb edir. İstifadəçi
+qərarı: aşağı-orta prioritet, YALNIZ Roadmap #9-a HƏQİQƏTƏN keçmək istəyəndə həll ediləcək.
+
+**Gələcək iş (edildikdə):** `WalkForwardRunner`-ə register olunacaq strategiya class(lar)ını
+və uyğun config tipini xarici parametr (məsələn factory funksiyası) kimi ötürməyə imkan verən
+bir refaktor, differensial testlə (mövcud Continuation davranışının dəyişmədiyini təsdiqləyən)
+birlikdə.
+
+**Əlavə tapıntı — fold sayı gözləniləndən fərqlidir:** USTEC M5 datası (19 ay, 99,859 bar)
+üçün seçilmiş konfiqurasiya (Rolling, ~4 ay in-sample / ~1.7 ay out-of-sample, addım = OOS
+uzunluğu → `train_size_pct≈0.2105`, `val_size_pct≈step_size_pct≈0.0895`) `WalkForwardRunner`-in
+mexanikası ilə hesablananda **8 fold** verir, gözlənilən 10-11 yox. Hesablama: `train_size=
+int(99859*0.2105)=21023`, `val_size=step_size=int(99859*0.0895)=8931`; rolling loop-da
+`train_start=k*8931` üçün `val_end=train_start+21023+8931<=99859` şərti `k=7`-də (val_end=
+92,471) təmin olunur, `k=8`-də (val_end=101,402) pozulur → `k=0..7`, yəni **8 fold**. Roadmap #9
+yenidən açılanda bu ədəd əsas götürülməlidir (və ya fold sayını artırmaq üçün addımı OOS-dan
+kiçildib yüngül örtüşməyə keçmək seçimi yenidən qiymətləndirilməlidir).
+
+**Status: TƏXİRƏ SALINIB (kod dəyişikliyi tətbiq OLUNMAYIB — yalnız sənədləşdirmə).**
