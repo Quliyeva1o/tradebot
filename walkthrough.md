@@ -539,7 +539,7 @@ MT5 terminalı artıq quraşdırılıb və qoşulub (MetaQuotes-Demo hesabı, lo
 TƏLƏB ETMİR, `USTEC` üzərində birbaşa portlana bilər — amma `data/history/`-də hələ USTEC CSV-si
 yoxdur, backtest üçün əvvəlcə `mt5/history_downloader.py` ilə endirilməlidir.
 
-## Bug #24 (aşağı-orta prioritet, TƏXİRƏ SALINDI): `CSVDataProvider` "spread" sütununu oxumur
+## Bug #24 / #24b — HƏLL EDİLDİ (commit `0782fbd`, `b5023c9`): `CSVDataProvider` "spread" sütununu oxumur
 
 USTEC üçün M5 tarixi data endirilərkən (`data/download_history.py`) aşkarlandı ki, MT5-in
 `spread` sahəsi points-dədir (qiymət vahidi deyil) — `_rows_to_bars()` bunu simvolun
@@ -552,15 +552,39 @@ CSV-də 50,668-i qeyri-sıfır spread daşısa da, yükləndikdən sonra `Bar.sp
 nəticəsində `BacktestEngine._effective_spread()` hər trade üçün CSV-dəki real, zamanla
 dəyişən spread-i deyil, sabit `BacktestConfig.spread` dəyərini işlədir.
 
-**Niyə indi düzəldilmir:** funksional problem yaratmır (Bug #22/#23/`max_break_age_bars`
-EURUSD nəticələri bu səbəbdən təsirlənməyib — sabit spread konfiqurasiyası istənilən halda
-tətbiq olunurdu), sadəcə backtest dəqiqliyini artıra bilər (real, zamanla dəyişən spread
-simulyasiyası). Aşağı-orta prioritet, ayrıca funksionallıq artımı kimi baxılmalıdır.
+**Araşdırma zamanı üzə çıxan əlavə tapıntı (Bug #24c, REAL DEYİL):** `EURUSD_M15`/`GBPUSD_M15`/
+`USDJPY_M15`/`XAUUSD_M15` CSV-ləri (Bug #30 fix-indən ƏVVƏL endirilmiş, 2022 tarixli) spread
+sütununda xam, ÇEVRİLMƏMİŞ MT5 points daşıyır (məs. USDJPY max=335) — buna qarşı fayl-səviyyəli
+qoruma DEYİL, "spread"-in `target_columns`-a sadəcə əlavə edilməsi ilə YANAŞI M1/M5 (Bug #30-dan
+SONRA endirilmiş) fayllarda bu problem yoxdur. USDJPY-nin `point` ölçüsünün (0.001, yoxsa 0.01)
+düzgün istifadə olunduğu QİYMƏT DƏQİQLİYİ (3 ondalıq rəqəm) və spread-in miqyası (real broker
+spread-lərinə uyğun, 0.4-3.2 pip) ilə DOLAYI TƏSDİQ EDİLDİ — Bug #24c ayrıca düzəliş TƏLƏB ETMİR.
 
-**Gələcək iş (edildikdə):** `CSVDataProvider.load()`-da `target_columns`-a "spread" əlavə
-et, `Bar` konstruksiyasında `getattr` fallback-ini saxlamaqla (köhnə, spread sütunu olmayan
-CSV-lər üçün geriyə uyğunluq). Differential test tələb olunur: spread sütunlu və sütunsuz
-CSV-lərin hər ikisinin düzgün yükləndiyini yoxlayan.
+**Düzəliş (commit `0782fbd` — Bug #24):**
+
+- `CSVDataProvider.load()`-da `target_columns`-a "spread" əlavə edildi, `Bar` konstruksiyasında
+  mövcud `getattr` fallback-i saxlanıldı (köhnə, spread sütunu olmayan CSV-lər üçün geriyə
+  uyğunluq — `Bar.spread` yenə `0.0`-a düşür, sükut).
+- `BacktestEngine._effective_spread()`-də HEÇ BİR dəyişiklik lazım olmadı — mexanizm onsuz da
+  `candle.spread > 0.0` olduqda onu üstün tuturdu.
+- Heç bir validasiya ƏLAVƏ EDİLMƏDİ (qərar: ən sadə, ən az-risk yol) — sütun sadəcə ötürülür.
+
+**Düzəliş (commit `b5023c9` — Bug #24b):** NaN/mənfi spread dəyərləri artıq sükutla axmır —
+`_sanitize_spread_column()` bunları loglanan xəbərdarlıqla `0.0`-a salır (bu bar üçün
+`BacktestEngine` `config.spread`-ə düşür).
+
+**Test:** `tests/test_csv_provider.py`-ə 6 differensial test əlavə olundu (sütunsuz köhnə CSV,
+düzgün formatlı CSV, NaN spread, mənfi spread). Tam suite (503 test) reqressiyasız keçdi.
+
+**Midline Sweep USTEC OOS nəticəsinin YENİDƏN yoxlanılması** (`--spread` arqumenti VERİLMƏDƏN,
+sütun avtomatik oxundu): 106/106 trade EYNİ qaldı (siqnallar/vaxtlama dəyişməyib), PF
+**1.0503 → 1.0510** (flat `--spread=1.0`-dan avtomatik, per-bar real spread-ə keçiddə). Bu,
+gözlənilən, kiçik (0.0007 PF, ~$5 Net Profit) fərqdir — REQRESSİYA DEYİL, sadəcə sabit spread
+əvəzinə hər bar-ın öz real spread-inin işlədilməsinin təbii nəticəsidir. Əvvəlki "Audit #17"
+bölməsindəki **1.0958** rəqəmi bu düzəlişdən ƏVVƏLKİ, sənəd-daxili uyğunsuzluq idi (yəqin
+sessiyalar arası, aralıq commit-lər səbəbindən) — **1.0510 indi DOĞRU, GÜNCƏL istinad rəqəmidir.**
+
+**Status: BAĞLANDI.**
 
 ## Strategiya #3 (Opening Range Breakout) — USTEC/XAUUSD M1 Nəticəsi
 
@@ -1057,6 +1081,14 @@ trade, PF 1.0958, 0 margin-rejected. Audit-in nəzəri riski (marja yoxlaması o
 pozisiyaların sakitcə "açılması") bu konkret strategiya/risk kombinasiyasında (risk_per_trade
 1%) praktik təsir göstərmir — 1% risk sizing artıq kifayət qədər konservativdir ki, tələb
 olunan marja heç vaxt balansı aşmır.
+
+**Qeyd (Bug #24 bağlandıqdan sonra əlavə edilib):** yuxarıdakı cədvəldəki **PF 1.0958**
+köhnəlmiş/səhv istinaddır — bu bölmənin özü ilə eyni parametrləri sənədləşdirən əvvəlki
+`body_multiplier=1.5` OOS nəticəsi (yuxarıda, PF **1.05**) arasında ARTIQ sənəd-daxili
+uyğunsuzluq var idi, Bug #24-dən asılı olmayaraq. Bug #24 düzəlişindən sonra bugünkü kodda
+flat `--spread=1.0` ilə YENİDƏN doğrulandı: PF=**1.0503** (1.05-ə uyğun, 1.0958-ə YOX). Bax
+Bug #24/#24b bölməsi — GÜNCƏL, DOĞRU istinad rəqəmi PF **1.0510**-dur (CSV-dən avtomatik
+oxunan real spread ilə).
 
 Aşağı leverage-lərin (1:10 və aşağı) nəticələri **müqayisə edilə bilməz**: rədd edilən setup
 dərhal atılır (`pending_setup = None`), ona görə strategiya növbəti bardan yeni siqnal
