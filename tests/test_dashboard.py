@@ -110,6 +110,73 @@ def test_dashboard_pdf_generation_does_not_raise_with_trade_log(_isolated_artifa
     assert pdf_path.stat().st_size > 0
 
 
+def test_dashboard_single_backtest_mode_omits_scorecard(_isolated_artifacts_dir: Path) -> None:
+    """A Trade Log with no validation module results triggers single-backtest mode.
+
+    No Quality Scorecard, no "NOT ROBUST"-style recommendation, just the Trade Log.
+    """
+    trades_csv = _isolated_artifacts_dir / "trades.csv"
+    _write_trades_csv(trades_csv, [_make_trade_row("2026-01-01 05:00:00")])
+
+    ResearchDashboard().run("USTEC", "M5", results={}, trades_csv_path=trades_csv)
+
+    md_content = (_isolated_artifacts_dir / "research_dashboard.md").read_text()
+    assert "# Single-Backtest Trade Log Report" in md_content
+    assert "Score Card" not in md_content
+    assert "Module Statuses" not in md_content
+    assert "NOT ROBUST" not in md_content
+    assert "Validation Recommendation" not in md_content
+    assert "## Trade Log" in md_content
+
+    pdf_path = _isolated_artifacts_dir / "research_summary.pdf"
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 0
+
+
+def test_dashboard_single_backtest_mode_requires_a_trade_log(_isolated_artifacts_dir: Path) -> None:
+    """An otherwise-empty results dict without a trades_csv_path stays in full mode.
+
+    This preserves the pre-existing N/A-scorecard behavior for callers that
+    simply haven't run anything yet.
+    """
+    ResearchDashboard().run("EURUSD", "H1", results={})
+
+    md_content = (_isolated_artifacts_dir / "research_dashboard.md").read_text()
+    assert "# Research & Validation Dashboard" in md_content
+    assert "Single-Backtest Trade Log Report" not in md_content
+    assert "Score Card" in md_content
+
+
+def test_dashboard_full_validation_mode_keeps_scorecard_alongside_trade_log(_isolated_artifacts_dir: Path) -> None:
+    """A Trade Log must not suppress the Quality Scorecard when validation modules ran.
+
+    Single-backtest mode only applies when nothing else ran.
+    """
+    trades_csv = _isolated_artifacts_dir / "trades.csv"
+    _write_trades_csv(trades_csv, [_make_trade_row("2026-01-01 05:00:00")])
+
+    results: dict[str, Any] = {
+        "walk_forward": {
+            "status": "SUCCESS",
+            "data": [{"fold": 1, "val_net_profit": 100.0}],
+            "message": "Successfully completed 1 validation fold.",
+        },
+    }
+
+    ResearchDashboard().run("EURUSD", "H1", results=results, trades_csv_path=trades_csv)
+
+    md_content = (_isolated_artifacts_dir / "research_dashboard.md").read_text()
+    assert "# Research & Validation Dashboard" in md_content
+    assert "Single-Backtest Trade Log Report" not in md_content
+    assert "## Score Card" in md_content
+    assert "## Module Statuses" in md_content
+    assert "## Trade Log" in md_content
+
+    pdf_path = _isolated_artifacts_dir / "research_summary.pdf"
+    assert pdf_path.exists()
+    assert pdf_path.stat().st_size > 0
+
+
 def test_optimizer_best_pnl_flows_into_dashboard_optimization_score(_isolated_artifacts_dir: Path) -> None:
     """Regression test for Bug #20: a populated best_pnl must produce a numeric Optimization Score."""
     results: dict[str, Any] = {

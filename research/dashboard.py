@@ -156,11 +156,22 @@ class ResearchDashboard:
 
         trade_rows, total_trade_count = self._load_trade_log(trades_csv_path, max_trade_log_rows)
 
+        # Single-backtest mode: a Trade Log was supplied but none of the validation
+        # suite modules ran, so a Quality Scorecard / "NOT ROBUST" recommendation
+        # would misleadingly imply a full validation suite was attempted.
+        single_backtest_mode = bool(trade_rows) and not any(
+            results.get(module) for module in ("walk_forward", "optimization", "monte_carlo", "robustness")
+        )
+
         # 1. Export research_dashboard.md
-        self._export_markdown(symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows)
+        self._export_markdown(
+            symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows, single_backtest_mode
+        )
 
         # 2. Export research_summary.pdf
-        self._export_pdf(symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows)
+        self._export_pdf(
+            symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows, single_backtest_mode
+        )
 
     def _load_trade_log(
         self, trades_csv_path: str | Path | None, max_rows: int
@@ -201,12 +212,24 @@ class ResearchDashboard:
         trade_rows: list[dict[str, str]],
         total_trade_count: int,
         max_trade_log_rows: int,
+        single_backtest_mode: bool,
     ) -> None:
         """Exports MD research dashboard."""
         artifacts_dir = get_artifacts_dir()
         md_path = artifacts_dir / "research_dashboard.md"
 
-        md = f"""# Research & Validation Dashboard
+        if single_backtest_mode:
+            md = f"""# Single-Backtest Trade Log Report
+
+- **Instrument**: {symbol}
+- **Timeframe**: {timeframe}
+
+This report covers a single backtest run with trade-level detail. The full
+validation suite (Walk Forward, Optimization, Monte Carlo, Robustness) was
+not run, so no Quality Scorecard or recommendation is shown.
+"""
+        else:
+            md = f"""# Research & Validation Dashboard
 
 - **Instrument**: {symbol}
 - **Timeframe**: {timeframe}
@@ -284,6 +307,7 @@ class ResearchDashboard:
         trade_rows: list[dict[str, str]],
         total_trade_count: int,
         max_trade_log_rows: int,
+        single_backtest_mode: bool,
     ) -> None:
         """Exports PDF summary using ReportLab."""
         artifacts_dir = get_artifacts_dir()
@@ -335,71 +359,84 @@ class ResearchDashboard:
             fontName="Helvetica-Bold",
         )
 
-        story.append(Paragraph("Validation & Research Summary Dashboard", title_style))
-        story.append(Spacer(1, 5))
-
-        # Executive Summary
-        story.append(Paragraph("Executive Summary", h1_style))
-        p_text = (
-            f"This summary aggregates validation metrics for symbol <b>{symbol}</b> on timeframe <b>{timeframe}</b>. "
-            f"Following walk-forward testing, random execution cost disturbances, sequence bootstrapping, and sensitivity plateaus, "
-            f"the validation suite assigns a recommendation status of <b>{scores['recommendation']}</b>."
-        )
-        story.append(Paragraph(p_text, body_style))
-        story.append(Spacer(1, 8))
-
-        # Scorecard table
-        story.append(Paragraph("Quality Scorecard", h1_style))
-        score_data = [
-            [Paragraph("Quality Area", bold_body), Paragraph("Score", bold_body)],
-            ["Overall Score", scores["overall"]],
-            ["Risk Score", scores["risk"]],
-            ["Robustness Score", scores["robustness"]],
-            ["Optimization Score", scores["optimization"]],
-            ["Walk Forward Score", scores["walk_forward"]],
-            ["Monte Carlo Score", scores["monte_carlo"]],
-        ]
-        t_score = Table(score_data, colWidths=[200, 340])
-        t_score.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (1, 0), colors.HexColor("#EDF2F7")),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-                    ("PADDING", (0, 0), (-1, -1), 3),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ]
+        if single_backtest_mode:
+            story.append(Paragraph("Single-Backtest Trade Log Report", title_style))
+            story.append(Spacer(1, 5))
+            p_text = (
+                f"This report covers a single backtest run for symbol <b>{symbol}</b> on timeframe "
+                f"<b>{timeframe}</b> with trade-level detail. The full validation suite (Walk Forward, "
+                f"Optimization, Monte Carlo, Robustness) was not run, so no Quality Scorecard or "
+                f"recommendation is shown."
             )
-        )
-        story.append(t_score)
-        story.append(Spacer(1, 8))
+            story.append(Paragraph(p_text, body_style))
+            story.append(Spacer(1, 8))
+        else:
+            story.append(Paragraph("Validation & Research Summary Dashboard", title_style))
+            story.append(Spacer(1, 5))
 
-        # Module statuses
-        story.append(Paragraph("Validation Modules Status", h1_style))
-        status_data = [
-            [Paragraph("Module", bold_body), Paragraph("Status", bold_body), Paragraph("Diagnostic / Result summary", bold_body)],
-            ["Walk Forward", results.get("walk_forward", {}).get("status", "NOT RUN"), results.get("walk_forward", {}).get("message", "-")],
-            ["Parameter Optimization", results.get("optimization", {}).get("status", "NOT RUN"), results.get("optimization", {}).get("message", "-")],
-            ["Monte Carlo", results.get("monte_carlo", {}).get("status", "NOT RUN"), results.get("monte_carlo", {}).get("message", "-")],
-            ["Robustness Stress Testing", results.get("robustness", {}).get("status", "NOT RUN"), results.get("robustness", {}).get("message", "-")],
-            ["Parameter Stability", results.get("stability", {}).get("status", "NOT RUN"), results.get("stability", {}).get("message", "-")],
-        ]
-        t_status = Table(status_data, colWidths=[130, 80, 330])
-        t_status.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EDF2F7")),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-                    ("PADDING", (0, 0), (-1, -1), 3),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ]
+            # Executive Summary
+            story.append(Paragraph("Executive Summary", h1_style))
+            p_text = (
+                f"This summary aggregates validation metrics for symbol <b>{symbol}</b> on timeframe <b>{timeframe}</b>. "
+                f"Following walk-forward testing, random execution cost disturbances, sequence bootstrapping, and sensitivity plateaus, "
+                f"the validation suite assigns a recommendation status of <b>{scores['recommendation']}</b>."
             )
-        )
-        story.append(t_status)
+            story.append(Paragraph(p_text, body_style))
+            story.append(Spacer(1, 8))
+
+            # Scorecard table
+            story.append(Paragraph("Quality Scorecard", h1_style))
+            score_data = [
+                [Paragraph("Quality Area", bold_body), Paragraph("Score", bold_body)],
+                ["Overall Score", scores["overall"]],
+                ["Risk Score", scores["risk"]],
+                ["Robustness Score", scores["robustness"]],
+                ["Optimization Score", scores["optimization"]],
+                ["Walk Forward Score", scores["walk_forward"]],
+                ["Monte Carlo Score", scores["monte_carlo"]],
+            ]
+            t_score = Table(score_data, colWidths=[200, 340])
+            t_score.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (1, 0), colors.HexColor("#EDF2F7")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+                        ("PADDING", (0, 0), (-1, -1), 3),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ]
+                )
+            )
+            story.append(t_score)
+            story.append(Spacer(1, 8))
+
+            # Module statuses
+            story.append(Paragraph("Validation Modules Status", h1_style))
+            status_data = [
+                [Paragraph("Module", bold_body), Paragraph("Status", bold_body), Paragraph("Diagnostic / Result summary", bold_body)],
+                ["Walk Forward", results.get("walk_forward", {}).get("status", "NOT RUN"), results.get("walk_forward", {}).get("message", "-")],
+                ["Parameter Optimization", results.get("optimization", {}).get("status", "NOT RUN"), results.get("optimization", {}).get("message", "-")],
+                ["Monte Carlo", results.get("monte_carlo", {}).get("status", "NOT RUN"), results.get("monte_carlo", {}).get("message", "-")],
+                ["Robustness Stress Testing", results.get("robustness", {}).get("status", "NOT RUN"), results.get("robustness", {}).get("message", "-")],
+                ["Parameter Stability", results.get("stability", {}).get("status", "NOT RUN"), results.get("stability", {}).get("message", "-")],
+            ]
+            t_status = Table(status_data, colWidths=[130, 80, 330])
+            t_status.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EDF2F7")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+                        ("PADDING", (0, 0), (-1, -1), 3),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ]
+                )
+            )
+            story.append(t_status)
 
         # Trade Log
         if trade_rows:
-            story.append(PageBreak())
+            if not single_backtest_mode:
+                story.append(PageBreak())
             story.append(Paragraph("Trade Log", h1_style))
             if total_trade_count > max_trade_log_rows:
                 note = (
