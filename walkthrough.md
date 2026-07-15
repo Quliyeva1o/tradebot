@@ -1003,4 +1003,22 @@ out-of-sample PF 0.820 — hər ikisi 1.0-dan aşağı, real edge yoxdur. Midlin
 USTEC-ə XAS bir edge göstərir, FX-ə (ən azı EURUSD-ə) ÜMUMİLƏŞDİRİLMİR. GBPUSD/USDJPY sınanmadı,
 bu nəticəyə görə əlavə vaxt sərf edilmədi.
 
+---
+
+## Qərar: Backtest Engine-in tək-simvol/tək-pozisiya arxitekturası İNDİ dəyişdirilmir
+
+`BacktestEngine.run()` bir dəfəyə yalnız BİR simvol, BİR açıq pozisiya dəstəkləyir (çoxlu-simvol/
+çoxlu-pozisiya paralel idarəetməsi yoxdur). Bu, İNDİ HƏLL EDİLMİR — bu, şüurlu bir qərardır,
+unudulma deyil.
+
+**Səbəb:** Hazırda YALNIZ 1 strategiya (Midline Sweep, USTEC) sübut edilmiş edge göstərir (bax:
+yuxarıdakı `body_multiplier=1.5` in-sample/out-of-sample təsdiqi). Çoxlu-pozisiya arxitekturası
+indi lazımsız mürəkkəblik əlavə edərdi (YAGNI prinsipi) — ikinci sübut edilmiş strategiya/simvol
+olmadan bu işi görməyin praktiki qazancı yoxdur, yalnız baxım yükü artırar.
+
+**Bu qərar YALNIZ o zaman yenidən nəzərdən keçiriləcək ki, EN AZI 2 MÜSTƏQİL, SÜBUT EDİLMİŞ
+strategiya/simvol eyni vaxtda canlı/demo ticarətə hazır olsun.**
+
+**Status: QƏRAR QEYD EDİLDİ (kod dəyişikliyi yoxdur).**
+
 **Status: BAĞLANDI (mənfi nəticə sənədləşdirildi, kod dəyişməyib).**
