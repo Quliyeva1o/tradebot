@@ -112,8 +112,12 @@ class CSVDataProvider(IMarketDataProvider):
         if "volume" not in df.columns:
             df["volume"] = 0.0
 
+        # Add optional spread if missing (older CSVs predating Bug #30 may lack it)
+        if "spread" not in df.columns:
+            df["spread"] = 0.0
+
         # Select target columns only
-        target_columns = ["time", "open", "high", "low", "close", "volume"]
+        target_columns = ["time", "open", "high", "low", "close", "volume", "spread"]
         df = df[target_columns].copy()
 
         # Handle duplicates based on configuration policy

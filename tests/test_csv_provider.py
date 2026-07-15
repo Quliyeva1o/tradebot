@@ -112,6 +112,63 @@ class TestValidate:
         provider.validate([good_bar])  # must not raise
 
 
+class TestSpreadColumn:
+    """load() must read a real "spread" column into Bar.spread (Bug #24 --
+    previously target_columns dropped it, so Bar.spread was always 0.0 no
+    matter what the CSV contained, forcing BacktestEngine to always fall
+    back to the constant config.spread).
+    """
+
+    def test_spread_column_is_loaded_into_bars(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "with_spread.csv"
+        csv_file.write_text(
+            "time,open,high,low,close,volume,spread\n"
+            "2026-01-01 00:00:00,1.1000,1.1050,1.0950,1.1020,1000,0.00015\n"
+            "2026-01-01 00:15:00,1.1010,1.1060,1.0960,1.1030,1100,0.00020\n"
+        )
+        provider = CSVDataProvider(filepath=csv_file, settings=Settings())
+
+        bars = provider.load()
+
+        assert [b.spread for b in bars] == [0.00015, 0.00020]
+
+    def test_missing_spread_column_falls_back_to_zero(self, tmp_path: Path) -> None:
+        """Old CSVs without a spread column at all (pre-Bug #30) must keep
+        loading exactly as before: Bar.spread == 0.0, no crash."""
+        csv_file = tmp_path / "no_spread.csv"
+        csv_file.write_text(
+            "time,open,high,low,close,volume\n"
+            "2026-01-01 00:00:00,1.1000,1.1050,1.0950,1.1020,1000\n"
+        )
+        provider = CSVDataProvider(filepath=csv_file, settings=Settings())
+
+        bars = provider.load()
+
+        assert len(bars) == 1
+        assert bars[0].spread == 0.0
+
+    def test_existing_correct_format_csv_behavior_is_unchanged(self, tmp_path: Path) -> None:
+        """Differential check: a CSV in the current, correct (Bug #30)
+        price-space spread format must load with the exact same OHLCV
+        values as before, plus now-populated (previously-dropped) spread."""
+        csv_file = tmp_path / "correct_format.csv"
+        csv_file.write_text(
+            "time,open,high,low,close,volume,spread\n"
+            "2026-01-01 00:00:00,1.1000,1.1050,1.0950,1.1020,1000,0.00012\n"
+            "2026-01-01 00:15:00,1.1010,1.1060,1.0960,1.1030,1100,0.00018\n"
+        )
+        provider = CSVDataProvider(filepath=csv_file, settings=Settings())
+
+        bars = provider.load()
+
+        assert len(bars) == 2
+        assert bars[0].open == 1.1000
+        assert bars[0].close == 1.1020
+        assert bars[0].volume == 1000.0
+        assert bars[0].spread == 0.00012
+        assert bars[1].spread == 0.00018
+
+
 class TestValidateOHLCConsistency:
     """provider.validate() catches internally-inconsistent OHLC bars
     (Bug #31 -- previously only checked non-positive prices, missing a
