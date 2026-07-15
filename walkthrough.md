@@ -1022,3 +1022,47 @@ strategiya/simvol eyni vaxtda canlı/demo ticarətə hazır olsun.**
 **Status: QƏRAR QEYD EDİLDİ (kod dəyişikliyi yoxdur).**
 
 **Status: BAĞLANDI (mənfi nəticə sənədləşdirildi, kod dəyişməyib).**
+
+---
+
+## Audit #17: Margin/Leverage Modelləşdirilməsi — HƏLL EDİLDİ (commit `349ee31`)
+
+`SimplePositionSizer` yalnız risk-əsaslı ölçü hesablayırdı (`risk_amount / |entry - SL|`), heç
+bir leverage/margin məhdudiyyəti nəzərə almadan — real broker hesabında açıla bilməyəcək
+ölçüdə pozisiyalar sakitcə "açılırdı" (bax `tradebot_technical_audit.md` #17).
+
+**Dəyişiklik:**
+- `BacktestConfig`-ə iki opsional sahə: `leverage: float | None = None`, `contract_size:
+  float = 1.0`. `leverage=None` (default) marja yoxlamasını tamamilə söndürür — mövcud
+  davranış dəyişmir (bütün əvvəlki config-lər/testlər bu sahələri təyin etmirdi).
+- `BacktestEngine`: `pos_size` hesablandıqdan sonra, `active_trade` yaradılmazdan əvvəl,
+  `required_margin = pos_size * contract_size * entry_price / leverage` yoxlanılır.
+  `required_margin > balance` olduqda setup sakitcə rədd edilir (balans toxunulmur),
+  `BacktestResult.margin_rejected_setups` sayğacı artırılır.
+- 5 yeni test (`tests/test_backtest_engine.py`): default-un no-op olduğunu təsdiqləyən
+  differensial test, BUY/SELL üçün rədd ssenariləri, sərhəd (boundary) ssenarisi. Tam suite
+  (358 test) reqressiyasız keçdi.
+
+**Real doğrulama (Midline Sweep, USTEC M5, OOS split 0.7, eyni parametrlər, 106 trade dəqiq
+təkrar istehsal olundu):**
+
+| | None | 20 (ESMA) | 15 | 10 | 5 | 2 |
+|---|---:|---:|---:|---:|---:|---:|
+| Trade sayı | 106 | 106 | 106 | 80 | 10 | 0 |
+| Margin-rejected | 0 | 0 | 0 | 26 | 96 | 106 |
+| Profit Factor | 1.0958 | 1.0958 | 1.0958 | 1.3047 | 0.8442 | 1.0000 |
+
+**Nəticə:** 1:20 leverage-də (ESMA-nın real retail index tavanı) **TAM EYNİ nəticə** — 106
+trade, PF 1.0958, 0 margin-rejected. Audit-in nəzəri riski (marja yoxlaması olmadan qeyri-real
+pozisiyaların sakitcə "açılması") bu konkret strategiya/risk kombinasiyasında (risk_per_trade
+1%) praktik təsir göstərmir — 1% risk sizing artıq kifayət qədər konservativdir ki, tələb
+olunan marja heç vaxt balansı aşmır.
+
+Aşağı leverage-lərin (1:10 və aşağı) nəticələri **müqayisə edilə bilməz**: rədd edilən setup
+dərhal atılır (`pending_setup = None`), ona görə strategiya növbəti bardan yeni siqnal
+axtarmağa dərhal başlayır — nəticədə fərqli, path-dependent bir trade ardıcıllığı yaranır (106
+trade-in alt çoxluğu DEYİL). 1:10-dakı PF 1.3047 "yaxşılaşması" marjanın pis trade-ləri
+seçici şəkildə süzdüyü demək DEYİL, sadəcə fərqli seçilmiş nümunədir; 1:5/1:2-də isə sample
+ölçüsü (10 və 0 trade) statistik olaraq mənasızdır.
+
+**Status: BAĞLANDI (kod dəyişikliyi tətbiq olunub, test edilib, real datada doğrulanıb).**
