@@ -178,27 +178,14 @@ def main() -> None:
             "min_risk_reward_ratio": [1.0, 1.5, 2.0],
             "stop_buffer_pips": [3.0, 5.0, 7.0],
         }
-        best_params = optimizer.optimize(search_space, method="grid")
-
-        # Run optimized simulation to calculate best net profit
-        opt_strat = StrategyConfig(
-            lookback_bars=strat_config.lookback_bars,
-            fvg_proximity_pips=strat_config.fvg_proximity_pips,
-            stop_buffer_pips=best_params.get("stop_buffer_pips", strat_config.stop_buffer_pips),
-            min_risk_reward_ratio=best_params.get("min_risk_reward_ratio", strat_config.min_risk_reward_ratio),
-        )
-        state_builder = MarketStateBuilder(symbol=symbol, timeframe=timeframe_enum)
-        strategy_engine = StrategyEngine()
-        strategy_engine.register_strategy(BullishContinuationStrategy(config=opt_strat))
-        strategy_engine.register_strategy(BearishContinuationStrategy(config=opt_strat))
-        engine = BacktestEngine(config=backtest_config)
-        opt_res = engine.run(candles, strategy_engine, state_builder)
+        optim_result = optimizer.optimize(search_space, method="grid")
+        best_params = optim_result["best_params"]
 
         results["optimization"] = {
             "status": "SUCCESS",
             "data": {
                 "best_params": best_params,
-                "best_pnl": opt_res.final_balance - opt_res.initial_balance,
+                "best_pnl": optim_result["best_pnl"],
             },
             "message": f"Optimal Parameters: RR={best_params.get('min_risk_reward_ratio')}, StopBuffer={best_params.get('stop_buffer_pips')}",
         }

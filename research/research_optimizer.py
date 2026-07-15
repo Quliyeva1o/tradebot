@@ -54,7 +54,8 @@ class ParameterOptimizer:
             target_metric: Metric to maximize ("net_profit" or "win_rate").
 
         Returns:
-            The best parameters configuration.
+            A dict with "best_params" (the winning parameter configuration) and
+            "best_pnl" (the net profit achieved by that configuration).
         """
         # Determine all combinations
         keys = list(search_space.keys())
@@ -69,7 +70,8 @@ class ParameterOptimizer:
 
         trials = []
         best_val = float("-inf")
-        best_params = {}
+        best_params: dict[str, Any] = {}
+        best_metrics: dict[str, Any] = {}
 
         # Default fallback values for configs
         default_strat = StrategyConfig()
@@ -116,11 +118,15 @@ class ParameterOptimizer:
                 if val > best_val:
                     best_val = val
                     best_params = comb
+                    best_metrics = metrics
             except Exception:
                 logger.exception("Trial %d failed to execute with params: %s", i + 1, comb)
 
         self._export_artifacts(trials, best_params, keys)
-        return best_params
+        return {
+            "best_params": best_params,
+            "best_pnl": float(best_metrics.get("net_profit", 0.0)),
+        }
 
     def _simulate(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
         """Executes simulation and returns metrics dictionary."""

@@ -1,5 +1,8 @@
 """Research Dashboard and PDF Reporting module."""
 
+import csv
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
@@ -21,6 +24,21 @@ from utils.paths import get_artifacts_dir
 logger = setup_logger("dashboard")
 
 
+def _format_entry_time(raw: str) -> str:
+    """Formats a trades.csv timestamp string as YYYY-MM-DD HH:MM.
+
+    Args:
+        raw: The raw timestamp string as written by run_backtest.py (str(datetime)).
+
+    Returns:
+        The timestamp formatted as YYYY-MM-DD HH:MM, or the original string if unparseable.
+    """
+    try:
+        return datetime.fromisoformat(raw).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return raw
+
+
 class ResearchDashboard:
     """Aggregates validation module results, calculates safety/robustness scores, and compiles reports."""
 
@@ -33,6 +51,8 @@ class ResearchDashboard:
         symbol: str,
         timeframe: str,
         results: dict[str, Any],
+        trades_csv_path: str | Path | None = None,
+        max_trade_log_rows: int = 50,
     ) -> None:
         """Compiles the aggregated results into Markdown and ReportLab PDF dashboard formats.
 
@@ -40,6 +60,11 @@ class ResearchDashboard:
             symbol: Trading instrument.
             timeframe: Timeframe of simulation.
             results: Dictionary containing outcomes and status logs from each modular step.
+            trades_csv_path: Optional path to a trades.csv file (as written by
+                run_backtest.py) to render as a Trade Log section. If None or the
+                file doesn't exist, the Trade Log section is omitted.
+            max_trade_log_rows: Maximum number of most recent trades to render when
+                trades_csv_path is given. Defaults to 50.
         """
         logger.info("Assembling Research validation dashboard...")
 
@@ -129,13 +154,54 @@ class ResearchDashboard:
             "recommendation": rec,
         }
 
+        trade_rows, total_trade_count = self._load_trade_log(trades_csv_path, max_trade_log_rows)
+
         # 1. Export research_dashboard.md
-        self._export_markdown(symbol, timeframe, results, scores)
+        self._export_markdown(symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows)
 
         # 2. Export research_summary.pdf
-        self._export_pdf(symbol, timeframe, results, scores)
+        self._export_pdf(symbol, timeframe, results, scores, trade_rows, total_trade_count, max_trade_log_rows)
 
-    def _export_markdown(self, symbol: str, timeframe: str, results: dict[str, Any], scores: dict[str, Any]) -> None:
+    def _load_trade_log(
+        self, trades_csv_path: str | Path | None, max_rows: int
+    ) -> tuple[list[dict[str, str]], int]:
+        """Reads trade rows from a trades.csv file, if provided.
+
+        Args:
+            trades_csv_path: Path to a trades.csv file (as written by run_backtest.py), or None.
+            max_rows: Maximum number of most recent trades to keep for display.
+
+        Returns:
+            A tuple of (rows to display, total trade count in the file). Empty/(0)
+            if trades_csv_path is None, missing, or has no trade rows.
+        """
+        if trades_csv_path is None:
+            return [], 0
+
+        csv_path = Path(trades_csv_path)
+        if not csv_path.exists():
+            logger.warning("Trade log CSV not found at %s; skipping Trade Log section.", csv_path)
+            return [], 0
+
+        with open(csv_path, newline="") as f:
+            rows = list(csv.DictReader(f))
+
+        if not rows:
+            return [], 0
+
+        display_rows = rows[-max_rows:] if len(rows) > max_rows else rows
+        return display_rows, len(rows)
+
+    def _export_markdown(
+        self,
+        symbol: str,
+        timeframe: str,
+        results: dict[str, Any],
+        scores: dict[str, Any],
+        trade_rows: list[dict[str, str]],
+        total_trade_count: int,
+        max_trade_log_rows: int,
+    ) -> None:
         """Exports MD research dashboard."""
         artifacts_dir = get_artifacts_dir()
         md_path = artifacts_dir / "research_dashboard.md"
@@ -173,11 +239,52 @@ class ResearchDashboard:
 ## Concluding Comments
 - Dashboard aggregated successfully. Recommendation set to **{scores['recommendation']}**.
 """
+        if trade_rows:
+            md += self._render_trade_log_markdown(trade_rows, total_trade_count, max_trade_log_rows)
+
         with open(md_path, "w") as f:
             f.write(md)
         logger.info("Saved research MD dashboard to %s", md_path)
 
-    def _export_pdf(self, symbol: str, timeframe: str, results: dict[str, Any], scores: dict[str, Any]) -> None:
+    def _render_trade_log_markdown(
+        self, trade_rows: list[dict[str, str]], total_trade_count: int, max_rows: int
+    ) -> str:
+        """Renders the Trade Log section as a Markdown table.
+
+        Args:
+            trade_rows: The (possibly truncated) trade rows to render.
+            total_trade_count: The total number of trades in the source CSV.
+            max_rows: The configured row cap, used to decide whether to show the truncation note.
+
+        Returns:
+            A Markdown string for the Trade Log section.
+        """
+        lines = ["\n---\n\n## Trade Log\n"]
+        if total_trade_count > max_rows:
+            lines.append(
+                f"Showing the last {len(trade_rows)} of {total_trade_count} trades. "
+                "See `trades.csv` in the artifacts directory for the full list.\n"
+            )
+        lines.append("| Entry Time | Direction | Entry Price | Exit Price | Result | P&L |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for row in trade_rows:
+            entry_time = _format_entry_time(row.get("entry_time", ""))
+            lines.append(
+                f"| {entry_time} | {row.get('direction', '-')} | {row.get('entry_price', '-')} | "
+                f"{row.get('exit_price', '-')} | {row.get('result', '-')} | ${row.get('pnl', '0.00')} |"
+            )
+        return "\n".join(lines) + "\n"
+
+    def _export_pdf(
+        self,
+        symbol: str,
+        timeframe: str,
+        results: dict[str, Any],
+        scores: dict[str, Any],
+        trade_rows: list[dict[str, str]],
+        total_trade_count: int,
+        max_trade_log_rows: int,
+    ) -> None:
         """Exports PDF summary using ReportLab."""
         artifacts_dir = get_artifacts_dir()
         pdf_path = artifacts_dir / "research_summary.pdf"
@@ -289,6 +396,47 @@ class ResearchDashboard:
             )
         )
         story.append(t_status)
+
+        # Trade Log
+        if trade_rows:
+            story.append(PageBreak())
+            story.append(Paragraph("Trade Log", h1_style))
+            if total_trade_count > max_trade_log_rows:
+                note = (
+                    f"Showing the last {len(trade_rows)} of {total_trade_count} trades. "
+                    "See trades.csv in the artifacts directory for the full list."
+                )
+                story.append(Paragraph(note, body_style))
+                story.append(Spacer(1, 4))
+
+            trade_data = [
+                [Paragraph(h, bold_body) for h in ["Entry Time", "Dir", "Entry Price", "Exit Price", "Result", "P&L"]]
+            ]
+            for row in trade_rows:
+                entry_time = _format_entry_time(row.get("entry_time", ""))
+                trade_data.append(
+                    [
+                        entry_time,
+                        row.get("direction", "-"),
+                        row.get("entry_price", "-"),
+                        row.get("exit_price", "-"),
+                        row.get("result", "-"),
+                        f"${row.get('pnl', '0.00')}",
+                    ]
+                )
+            t_trades = Table(trade_data, colWidths=[110, 50, 90, 90, 60, 80], repeatRows=1)
+            t_trades.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EDF2F7")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+                        ("PADDING", (0, 0), (-1, -1), 3),
+                        ("FONTSIZE", (0, 0), (-1, -1), 7),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ]
+                )
+            )
+            story.append(t_trades)
 
         # Plot charts if available
         heatmap_path = artifacts_dir / "stability_heatmap.png"

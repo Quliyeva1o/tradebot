@@ -63,7 +63,22 @@ def test_parameter_optimizer(dummy_candles: list[Bar]) -> None:
     optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
     search_space = {"min_risk_reward_ratio": [1.0, 1.5]}
     best = optimizer.optimize(search_space, max_iter=2)
-    assert "min_risk_reward_ratio" in best
+    assert "min_risk_reward_ratio" in best["best_params"]
+
+
+def test_parameter_optimizer_returns_best_pnl(dummy_candles: list[Bar]) -> None:
+    """Regression test for Bug #20: optimize() must surface a numeric best_pnl.
+
+    dashboard.py reads results["optimization"]["data"]["best_pnl"] to compute the
+    Optimization Score; previously optimize() returned only the raw best_params
+    dict, so any caller that didn't independently re-simulate the winning params
+    would silently leave the Optimization Score stuck at "N/A".
+    """
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    search_space = {"min_risk_reward_ratio": [1.0, 1.5]}
+    best = optimizer.optimize(search_space, max_iter=2)
+    assert "best_pnl" in best
+    assert isinstance(best["best_pnl"], float)
 
 
 def test_monte_carlo_simulator() -> None:

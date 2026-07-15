@@ -404,10 +404,11 @@ def main() -> None:
                 "min_risk_reward_ratio": [1.0, 1.5, 2.0],
                 "stop_buffer_pips": [3.0, 5.0, 7.0],
             }
-            best_params = optimizer.optimize(search_space, method="grid")
+            optim_result = optimizer.optimize(search_space, method="grid")
             opt_results.append({
                 "symbol": symbol,
-                "best_params": best_params,
+                "best_params": optim_result["best_params"],
+                "best_pnl": optim_result["best_pnl"],
             })
 
         state["phase_3"] = "SUCCESS"
