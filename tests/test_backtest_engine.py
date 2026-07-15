@@ -1238,5 +1238,193 @@ def test_conflict_policy_first_does_not_log(
     assert len(caplog.records) == 0  # ...but not logged under the default policy
 
 
+# --- Audit #17: margin/leverage-aware position sizing ---------------------
+
+
+def _make_index_setup(
+    setup_id: str = "setup_margin",
+    direction: SignalDirection = SignalDirection.BUY,
+) -> TradeSetup:
+    """A high-notional setup (index-scale prices, tight stop) used to exercise
+    margin checking: entry ~25010, stop distance 10 -> pos_size 10 units at
+    1% risk on a $10,000 balance -> notional ~$250,100.
+    """
+    if direction == SignalDirection.BUY:
+        entry_zone = (24990.0, 25010.0)  # limit_price = 25010
+        stop_zone = (25000.0, 25005.0)  # sl_price (BUY uses sl_low) = 25000, distance 10
+        target_zone = (25200.0, 25210.0)
+    else:
+        entry_zone = (24990.0, 25010.0)  # limit_price = entry_low = 24990
+        stop_zone = (24995.0, 25000.0)  # sl_price (SELL uses sl_high) = 25000, distance 10
+        target_zone = (24790.0, 24800.0)
+    return TradeSetup(
+        setup_id=setup_id,
+        symbol="USTEC",
+        timeframe=Timeframe.M15,
+        direction=direction,
+        entry_zone=entry_zone,
+        stop_zone=stop_zone,
+        target_zone=target_zone,
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Test high-notional setup",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+
+def test_margin_check_default_none_is_a_no_op(state_builder: MarketStateBuilder) -> None:
+    """Differential/regression test: BacktestConfig.leverage defaults to None,
+    which must reproduce the exact pre-change behavior -- a high-notional
+    trade that would be rejected under a real leverage cap still opens
+    normally when leverage is unset, and margin_rejected_setups stays 0.
+    This proves the new margin gate is a true no-op for every existing
+    config/test (none of which set leverage), including every prior
+    scenario in this file and any backtest run (e.g. the Midline Sweep
+    USTEC OOS run) that predates this change.
+    """
+    setup = _make_index_setup()
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        # leverage intentionally omitted -> defaults to None
+    )
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+
+    candles = [
+        _create_bar(0, 25005.0, 25015.0, 25000.0, 25005.0),
+        _create_bar(1, 25005.0, 25020.0, 25000.0, 25010.0),  # low=25000 <= limit_price 25010 -> fills
+        _create_bar(2, 25010.0, 25210.0, 25005.0, 25050.0),  # hits TP
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    assert result.trades[0].result == TradeResult.WIN
+    assert result.margin_rejected_setups == 0
+
+
+def test_margin_rejects_position_exceeding_leverage_capacity(
+    state_builder: MarketStateBuilder,
+) -> None:
+    """At leverage=20 (real ESMA-style index cap), a high-notional setup
+    (~$250,100 notional against a $10,000 balance -> required_margin
+    ~$12,505 > balance) must be silently rejected: no trade opens, the
+    balance is untouched, and margin_rejected_setups is incremented.
+    """
+    setup = _make_index_setup()
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        leverage=20.0,
+        contract_size=1.0,
+    )
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+
+    candles = [
+        _create_bar(0, 25005.0, 25015.0, 25000.0, 25005.0),
+        _create_bar(1, 25005.0, 25020.0, 25000.0, 25010.0),  # would fill, but margin check rejects
+        _create_bar(2, 25010.0, 25210.0, 25005.0, 25050.0),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 0
+    assert result.margin_rejected_setups == 1
+    assert result.final_balance == 10000.0
+    assert result.account_blown is False
+
+
+def test_margin_rejects_sell_position_exceeding_leverage_capacity(
+    state_builder: MarketStateBuilder,
+) -> None:
+    """Same margin rejection, mirrored for the SELL fill branch."""
+    setup = _make_index_setup(direction=SignalDirection.SELL)
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        leverage=20.0,
+        contract_size=1.0,
+    )
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+
+    candles = [
+        _create_bar(0, 25005.0, 25015.0, 25000.0, 25005.0),
+        _create_bar(1, 24985.0, 25000.0, 24985.0, 24995.0),  # high=25000 >= limit_price 24990 -> would fill
+        _create_bar(2, 24995.0, 25000.0, 24805.0, 24810.0),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 0
+    assert result.margin_rejected_setups == 1
+    assert result.final_balance == 10000.0
+
+
+def test_margin_allows_position_within_leverage_capacity(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    """Sanity/boundary check: a normal low-notional FX trade (from
+    test_backtest_winning_trade's exact scenario) must still open even with
+    a leverage cap set, proving the margin gate only rejects setups that
+    genuinely exceed the account's margin capacity.
+    """
+    setup = TradeSetup(
+        setup_id="setup_win",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1060),
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    config = BacktestConfig(
+        initial_balance=base_config.initial_balance,
+        risk_per_trade=base_config.risk_per_trade,
+        spread=base_config.spread,
+        commission=base_config.commission,
+        slippage=base_config.slippage,
+        max_holding_bars=base_config.max_holding_bars,
+        leverage=20.0,
+        contract_size=1.0,
+    )
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    assert result.trades[0].result == TradeResult.WIN
+    assert result.margin_rejected_setups == 0
 
 

@@ -90,6 +90,17 @@ class BacktestEngine:
             return candle.spread
         return self.config.spread
 
+    def _margin_ok(self, pos_size: float, entry_price: float, balance: float) -> bool:
+        """Checks whether balance covers the required margin for a position.
+
+        Always True when config.leverage is None (margin checking disabled,
+        preserving prior behavior).
+        """
+        if self.config.leverage is None:
+            return True
+        required_margin = pos_size * self.config.contract_size * entry_price / self.config.leverage
+        return required_margin <= balance
+
     def run(
         self,
         candles: list[Bar],
@@ -139,6 +150,7 @@ class BacktestEngine:
         stopped_early = False
         stop_reason = None
         conflicting_setups_dropped = 0
+        margin_rejected_setups = 0
 
         for idx, candle in enumerate(candles):
             # 1. Update MarketStateBuilder first
@@ -349,25 +361,30 @@ class BacktestEngine:
                             stop_loss=sl_price,
                         )
                         if pos_size > 0:
-                            active_trade = {
-                                "entry_time": candle.timestamp,
-                                "direction": SignalDirection.BUY,
-                                "entry_price": entry_price,
-                                "stop_loss": sl_price,
-                                "take_profit": tp_price,
-                                "position_size": pos_size,
-                                "bars_held": 0,
-                                "symbol": pending_setup.symbol,
-                                "setup_id": pending_setup.setup_id,
-                                "strategy_name": strategy_name,
-                                "trigger_reason": pending_setup.trigger_reason,
-                                "confidence_score": pending_setup.confidence_score,
-                                "entry_bar_index": idx,
-                                "entry_spread": spread,
-                                "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
-                                "tp_extension_price": pending_setup.conditional_tp_extension_price,
-                                "tp_extension_applied": False,
-                            }
+                            if self._margin_ok(pos_size, entry_price, balance):
+                                active_trade = {
+                                    "entry_time": candle.timestamp,
+                                    "direction": SignalDirection.BUY,
+                                    "entry_price": entry_price,
+                                    "stop_loss": sl_price,
+                                    "take_profit": tp_price,
+                                    "position_size": pos_size,
+                                    "bars_held": 0,
+                                    "symbol": pending_setup.symbol,
+                                    "setup_id": pending_setup.setup_id,
+                                    "strategy_name": strategy_name,
+                                    "trigger_reason": pending_setup.trigger_reason,
+                                    "confidence_score": pending_setup.confidence_score,
+                                    "entry_bar_index": idx,
+                                    "entry_spread": spread,
+                                    "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
+                                    "tp_extension_price": pending_setup.conditional_tp_extension_price,
+                                    "tp_extension_applied": False,
+                                }
+                            else:
+                                margin_rejected_setups += 1
+                                pending_setup = None
+                                pending_setup_idx = None
                 else:  # SELL
                     limit_price = entry_low
                     if candle.high >= limit_price:
@@ -380,25 +397,30 @@ class BacktestEngine:
                             stop_loss=sl_price,
                         )
                         if pos_size > 0:
-                            active_trade = {
-                                "entry_time": candle.timestamp,
-                                "direction": SignalDirection.SELL,
-                                "entry_price": entry_price,
-                                "stop_loss": sl_price,
-                                "take_profit": tp_price,
-                                "position_size": pos_size,
-                                "bars_held": 0,
-                                "symbol": pending_setup.symbol,
-                                "setup_id": pending_setup.setup_id,
-                                "strategy_name": strategy_name,
-                                "trigger_reason": pending_setup.trigger_reason,
-                                "confidence_score": pending_setup.confidence_score,
-                                "entry_bar_index": idx,
-                                "entry_spread": spread,
-                                "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
-                                "tp_extension_price": pending_setup.conditional_tp_extension_price,
-                                "tp_extension_applied": False,
-                            }
+                            if self._margin_ok(pos_size, entry_price, balance):
+                                active_trade = {
+                                    "entry_time": candle.timestamp,
+                                    "direction": SignalDirection.SELL,
+                                    "entry_price": entry_price,
+                                    "stop_loss": sl_price,
+                                    "take_profit": tp_price,
+                                    "position_size": pos_size,
+                                    "bars_held": 0,
+                                    "symbol": pending_setup.symbol,
+                                    "setup_id": pending_setup.setup_id,
+                                    "strategy_name": strategy_name,
+                                    "trigger_reason": pending_setup.trigger_reason,
+                                    "confidence_score": pending_setup.confidence_score,
+                                    "entry_bar_index": idx,
+                                    "entry_spread": spread,
+                                    "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
+                                    "tp_extension_price": pending_setup.conditional_tp_extension_price,
+                                    "tp_extension_applied": False,
+                                }
+                            else:
+                                margin_rejected_setups += 1
+                                pending_setup = None
+                                pending_setup_idx = None
 
                 # Discard or keep pending setup depending on fill or expiry
                 if active_trade is not None:
@@ -466,5 +488,6 @@ class BacktestEngine:
             stopped_early=stopped_early,
             stop_reason=stop_reason,
             conflicting_setups_dropped=conflicting_setups_dropped,
+            margin_rejected_setups=margin_rejected_setups,
         )
 
