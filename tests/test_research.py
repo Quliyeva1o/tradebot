@@ -81,6 +81,60 @@ def test_parameter_optimizer_returns_best_pnl(dummy_candles: list[Bar]) -> None:
     assert isinstance(best["best_pnl"], float)
 
 
+def test_parameter_optimizer_grid_within_limit_unchanged(dummy_candles: list[Bar]) -> None:
+    """Regression test for Bug #19 fix: small grid searches must behave exactly as before.
+
+    Mirrors the production search space used by run_research.py / run_research_campaign.py
+    (3 x 3 = 9 combinations), which is well under the default max_grid_combinations=100 and
+    must keep running to completion via method="grid" (the default) with no exception.
+    """
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    search_space = {
+        "min_risk_reward_ratio": [1.0, 1.5, 2.0],
+        "stop_buffer_pips": [3.0, 5.0, 7.0],
+    }
+    best = optimizer.optimize(search_space)
+    assert "min_risk_reward_ratio" in best["best_params"]
+    assert "stop_buffer_pips" in best["best_params"]
+    assert isinstance(best["best_pnl"], float)
+
+
+def test_parameter_optimizer_grid_exceeds_limit_raises(dummy_candles: list[Bar]) -> None:
+    """Regression test for Bug #19: an unbounded grid must fail fast with a clear error.
+
+    Previously, method="grid" (the default) ran itertools.product over the full search
+    space with no cap, so a grid like this (3**5 = 243 combinations) would silently run
+    243 full BacktestEngine.run() calls. It must now raise ValueError before simulating
+    anything, and the message must state the combination count, the limit, and both
+    remedies (raise max_grid_combinations, or switch to method="random").
+    """
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    search_space = {f"param_{i}": [1, 2, 3] for i in range(5)}  # 3**5 = 243 combinations
+
+    with pytest.raises(ValueError) as exc_info:
+        optimizer.optimize(search_space, method="grid")
+
+    message = str(exc_info.value)
+    assert "243" in message
+    assert "100" in message
+    assert "max_grid_combinations" in message
+    assert "random" in message
+
+
+def test_parameter_optimizer_grid_limit_override_allows_large_grid(dummy_candles: list[Bar]) -> None:
+    """A user who raises max_grid_combinations gets the conscious override they asked for.
+
+    101 combinations exceed the default cap of 100, but explicitly raising
+    max_grid_combinations must let the same grid run to completion instead of raising.
+    """
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    search_space = {"min_risk_reward_ratio": [1.0 + i * 0.01 for i in range(101)]}  # 101 combinations
+
+    best = optimizer.optimize(search_space, method="grid", max_grid_combinations=150)
+    assert "min_risk_reward_ratio" in best["best_params"]
+    assert isinstance(best["best_pnl"], float)
+
+
 def test_monte_carlo_simulator() -> None:
     """Tests Monte Carlo sequence resampling and risk calculations."""
     simulator = MonteCarloSimulator(n=10)

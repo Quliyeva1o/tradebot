@@ -44,6 +44,7 @@ class ParameterOptimizer:
         method: str = "grid",
         max_iter: int = 50,
         target_metric: str = "net_profit",
+        max_grid_combinations: int = 100,
     ) -> dict[str, Any]:
         """Runs the parameter optimization search.
 
@@ -52,17 +53,33 @@ class ParameterOptimizer:
             method: Optimization method ("grid" or "random").
             max_iter: Max iterations for random search.
             target_metric: Metric to maximize ("net_profit" or "win_rate").
+            max_grid_combinations: For method="grid", the maximum number of
+                combinations allowed before raising ValueError. Guards against
+                itertools.product exploding unboundedly (e.g. 8**5 = 32,768
+                full BacktestEngine.run() calls) with no warning.
 
         Returns:
             A dict with "best_params" (the winning parameter configuration) and
             "best_pnl" (the net profit achieved by that configuration).
+
+        Raises:
+            ValueError: If method="grid" and the number of combinations exceeds
+                max_grid_combinations.
         """
         # Determine all combinations
         keys = list(search_space.keys())
         values = list(search_space.values())
         combinations = [dict(zip(keys, prod, strict=True)) for prod in itertools.product(*values)]
 
-        if method == "random":
+        if method == "grid":
+            if len(combinations) > max_grid_combinations:
+                raise ValueError(
+                    f"Grid search would run {len(combinations)} combinations, "
+                    f"exceeding max_grid_combinations={max_grid_combinations}. "
+                    "Raise max_grid_combinations if you intend to run this full "
+                    "grid, or pass method=\"random\" with max_iter to sample it instead."
+                )
+        elif method == "random":
             if len(combinations) > max_iter:
                 combinations = random.sample(combinations, max_iter)
 
