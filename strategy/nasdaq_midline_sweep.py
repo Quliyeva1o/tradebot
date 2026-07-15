@@ -44,6 +44,7 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from core.models import SignalDirection, Timeframe
+from core.validation import require_non_negative, require_positive
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
@@ -64,6 +65,19 @@ class NasdaqMidlineSweepConfig:
     build_session_end: time = time(9, 50)
     session_timezone: str = "America/New_York"
     day_session_end: time | None = None
+
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Raises:
+            ValueError: If range_size, risk_reward, body_multiplier, or
+                sma_period is not strictly positive, or mid_buffer is negative.
+        """
+        require_positive(self.range_size, "range_size")
+        require_positive(self.risk_reward, "risk_reward")
+        require_non_negative(self.mid_buffer, "mid_buffer")
+        require_positive(self.body_multiplier, "body_multiplier")
+        require_positive(self.sma_period, "sma_period")
 
 
 class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
@@ -113,27 +127,40 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
                 classic cash-market close, or a CFD/index/metal's much longer
                 session), since this can't be assumed from the strategy alone.
             config: NasdaqMidlineSweepConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not a
+                NasdaqMidlineSweepConfig.
+            ValueError: If any parameter fails NasdaqMidlineSweepConfig's
+                validity constraints (see its __post_init__).
         """
         if config is not None:
-            self.range_size = config.range_size
-            self.risk_reward = config.risk_reward
-            self.mid_buffer = config.mid_buffer
-            self.body_multiplier = config.body_multiplier
-            self.sma_period = config.sma_period
-            self.build_session_start = config.build_session_start
-            self.build_session_end = config.build_session_end
-            self.session_timezone = config.session_timezone
-            self.day_session_end = config.day_session_end
+            if not isinstance(config, NasdaqMidlineSweepConfig):
+                raise TypeError(
+                    f"config must be a NasdaqMidlineSweepConfig, got {type(config).__name__}"
+                )
         else:
-            self.range_size = range_size
-            self.risk_reward = risk_reward
-            self.mid_buffer = mid_buffer
-            self.body_multiplier = body_multiplier
-            self.sma_period = sma_period
-            self.build_session_start = build_session_start
-            self.build_session_end = build_session_end
-            self.session_timezone = session_timezone
-            self.day_session_end = day_session_end
+            config = NasdaqMidlineSweepConfig(
+                range_size=range_size,
+                risk_reward=risk_reward,
+                mid_buffer=mid_buffer,
+                body_multiplier=body_multiplier,
+                sma_period=sma_period,
+                build_session_start=build_session_start,
+                build_session_end=build_session_end,
+                session_timezone=session_timezone,
+                day_session_end=day_session_end,
+            )
+
+        self.range_size = config.range_size
+        self.risk_reward = config.risk_reward
+        self.mid_buffer = config.mid_buffer
+        self.body_multiplier = config.body_multiplier
+        self.sma_period = config.sma_period
+        self.build_session_start = config.build_session_start
+        self.build_session_end = config.build_session_end
+        self.session_timezone = config.session_timezone
+        self.day_session_end = config.day_session_end
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()

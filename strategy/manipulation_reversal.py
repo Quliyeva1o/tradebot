@@ -61,6 +61,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from core.models import SignalDirection, Timeframe
+from core.validation import require_positive
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
@@ -76,6 +77,16 @@ class ManipulationReversalConfig:
     session_timezone: str = "America/New_York"
     tp_extension_bars: int = 3
     tp_extension_multiple: float = 2.0
+
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Raises:
+            ValueError: If tp_extension_bars or tp_extension_multiple is not
+                strictly positive.
+        """
+        require_positive(self.tp_extension_bars, "tp_extension_bars")
+        require_positive(self.tp_extension_multiple, "tp_extension_multiple")
 
 
 class ManipulationReversalStrategy(TradeSetupStrategy):
@@ -107,17 +118,30 @@ class ManipulationReversalStrategy(TradeSetupStrategy):
             tp_extension_multiple: R-multiple of the extended target (TP2 =
                 entry +/- tp_extension_multiple * risk_dist).
             config: ManipulationReversalConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not a
+                ManipulationReversalConfig.
+            ValueError: If any parameter fails ManipulationReversalConfig's
+                validity constraints (see its __post_init__).
         """
         if config is not None:
-            self.reference_time = config.reference_time
-            self.session_timezone = config.session_timezone
-            self.tp_extension_bars = config.tp_extension_bars
-            self.tp_extension_multiple = config.tp_extension_multiple
+            if not isinstance(config, ManipulationReversalConfig):
+                raise TypeError(
+                    f"config must be a ManipulationReversalConfig, got {type(config).__name__}"
+                )
         else:
-            self.reference_time = reference_time
-            self.session_timezone = session_timezone
-            self.tp_extension_bars = tp_extension_bars
-            self.tp_extension_multiple = tp_extension_multiple
+            config = ManipulationReversalConfig(
+                reference_time=reference_time,
+                session_timezone=session_timezone,
+                tp_extension_bars=tp_extension_bars,
+                tp_extension_multiple=tp_extension_multiple,
+            )
+
+        self.reference_time = config.reference_time
+        self.session_timezone = config.session_timezone
+        self.tp_extension_bars = config.tp_extension_bars
+        self.tp_extension_multiple = config.tp_extension_multiple
 
         self._session_tz = ZoneInfo(self.session_timezone)
         # One-minute-wide is_in_session window identifying the single

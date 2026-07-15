@@ -39,6 +39,7 @@ import uuid
 from dataclasses import dataclass
 
 from core.models import SignalDirection
+from core.validation import require_positive
 from market_structure.structure_models import MarketState
 from smc.order_block import OBDirection, OrderBlock
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
@@ -51,6 +52,14 @@ class OrderBlockRetestConfig:
     """Configuration class for OrderBlockRetestStrategy."""
 
     risk_reward: float = 2.0
+
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Raises:
+            ValueError: If risk_reward is not strictly positive.
+        """
+        require_positive(self.risk_reward, "risk_reward")
 
 
 class OrderBlockRetestStrategy(TradeSetupStrategy):
@@ -70,11 +79,21 @@ class OrderBlockRetestStrategy(TradeSetupStrategy):
         Args:
             risk_reward: Fixed reward:risk multiple applied to the stop distance.
             config: OrderBlockRetestConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not an
+                OrderBlockRetestConfig.
+            ValueError: If risk_reward is not strictly positive.
         """
         if config is not None:
-            self.risk_reward = config.risk_reward
+            if not isinstance(config, OrderBlockRetestConfig):
+                raise TypeError(
+                    f"config must be an OrderBlockRetestConfig, got {type(config).__name__}"
+                )
         else:
-            self.risk_reward = risk_reward
+            config = OrderBlockRetestConfig(risk_reward=risk_reward)
+
+        self.risk_reward = config.risk_reward
 
         self.diagnostics = StrategyDiagnostics()
         self._used_ob_ids: set[str] = set()

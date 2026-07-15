@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core.models import SignalDirection
+from core.validation import require_non_negative, require_positive
 from market_structure.structure_models import BreakType, MarketState, StructureBreak, StructureTrend
 from market_structure.swing_models import SwingType
 from smc.fvg import FairValueGap, FVGDirection
@@ -108,6 +109,27 @@ class StrategyConfig:
     min_risk_reward_ratio: float = 1.0
     max_break_age_bars: int | None = None
 
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Note: stop_buffer_pips is deliberately NOT range-checked here -- a
+        negative buffer is a valid (if unusual) way to force a
+        NON_POSITIVE_RISK rejection, and existing tests construct strategies
+        with stop_buffer_pips=-50.0 for exactly that purpose.
+
+        Raises:
+            ValueError: If pip_size or lookback_bars is not strictly
+                positive; if fvg_proximity_pips or min_risk_reward_ratio is
+                negative; or if max_break_age_bars is not strictly positive
+                when set.
+        """
+        require_positive(self.pip_size, "pip_size")
+        require_positive(self.lookback_bars, "lookback_bars")
+        require_non_negative(self.fvg_proximity_pips, "fvg_proximity_pips")
+        require_non_negative(self.min_risk_reward_ratio, "min_risk_reward_ratio")
+        if self.max_break_age_bars is not None:
+            require_positive(self.max_break_age_bars, "max_break_age_bars")
+
 
 class BullishContinuationStrategy(TradeSetupStrategy):
     """Bullish SMC continuation strategy module.
@@ -138,21 +160,31 @@ class BullishContinuationStrategy(TradeSetupStrategy):
                 swing's index) a structure break may have and still be used
                 for a setup. None disables the check (old behavior).
             config: StrategyConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not a StrategyConfig.
+            ValueError: If any parameter fails StrategyConfig's validity
+                constraints (see its __post_init__).
         """
         if config is not None:
-            self.pip_size = config.pip_size
-            self.lookback_bars = config.lookback_bars
-            self.fvg_proximity_pips = config.fvg_proximity_pips
-            self.stop_buffer_pips = config.stop_buffer_pips
-            self.min_risk_reward_ratio = config.min_risk_reward_ratio
-            self.max_break_age_bars = config.max_break_age_bars
+            if not isinstance(config, StrategyConfig):
+                raise TypeError(f"config must be a StrategyConfig, got {type(config).__name__}")
         else:
-            self.pip_size = pip_size
-            self.lookback_bars = lookback_bars
-            self.fvg_proximity_pips = fvg_proximity_pips
-            self.stop_buffer_pips = stop_buffer_pips
-            self.min_risk_reward_ratio = min_risk_reward_ratio
-            self.max_break_age_bars = max_break_age_bars
+            config = StrategyConfig(
+                pip_size=pip_size,
+                lookback_bars=lookback_bars,
+                fvg_proximity_pips=fvg_proximity_pips,
+                stop_buffer_pips=stop_buffer_pips,
+                min_risk_reward_ratio=min_risk_reward_ratio,
+                max_break_age_bars=max_break_age_bars,
+            )
+
+        self.pip_size = config.pip_size
+        self.lookback_bars = config.lookback_bars
+        self.fvg_proximity_pips = config.fvg_proximity_pips
+        self.stop_buffer_pips = config.stop_buffer_pips
+        self.min_risk_reward_ratio = config.min_risk_reward_ratio
+        self.max_break_age_bars = config.max_break_age_bars
         self._proposed_keys: set[tuple] = set()
         self.diagnostics = StrategyDiagnostics()
 
@@ -352,21 +384,31 @@ class BearishContinuationStrategy(TradeSetupStrategy):
                 swing's index) a structure break may have and still be used
                 for a setup. None disables the check (old behavior).
             config: StrategyConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not a StrategyConfig.
+            ValueError: If any parameter fails StrategyConfig's validity
+                constraints (see its __post_init__).
         """
         if config is not None:
-            self.pip_size = config.pip_size
-            self.lookback_bars = config.lookback_bars
-            self.fvg_proximity_pips = config.fvg_proximity_pips
-            self.stop_buffer_pips = config.stop_buffer_pips
-            self.min_risk_reward_ratio = config.min_risk_reward_ratio
-            self.max_break_age_bars = config.max_break_age_bars
+            if not isinstance(config, StrategyConfig):
+                raise TypeError(f"config must be a StrategyConfig, got {type(config).__name__}")
         else:
-            self.pip_size = pip_size
-            self.lookback_bars = lookback_bars
-            self.fvg_proximity_pips = fvg_proximity_pips
-            self.stop_buffer_pips = stop_buffer_pips
-            self.min_risk_reward_ratio = min_risk_reward_ratio
-            self.max_break_age_bars = max_break_age_bars
+            config = StrategyConfig(
+                pip_size=pip_size,
+                lookback_bars=lookback_bars,
+                fvg_proximity_pips=fvg_proximity_pips,
+                stop_buffer_pips=stop_buffer_pips,
+                min_risk_reward_ratio=min_risk_reward_ratio,
+                max_break_age_bars=max_break_age_bars,
+            )
+
+        self.pip_size = config.pip_size
+        self.lookback_bars = config.lookback_bars
+        self.fvg_proximity_pips = config.fvg_proximity_pips
+        self.stop_buffer_pips = config.stop_buffer_pips
+        self.min_risk_reward_ratio = config.min_risk_reward_ratio
+        self.max_break_age_bars = config.max_break_age_bars
         self._proposed_keys: set[tuple] = set()
         self.diagnostics = StrategyDiagnostics()
 

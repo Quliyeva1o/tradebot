@@ -43,6 +43,7 @@ from datetime import date, time
 from zoneinfo import ZoneInfo
 
 from core.models import SignalDirection, Timeframe
+from core.validation import require_positive
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
@@ -61,6 +62,18 @@ class OpeningRangeBreakoutConfig:
     session_start: time = time(9, 30)
     session_timezone: str = "America/New_York"
     day_session_end: time | None = None
+
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Raises:
+            ValueError: If volume_multiplier, volume_lookback, risk_reward,
+                or range_bars is not strictly positive.
+        """
+        require_positive(self.volume_multiplier, "volume_multiplier")
+        require_positive(self.volume_lookback, "volume_lookback")
+        require_positive(self.risk_reward, "risk_reward")
+        require_positive(self.range_bars, "range_bars")
 
 
 class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
@@ -102,23 +115,36 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
                 classic cash-market close, or a CFD/index/metal's much longer
                 session), since this can't be assumed from the strategy alone.
             config: OpeningRangeBreakoutConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not an
+                OpeningRangeBreakoutConfig.
+            ValueError: If any parameter fails OpeningRangeBreakoutConfig's
+                validity constraints (see its __post_init__).
         """
         if config is not None:
-            self.volume_multiplier = config.volume_multiplier
-            self.volume_lookback = config.volume_lookback
-            self.risk_reward = config.risk_reward
-            self.range_bars = config.range_bars
-            self.session_start = config.session_start
-            self.session_timezone = config.session_timezone
-            self.day_session_end = config.day_session_end
+            if not isinstance(config, OpeningRangeBreakoutConfig):
+                raise TypeError(
+                    f"config must be an OpeningRangeBreakoutConfig, got {type(config).__name__}"
+                )
         else:
-            self.volume_multiplier = volume_multiplier
-            self.volume_lookback = volume_lookback
-            self.risk_reward = risk_reward
-            self.range_bars = range_bars
-            self.session_start = session_start
-            self.session_timezone = session_timezone
-            self.day_session_end = day_session_end
+            config = OpeningRangeBreakoutConfig(
+                volume_multiplier=volume_multiplier,
+                volume_lookback=volume_lookback,
+                risk_reward=risk_reward,
+                range_bars=range_bars,
+                session_start=session_start,
+                session_timezone=session_timezone,
+                day_session_end=day_session_end,
+            )
+
+        self.volume_multiplier = config.volume_multiplier
+        self.volume_lookback = config.volume_lookback
+        self.risk_reward = config.risk_reward
+        self.range_bars = config.range_bars
+        self.session_start = config.session_start
+        self.session_timezone = config.session_timezone
+        self.day_session_end = config.day_session_end
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()

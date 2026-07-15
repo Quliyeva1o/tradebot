@@ -42,6 +42,7 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from core.models import Bar, SignalDirection, Timeframe
+from core.validation import require_positive
 from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
@@ -63,6 +64,19 @@ class AccumulationBreakoutConfig:
     accumulation_bars: int = 5
     sma_period: int = 20
     limit_holding_to_session: bool = False
+
+    def __post_init__(self) -> None:
+        """Validates parameter ranges.
+
+        Raises:
+            ValueError: If risk_reward, volume_multiplier, body_multiplier,
+                accumulation_bars, or sma_period is not strictly positive.
+        """
+        require_positive(self.risk_reward, "risk_reward")
+        require_positive(self.volume_multiplier, "volume_multiplier")
+        require_positive(self.body_multiplier, "body_multiplier")
+        require_positive(self.accumulation_bars, "accumulation_bars")
+        require_positive(self.sma_period, "sma_period")
 
 
 class AccumulationBreakoutStrategy(TradeSetupStrategy):
@@ -112,29 +126,42 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
                 (returns None); opt in explicitly once the traded instrument's
                 real session length is known.
             config: AccumulationBreakoutConfig options overlay.
+
+        Raises:
+            TypeError: If config is provided but is not an
+                AccumulationBreakoutConfig.
+            ValueError: If any parameter fails AccumulationBreakoutConfig's
+                validity constraints (see its __post_init__).
         """
         if config is not None:
-            self.risk_reward = config.risk_reward
-            self.volume_multiplier = config.volume_multiplier
-            self.require_volume_filter = config.require_volume_filter
-            self.session_start = config.session_start
-            self.session_end = config.session_end
-            self.session_timezone = config.session_timezone
-            self.body_multiplier = config.body_multiplier
-            self.accumulation_bars = config.accumulation_bars
-            self.sma_period = config.sma_period
-            self.limit_holding_to_session = config.limit_holding_to_session
+            if not isinstance(config, AccumulationBreakoutConfig):
+                raise TypeError(
+                    f"config must be an AccumulationBreakoutConfig, got {type(config).__name__}"
+                )
         else:
-            self.risk_reward = risk_reward
-            self.volume_multiplier = volume_multiplier
-            self.require_volume_filter = require_volume_filter
-            self.session_start = session_start
-            self.session_end = session_end
-            self.session_timezone = session_timezone
-            self.body_multiplier = body_multiplier
-            self.accumulation_bars = accumulation_bars
-            self.sma_period = sma_period
-            self.limit_holding_to_session = limit_holding_to_session
+            config = AccumulationBreakoutConfig(
+                risk_reward=risk_reward,
+                volume_multiplier=volume_multiplier,
+                require_volume_filter=require_volume_filter,
+                session_start=session_start,
+                session_end=session_end,
+                session_timezone=session_timezone,
+                body_multiplier=body_multiplier,
+                accumulation_bars=accumulation_bars,
+                sma_period=sma_period,
+                limit_holding_to_session=limit_holding_to_session,
+            )
+
+        self.risk_reward = config.risk_reward
+        self.volume_multiplier = config.volume_multiplier
+        self.require_volume_filter = config.require_volume_filter
+        self.session_start = config.session_start
+        self.session_end = config.session_end
+        self.session_timezone = config.session_timezone
+        self.body_multiplier = config.body_multiplier
+        self.accumulation_bars = config.accumulation_bars
+        self.sma_period = config.sma_period
+        self.limit_holding_to_session = config.limit_holding_to_session
 
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
