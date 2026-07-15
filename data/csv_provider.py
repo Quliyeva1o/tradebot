@@ -136,6 +136,12 @@ class CSVDataProvider(IMarketDataProvider):
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # Spread is sanitized separately (Bug #24b): NaN/negative values fall
+        # back to 0.0 (which makes BacktestEngine use config.spread) instead
+        # of silently poisoning trade costs with garbage/malformed data.
+        df["spread"] = pd.to_numeric(df["spread"], errors="coerce")
+        self._sanitize_spread_column(df)
+
         # Sort values chronologically
         df.sort_values(by="time", ascending=True, inplace=True)
         df.reset_index(drop=True, inplace=True)
@@ -187,6 +193,26 @@ class CSVDataProvider(IMarketDataProvider):
         elif policy == "fill":
             logger.warning("Filling missing value cells using ffill/bfill.")
             df[cols_to_check] = df[cols_to_check].ffill().bfill()
+
+    def _sanitize_spread_column(self, df: pd.DataFrame) -> None:
+        """Falls back NaN/negative spread values to 0.0, with a warning.
+
+        Unlike OHLCV, this is not governed by MISSING_VALUE_POLICY: a bad
+        spread reading should never block a whole file from loading (via
+        "raise") or borrow a neighboring bar's spread (via "fill") -- it
+        should just fall back to BacktestEngine's config.spread for that bar.
+        """
+        invalid_mask = df["spread"].isna() | (df["spread"] < 0.0)
+        if not invalid_mask.any():
+            return
+        invalid_count = int(invalid_mask.sum())
+        logger.warning(
+            "Found %d row(s) with missing/negative spread values in %s; "
+            "falling back to 0.0 (BacktestEngine will use config.spread for these bars).",
+            invalid_count,
+            self.filepath,
+        )
+        df.loc[invalid_mask, "spread"] = 0.0
 
     def validate(self, bars: Sequence[Bar]) -> None:
         """Applies provider-specific validation logic.

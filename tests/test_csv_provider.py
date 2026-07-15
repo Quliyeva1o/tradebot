@@ -147,6 +147,46 @@ class TestSpreadColumn:
         assert len(bars) == 1
         assert bars[0].spread == 0.0
 
+    def test_negative_spread_falls_back_to_zero_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Bug #24b: a corrupt/negative spread reading must not silently
+        flow into Bar.spread -- it should warn and fall back to 0.0."""
+        csv_file = tmp_path / "negative_spread.csv"
+        csv_file.write_text(
+            "time,open,high,low,close,volume,spread\n"
+            "2026-01-01 00:00:00,1.1000,1.1050,1.0950,1.1020,1000,-0.0005\n"
+            "2026-01-01 00:15:00,1.1010,1.1060,1.0960,1.1030,1100,0.00020\n"
+        )
+        provider = CSVDataProvider(filepath=csv_file, settings=Settings())
+
+        with caplog.at_level("WARNING"):
+            bars = provider.load()
+
+        assert bars[0].spread == 0.0
+        assert bars[1].spread == 0.00020
+        assert "negative spread" in caplog.text.lower()
+
+    def test_nan_spread_falls_back_to_zero_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Bug #24b: a blank/unparseable spread cell must fall back to 0.0
+        rather than propagating NaN into Bar.spread."""
+        csv_file = tmp_path / "nan_spread.csv"
+        csv_file.write_text(
+            "time,open,high,low,close,volume,spread\n"
+            "2026-01-01 00:00:00,1.1000,1.1050,1.0950,1.1020,1000,\n"
+            "2026-01-01 00:15:00,1.1010,1.1060,1.0960,1.1030,1100,0.00020\n"
+        )
+        provider = CSVDataProvider(filepath=csv_file, settings=Settings())
+
+        with caplog.at_level("WARNING"):
+            bars = provider.load()
+
+        assert bars[0].spread == 0.0
+        assert bars[1].spread == 0.00020
+        assert "missing/negative spread" in caplog.text.lower()
+
     def test_existing_correct_format_csv_behavior_is_unchanged(self, tmp_path: Path) -> None:
         """Differential check: a CSV in the current, correct (Bug #30)
         price-space spread format must load with the exact same OHLCV
