@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe research/run_strategy_backtest.py --strategy midline_sweep --data-file data/history/USTEC_M5.csv --timeframe M5 --split out_of_sample --split-ratio 0.7)",
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\Microsol\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Microsol-Desktop-tr-tradebot\\\\d912decb-c652-4bda-b40b-f385ba3bf52b\\\\scratchpad\\\\margin_compare.py\")",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -m pytest tests/ -q)",
+      "PowerShell(py -3 --version 2>&1)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/ -q 2>&1)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_research.py -v 2>&1)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(where python *)",
+      "Bash(py --version)",
+      "Bash(py -c \"import MetaTrader5 as mt5; print\\(mt5.__version__ if hasattr\\(mt5,'__version__'\\) else 'no version attr'\\)\")",
+      "Bash(pip show *)",
+      "Read(//c//**)",
+      "Bash(awk -F, 'NR==1{next} {n=length\\($2\\); split\\($2,a,\".\"\\); if\\(length\\(a[2]\\)>maxd\\) maxd=length\\(a[2]\\)} END{print \"max decimal digits in open col:\", maxd}' data/history/USDJPY_M5.csv)",
+      "Bash(awk -F, 'NR==1{next} {split\\($2,a,\".\"\\); if\\(length\\(a[2]\\)>maxd\\) maxd=length\\(a[2]\\)} END{print \"max decimal digits in open col \\(M15\\):\", maxd}' data/history/USDJPY_M15.csv)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

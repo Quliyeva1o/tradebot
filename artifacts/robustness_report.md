@@ -19,3 +19,14 @@ Stress tests the continuation strategy against execution friction (spreads, comm
 - **Execution Cost Sensitivity**: The strategy is robust to slippage increases.
 - **Slippage Impact**: Slippage of 3x + 1 pip resulted in a PnL change of **$+0.00**.
 - **Skip Resilience**: Randomly missing 25% of entries resulted in a net profit change of **$+0.00**.
+
+## Zero-Trade Scenario Diagnostics
+
+**Baseline**: no_trend (60)
+
+**3x Spread Stress**: no_trend (60)
+
+**2x Commission Stress**: no_trend (60)
+
+**3x Slippage + 1 Pip Stress**: no_trend (60)
+

@@ -1,19 +1,87 @@
 {
     "baseline": {
         "net_profit": 0,
-        "max_drawdown": 0.0
+        "max_drawdown": 0.0,
+        "total_trades": 0,
+        "diagnostics": {
+            "0_BullishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            },
+            "1_BearishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            }
+        }
     },
     "high_spread": {
         "net_profit": 0,
-        "max_drawdown": 0.0
+        "max_drawdown": 0.0,
+        "total_trades": 0,
+        "diagnostics": {
+            "0_BullishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            },
+            "1_BearishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            }
+        }
     },
     "high_commission": {
         "net_profit": 0,
-        "max_drawdown": 0.0
+        "max_drawdown": 0.0,
+        "total_trades": 0,
+        "diagnostics": {
+            "0_BullishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            },
+            "1_BearishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            }
+        }
     },
     "high_slippage": {
         "net_profit": 0,
-        "max_drawdown": 0.0
+        "max_drawdown": 0.0,
+        "total_trades": 0,
+        "diagnostics": {
+            "0_BullishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            },
+            "1_BearishContinuationStrategy": {
+                "evaluations": 30,
+                "setups_generated": 0,
+                "rejections": {
+                    "no_trend": 30
+                }
+            }
+        }
     },
     "skipped_10pct": {
         "net_profit": 0.0,
