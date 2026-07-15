@@ -16,6 +16,7 @@ from strategy.continuation import (
     BullishContinuationStrategy,
     StrategyConfig,
 )
+from strategy.diagnostics import top_rejection_reasons
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
@@ -107,10 +108,10 @@ class RobustnessTester:
         self._export_artifacts(metrics)
         return metrics
 
-    def _simulate(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, float]:
+    def _simulate(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
         """Runs the simulation and returns basic performance values."""
         if not self.candles:
-            return {"net_profit": 0.0, "max_drawdown": 0.0}
+            return {"net_profit": 0.0, "max_drawdown": 0.0, "total_trades": 0, "diagnostics": {}}
 
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
@@ -126,6 +127,8 @@ class RobustnessTester:
         return {
             "net_profit": metrics.net_profit,
             "max_drawdown": metrics.max_drawdown,
+            "total_trades": metrics.total_trades,
+            "diagnostics": strategy_engine.get_diagnostics(),
         }
 
     def _raw_simulate_result(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> BacktestResult:
@@ -202,6 +205,23 @@ Stress tests the continuation strategy against execution friction (spreads, comm
 - **Slippage Impact**: Slippage of 3x + 1 pip resulted in a PnL change of **${metrics['high_slippage']['net_profit'] - metrics['baseline']['net_profit']:+.2f}**.
 - **Skip Resilience**: Randomly missing 25% of entries resulted in a net profit change of **${metrics['skipped_25pct']['net_profit'] - metrics['baseline']['net_profit']:+.2f}**.
 """
+
+        scenario_labels = {
+            "baseline": "Baseline",
+            "high_spread": "3x Spread Stress",
+            "high_commission": "2x Commission Stress",
+            "high_slippage": "3x Slippage + 1 Pip Stress",
+        }
+        zero_trade_scenarios = [
+            key for key in scenario_labels if metrics.get(key, {}).get("total_trades", 0) == 0
+        ]
+        if zero_trade_scenarios:
+            md_content += "\n## Zero-Trade Scenario Diagnostics\n\n"
+            for key in zero_trade_scenarios:
+                top = top_rejection_reasons(metrics[key].get("diagnostics", {}))
+                reasons = ", ".join(f"{r} ({c})" for r, c in top) if top else "no diagnostics recorded"
+                md_content += f"**{scenario_labels[key]}**: {reasons}\n\n"
+
         with open(report_path, "w") as f:
             f.write(md_content)
         logger.info("Saved robustness report MD to %s", report_path)

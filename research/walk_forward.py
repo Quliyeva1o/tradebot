@@ -13,6 +13,7 @@ from strategy.continuation import (
     BullishContinuationStrategy,
     StrategyConfig,
 )
+from strategy.diagnostics import top_rejection_reasons
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
@@ -101,6 +102,8 @@ class WalkForwardRunner:
                 "val_trades": val_metrics["total_trades"],
                 "val_net_profit": val_metrics["net_profit"],
                 "val_win_rate": val_metrics["win_rate"],
+                "train_diagnostics": train_metrics["diagnostics"],
+                "val_diagnostics": val_metrics["diagnostics"],
             }
             folds.append(fold_result)
             k += 1
@@ -111,7 +114,7 @@ class WalkForwardRunner:
     def _simulate(self, segment_candles: list[Bar], strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
         """Runs the simulation for a single candle segment."""
         if not segment_candles:
-            return {"total_trades": 0, "net_profit": 0.0, "win_rate": 0.0}
+            return {"total_trades": 0, "net_profit": 0.0, "win_rate": 0.0, "diagnostics": {}}
 
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
@@ -128,6 +131,7 @@ class WalkForwardRunner:
             "total_trades": metrics.total_trades,
             "net_profit": metrics.net_profit,
             "win_rate": metrics.win_rate,
+            "diagnostics": strategy_engine.get_diagnostics(),
         }
 
     def _export_artifacts(self, folds: list[dict[str, Any]]) -> None:
@@ -184,6 +188,19 @@ class WalkForwardRunner:
                 f"${fold['train_net_profit']:.2f} | {fold['train_win_rate']*100:.1f}% | "
                 f"{fold['val_trades']} | ${fold['val_net_profit']:.2f} | {fold['val_win_rate']*100:.1f}% |\n"
             )
+
+        zero_trade_folds = [f for f in folds if f["train_trades"] == 0 or f["val_trades"] == 0]
+        if zero_trade_folds:
+            md_content += "\n## Zero-Trade Fold Diagnostics\n\n"
+            for fold in zero_trade_folds:
+                if fold["train_trades"] == 0:
+                    top = top_rejection_reasons(fold["train_diagnostics"])
+                    reasons = ", ".join(f"{r} ({c})" for r, c in top) if top else "no diagnostics recorded"
+                    md_content += f"**Fold {fold['fold']} (Train)**: {reasons}\n\n"
+                if fold["val_trades"] == 0:
+                    top = top_rejection_reasons(fold["val_diagnostics"])
+                    reasons = ", ".join(f"{r} ({c})" for r, c in top) if top else "no diagnostics recorded"
+                    md_content += f"**Fold {fold['fold']} (Validation)**: {reasons}\n\n"
 
         with open(report_path, "w") as f:
             f.write(md_content)

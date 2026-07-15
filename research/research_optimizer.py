@@ -16,6 +16,7 @@ from strategy.continuation import (
     BullishContinuationStrategy,
     StrategyConfig,
 )
+from strategy.diagnostics import top_rejection_reasons
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
@@ -89,6 +90,7 @@ class ParameterOptimizer:
         best_val = float("-inf")
         best_params: dict[str, Any] = {}
         best_metrics: dict[str, Any] = {}
+        best_diagnostics: dict[str, Any] = {}
 
         # Default fallback values for configs
         default_strat = StrategyConfig()
@@ -123,12 +125,14 @@ class ParameterOptimizer:
             # 3. Simulate
             try:
                 metrics = self._simulate(strat_config, backtest_config)
+                diagnostics = metrics.pop("diagnostics", {})
                 val = metrics.get(target_metric, 0.0)
 
                 trial_res = {
                     "trial": i + 1,
                     "parameters": comb,
                     "metrics": metrics,
+                    "diagnostics": diagnostics,
                 }
                 trials.append(trial_res)
 
@@ -136,6 +140,7 @@ class ParameterOptimizer:
                     best_val = val
                     best_params = comb
                     best_metrics = metrics
+                    best_diagnostics = diagnostics
             except Exception:
                 logger.exception("Trial %d failed to execute with params: %s", i + 1, comb)
 
@@ -143,12 +148,13 @@ class ParameterOptimizer:
         return {
             "best_params": best_params,
             "best_pnl": float(best_metrics.get("net_profit", 0.0)),
+            "best_diagnostics": best_diagnostics,
         }
 
     def _simulate(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
         """Executes simulation and returns metrics dictionary."""
         if not self.candles:
-            return {"net_profit": 0.0, "win_rate": 0.0, "total_trades": 0, "profit_factor": 1.0, "max_drawdown": 0.0}
+            return {"net_profit": 0.0, "win_rate": 0.0, "total_trades": 0, "profit_factor": 1.0, "max_drawdown": 0.0, "diagnostics": {}}
 
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
@@ -167,10 +173,11 @@ class ParameterOptimizer:
             "total_trades": metrics.total_trades,
             "profit_factor": metrics.profit_factor,
             "max_drawdown": metrics.max_drawdown,
+            "diagnostics": strategy_engine.get_diagnostics(),
         }
 
     def _export_artifacts(self, trials: list[dict[str, Any]], best_params: dict[str, Any], keys: list[str]) -> None:
-        """Exports trials CSV, best parameters JSON, and parameter heatmap CSV."""
+        """Exports trials CSV, best parameters JSON, parameter heatmap CSV, and (if any trial had zero trades) an optimization report MD."""
         artifacts_dir = get_artifacts_dir()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,3 +224,17 @@ class ParameterOptimizer:
                     profit = trial["metrics"].get("net_profit", 0.0)
                     writer.writerow([val1, f"{profit:.2f}"])
         logger.info("Saved parameter heatmap CSV to %s", heatmap_path)
+
+        # 4. Export optimization_report.md, only if any trial produced zero trades
+        zero_trade_trials = [t for t in trials if t["metrics"].get("total_trades", 0) == 0]
+        if zero_trade_trials:
+            report_path = artifacts_dir / "optimization_report.md"
+            md_content = "# Parameter Optimization Report\n\n## Zero-Trade Trial Diagnostics\n\n"
+            for trial in zero_trade_trials:
+                params_str = ", ".join(f"{k}={v}" for k, v in trial["parameters"].items())
+                top = top_rejection_reasons(trial.get("diagnostics", {}))
+                reasons = ", ".join(f"{r} ({c})" for r, c in top) if top else "no diagnostics recorded"
+                md_content += f"**Trial {trial['trial']}** ({params_str}): {reasons}\n\n"
+            with open(report_path, "w") as f:
+                f.write(md_content)
+            logger.info("Saved optimization report MD to %s", report_path)

@@ -135,6 +135,149 @@ def test_parameter_optimizer_grid_limit_override_allows_large_grid(dummy_candles
     assert isinstance(best["best_pnl"], float)
 
 
+def test_walk_forward_diagnostics_present_and_reported_for_zero_trade_folds(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for Bug #21: fold results must carry rejection diagnostics, and
+    walk_forward_report.md must surface the top rejection reasons when a fold has 0 trades.
+
+    dummy_candles is a flat, unmoving price series, so it never forms the swing/BOS/OB/FVG
+    structure BullishContinuationStrategy/BearishContinuationStrategy require -- every fold
+    here has 0 trades, which previously left the rejection reason invisible.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    runner = WalkForwardRunner(
+        dummy_candles, "EURUSD", Timeframe.H1, train_size_pct=0.5, val_size_pct=0.2, step_size_pct=0.1
+    )
+    folds = runner.run(StrategyConfig(), dummy_backtest_config)
+
+    assert folds
+    assert all(f["train_trades"] == 0 and f["val_trades"] == 0 for f in folds)
+    for fold in folds:
+        assert "train_diagnostics" in fold
+        assert "val_diagnostics" in fold
+        assert "0_BullishContinuationStrategy" in fold["val_diagnostics"]
+
+    report = (tmp_path / "walk_forward_report.md").read_text()
+    assert "## Zero-Trade Fold Diagnostics" in report
+    assert "no_trend" in report
+
+
+def test_walk_forward_report_unchanged_when_folds_have_trades(
+    dummy_candles: list[Bar], tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: folds with trades > 0 must not trigger the Zero-Trade Diagnostics block
+    or otherwise change the existing walk_forward_report.md format.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    runner = WalkForwardRunner(dummy_candles, "EURUSD", Timeframe.H1)
+    fake_folds = [
+        {
+            "fold": 1,
+            "train_start_date": "2026-01-01 00:00",
+            "train_end_date": "2026-01-01 10:00",
+            "val_start_date": "2026-01-01 11:00",
+            "val_end_date": "2026-01-01 15:00",
+            "train_trades": 5,
+            "train_net_profit": 120.0,
+            "train_win_rate": 0.6,
+            "val_trades": 3,
+            "val_net_profit": 40.0,
+            "val_win_rate": 0.5,
+            "train_diagnostics": {"0_BullishContinuationStrategy": {"evaluations": 10, "setups_generated": 5, "rejections": {}}},
+            "val_diagnostics": {"0_BullishContinuationStrategy": {"evaluations": 6, "setups_generated": 3, "rejections": {}}},
+        }
+    ]
+
+    runner._export_artifacts(fake_folds)
+
+    report = (tmp_path / "walk_forward_report.md").read_text()
+    assert "Zero-Trade" not in report
+    assert "| 1 | 2026-01-01 00:00 to 2026-01-01 10:00" in report
+
+
+def test_optimizer_diagnostics_present_and_reported_for_zero_trade_trials(
+    dummy_candles: list[Bar], tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for Bug #21: trial/best_diagnostics keys must be present, and
+    optimization_report.md must be created with top rejection reasons for 0-trade trials.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    result = optimizer.optimize({"min_risk_reward_ratio": [1.0, 1.5]}, max_iter=2)
+
+    assert "best_diagnostics" in result
+    assert "0_BullishContinuationStrategy" in result["best_diagnostics"]
+
+    report_path = tmp_path / "optimization_report.md"
+    assert report_path.exists()
+    report = report_path.read_text()
+    assert "## Zero-Trade Trial Diagnostics" in report
+    assert "no_trend" in report
+
+
+def test_optimization_report_not_created_when_trials_have_trades(
+    dummy_candles: list[Bar], tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: no optimization_report.md is written when every trial has trades > 0,
+    matching the pre-fix behavior of never producing this file.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    optimizer = ParameterOptimizer(dummy_candles, "EURUSD", Timeframe.H1)
+    fake_trials = [
+        {
+            "trial": 1,
+            "parameters": {"min_risk_reward_ratio": 1.0},
+            "metrics": {"net_profit": 50.0, "win_rate": 0.6, "total_trades": 4, "profit_factor": 1.5, "max_drawdown": 0.1},
+            "diagnostics": {"0_BullishContinuationStrategy": {"evaluations": 10, "setups_generated": 4, "rejections": {}}},
+        }
+    ]
+
+    optimizer._export_artifacts(fake_trials, {"min_risk_reward_ratio": 1.0}, ["min_risk_reward_ratio"])
+
+    assert not (tmp_path / "optimization_report.md").exists()
+
+
+def test_robustness_diagnostics_present_and_reported_for_zero_trade_scenarios(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for Bug #21: each stress scenario must carry total_trades/diagnostics,
+    and robustness_report.md must surface top rejection reasons for 0-trade scenarios.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    tester = RobustnessTester(dummy_candles, "EURUSD", Timeframe.H1)
+    metrics = tester.run(StrategyConfig(), dummy_backtest_config)
+
+    for key in ("baseline", "high_spread", "high_commission", "high_slippage"):
+        assert "diagnostics" in metrics[key]
+        assert metrics[key]["total_trades"] == 0
+
+    report = (tmp_path / "robustness_report.md").read_text()
+    assert "## Zero-Trade Scenario Diagnostics" in report
+    assert "**Baseline**: no_trend" in report
+
+
+def test_robustness_report_unchanged_when_scenarios_have_trades(
+    dummy_candles: list[Bar], tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: scenarios with trades > 0 must not trigger the Zero-Trade Diagnostics block."""
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    tester = RobustnessTester(dummy_candles, "EURUSD", Timeframe.H1)
+    fake_metrics = {
+        "baseline": {"net_profit": 100.0, "max_drawdown": 0.1, "total_trades": 5, "diagnostics": {}},
+        "high_spread": {"net_profit": 80.0, "max_drawdown": 0.12, "total_trades": 5, "diagnostics": {}},
+        "high_commission": {"net_profit": 70.0, "max_drawdown": 0.13, "total_trades": 5, "diagnostics": {}},
+        "high_slippage": {"net_profit": 60.0, "max_drawdown": 0.14, "total_trades": 5, "diagnostics": {}},
+        "skipped_10pct": {"net_profit": 90.0, "max_drawdown": 0.11},
+        "skipped_25pct": {"net_profit": 85.0, "max_drawdown": 0.115},
+    }
+
+    tester._export_artifacts(fake_metrics)
+
+    report = (tmp_path / "robustness_report.md").read_text()
+    assert "Zero-Trade" not in report
+
+
 def test_monte_carlo_simulator() -> None:
     """Tests Monte Carlo sequence resampling and risk calculations."""
     simulator = MonteCarloSimulator(n=10)

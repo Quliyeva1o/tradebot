@@ -109,3 +109,19 @@ class StrategyDiagnostics:
                 reason.value: count for reason, count in self.rejections.most_common()
             },
         }
+
+
+def top_rejection_reasons(engine_diagnostics: dict[str, dict], top_n: int = 3) -> list[tuple[str, int]]:
+    """Merges rejection counts across all strategies in a StrategyEngine.get_diagnostics() result.
+
+    Args:
+        engine_diagnostics: Output of StrategyEngine.get_diagnostics() (per-strategy summaries).
+        top_n: Maximum number of (reason, count) pairs to return.
+
+    Returns:
+        The top_n most common rejection reasons across all strategies, descending by count.
+    """
+    merged: Counter[str] = Counter()
+    for summary in engine_diagnostics.values():
+        merged.update(summary.get("rejections", {}))
+    return merged.most_common(top_n)
