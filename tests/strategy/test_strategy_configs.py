@@ -19,6 +19,7 @@ Also covers the isinstance guard added to every strategy's __init__: passing
 a config object of the wrong type raises TypeError.
 """
 
+from datetime import time
 from typing import Any
 
 import pytest
@@ -75,6 +76,25 @@ class TestAccumulationBreakoutConfigValidation:
         with pytest.raises(ValueError, match="risk_reward"):
             AccumulationBreakoutStrategy(risk_reward=-1.0)
 
+    def test_session_start_equal_to_session_end_raises(self) -> None:
+        """Bug #60: session_start must be strictly before session_end -- equal
+        values would make is_in_session() silently never match, permanently
+        zero-trading the strategy with no error at construction time.
+        """
+        with pytest.raises(ValueError, match="session_start"):
+            AccumulationBreakoutConfig(session_start=time(9, 30), session_end=time(9, 30))
+
+    def test_session_start_after_session_end_raises(self) -> None:
+        """Bug #60: a swapped/typo'd pair (e.g. hours out of order in .env)."""
+        with pytest.raises(ValueError, match="session_start"):
+            AccumulationBreakoutConfig(session_start=time(11, 0), session_end=time(9, 30))
+
+    def test_session_start_before_session_end_still_constructs(self) -> None:
+        """Differential: a valid, non-default in-order pair must still work."""
+        config = AccumulationBreakoutConfig(session_start=time(8, 0), session_end=time(9, 0))
+        assert config.session_start == time(8, 0)
+        assert config.session_end == time(9, 0)
+
     def test_wrong_config_type_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             AccumulationBreakoutStrategy(config=OrderBlockRetestConfig())  # type: ignore[arg-type]
@@ -117,6 +137,31 @@ class TestNasdaqMidlineSweepConfigValidation:
     def test_wrong_config_type_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             NasdaqMidlineSweepStrategy(config=OrderBlockRetestConfig())  # type: ignore[arg-type]
+
+    def test_build_session_start_equal_to_end_raises(self) -> None:
+        """Bug #60: build_session_start must be strictly before
+        build_session_end -- equal values would make the midline never
+        freeze, permanently zero-trading the strategy with no error at
+        construction time.
+        """
+        with pytest.raises(ValueError, match="build_session_start"):
+            NasdaqMidlineSweepConfig(build_session_start=time(9, 30), build_session_end=time(9, 30))
+
+    def test_build_session_start_after_end_raises(self) -> None:
+        with pytest.raises(ValueError, match="build_session_start"):
+            NasdaqMidlineSweepConfig(build_session_start=time(9, 50), build_session_end=time(9, 30))
+
+    def test_build_session_start_before_end_still_constructs(self) -> None:
+        """Differential: the validated USTEC default pair (09:30-09:50) --
+        and any other valid, in-order pair -- must still construct.
+        """
+        config = NasdaqMidlineSweepConfig()
+        assert config.build_session_start == time(9, 30)
+        assert config.build_session_end == time(9, 50)
+
+        custom = NasdaqMidlineSweepConfig(build_session_start=time(8, 0), build_session_end=time(8, 20))
+        assert custom.build_session_start == time(8, 0)
+        assert custom.build_session_end == time(8, 20)
 
 
 class TestOpeningRangeBreakoutConfigValidation:

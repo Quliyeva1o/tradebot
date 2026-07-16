@@ -70,13 +70,20 @@ class AccumulationBreakoutConfig:
 
         Raises:
             ValueError: If risk_reward, volume_multiplier, body_multiplier,
-                accumulation_bars, or sma_period is not strictly positive.
+                accumulation_bars, or sma_period is not strictly positive, or
+                if session_start is not strictly before session_end (Bug #60).
         """
         require_positive(self.risk_reward, "risk_reward")
         require_positive(self.volume_multiplier, "volume_multiplier")
         require_positive(self.body_multiplier, "body_multiplier")
         require_positive(self.accumulation_bars, "accumulation_bars")
         require_positive(self.sma_period, "sma_period")
+        if self.session_start >= self.session_end:
+            raise ValueError(
+                f"session_start ({self.session_start}) must be strictly before "
+                f"session_end ({self.session_end}); is_in_session() would silently "
+                "never match, and the strategy would generate zero signals forever."
+            )
 
 
 class AccumulationBreakoutStrategy(TradeSetupStrategy):

@@ -77,13 +77,21 @@ class NasdaqMidlineSweepConfig:
 
         Raises:
             ValueError: If range_size, risk_reward, body_multiplier, or
-                sma_period is not strictly positive, or mid_buffer is negative.
+                sma_period is not strictly positive, mid_buffer is negative,
+                or build_session_start is not strictly before
+                build_session_end (Bug #60).
         """
         require_positive(self.range_size, "range_size")
         require_positive(self.risk_reward, "risk_reward")
         require_non_negative(self.mid_buffer, "mid_buffer")
         require_positive(self.body_multiplier, "body_multiplier")
         require_positive(self.sma_period, "sma_period")
+        if self.build_session_start >= self.build_session_end:
+            raise ValueError(
+                f"build_session_start ({self.build_session_start}) must be strictly "
+                f"before build_session_end ({self.build_session_end}); the midline "
+                "would never freeze, and the strategy would generate zero signals forever."
+            )
 
 
 class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
