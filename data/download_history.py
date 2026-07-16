@@ -21,6 +21,9 @@ from core.models import Bar, Timeframe
 from mt5.chunking import TIMEFRAME_DELTA as _TIMEFRAME_DELTA
 from mt5.chunking import iter_chunk_windows as _iter_chunk_windows
 from mt5.connector import MT5Connector
+from mt5.rates import TIMEFRAME_MAPPING as _MT5_TIMEFRAME_MAP
+from mt5.rates import get_symbol_point as _get_symbol_point
+from mt5.rates import rates_to_bars as _rows_to_bars
 from utils.logging import setup_logger
 from utils.validators import OHLCViolation, check_ohlc_consistency
 
@@ -31,15 +34,6 @@ DEFAULT_TIMEFRAME = "M15"
 DEFAULT_START = datetime(2020, 1, 1, tzinfo=UTC)
 DEFAULT_OUTPUT_DIR = Path("data/history")
 
-_MT5_TIMEFRAME_MAP = {
-    "M1": mt5.TIMEFRAME_M1,
-    "M5": mt5.TIMEFRAME_M5,
-    "M15": mt5.TIMEFRAME_M15,
-    "M30": mt5.TIMEFRAME_M30,
-    "H1": mt5.TIMEFRAME_H1,
-    "H4": mt5.TIMEFRAME_H4,
-    "D1": mt5.TIMEFRAME_D1,
-}
 
 @dataclass(frozen=True)
 class GapRecord:
@@ -62,24 +56,6 @@ class ValidationReport:
     reordered_count: int
     gaps: list[GapRecord] = field(default_factory=list)
     ohlc_violations: list[OHLCViolation] = field(default_factory=list)
-
-
-def _get_symbol_point(symbol: str) -> float:
-    """Fetches the symbol's point size (smallest price increment) from MT5.
-
-    MT5's `copy_rates_*` results report `spread` as an integer number of
-    points, not a price-space value -- it must be multiplied by this point
-    size to become a price-space spread usable by BacktestEngine. Point size
-    varies by instrument (e.g. 0.00001 for EURUSD, 0.01 for an index like
-    USTEC), so it cannot be assumed/hardcoded.
-
-    Raises:
-        RuntimeError: If symbol_info is unavailable for the (already-selected) symbol.
-    """
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        raise RuntimeError(f"symbol_info unavailable for {symbol}; cannot resolve point size.")
-    return float(info.point)
 
 
 def fetch_symbol_bars(
@@ -111,28 +87,6 @@ def fetch_symbol_bars(
         raise RuntimeError(f"No historical rates returned from MT5 for {symbol} {timeframe}.")
 
     return _rows_to_bars(rates, point)
-
-
-def _rows_to_bars(rates: object, point: float) -> list[Bar]:
-    """Converts MT5's copy_rates_range numpy record array into a Bar list.
-
-    Args:
-        rates: Raw MT5 rate rows.
-        point: The symbol's point size, used to convert the raw integer
-            `spread` (points) into a price-space value (points * point).
-    """
-    return [
-        Bar(
-            timestamp=datetime.fromtimestamp(int(row["time"]), tz=UTC),
-            open=float(row["open"]),
-            high=float(row["high"]),
-            low=float(row["low"]),
-            close=float(row["close"]),
-            volume=float(row["tick_volume"]),
-            spread=float(row["spread"]) * point,
-        )
-        for row in rates
-    ]
 
 
 def fetch_symbol_bars_chunked(

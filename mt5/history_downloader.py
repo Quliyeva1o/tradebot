@@ -7,20 +7,11 @@ import pandas as pd
 
 from mt5.chunking import TIMEFRAME_DELTA, iter_chunk_windows
 from mt5.connector import MT5Connector
+from mt5.rates import TIMEFRAME_MAPPING
 from utils.logging import setup_logger
 from utils.paths import PROJECT_ROOT
 
 logger = setup_logger("history_downloader")
-
-TIMEFRAME_MAPPING = {
-    "M1": mt5.TIMEFRAME_M1,
-    "M5": mt5.TIMEFRAME_M5,
-    "M15": mt5.TIMEFRAME_M15,
-    "M30": mt5.TIMEFRAME_M30,
-    "H1": mt5.TIMEFRAME_H1,
-    "H4": mt5.TIMEFRAME_H4,
-    "D1": mt5.TIMEFRAME_D1,
-}
 
 
 class MT5HistoryDownloader:

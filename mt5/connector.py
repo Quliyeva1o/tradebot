@@ -5,6 +5,8 @@ import os
 import MetaTrader5 as mt5  # noqa: N813
 from dotenv import load_dotenv
 
+from core.models import Bar
+from mt5.rates import TIMEFRAME_MAPPING, get_symbol_point, rates_to_bars
 from utils.logging import setup_logger
 
 logger = setup_logger("mt5_connector")
@@ -70,3 +72,44 @@ class MT5Connector:
             mt5.shutdown()
             self._connected = False
             logger.info("Disconnected from MT5 terminal.")
+
+    def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+        """READ-ONLY: fetches the last `count` fully CLOSED bars for `symbol`, up to now.
+
+        This method NEVER places orders, modifies positions, or calls any
+        MT5 trading function (order_send, order_check, etc.) -- it only calls
+        mt5.symbol_select(), mt5.symbol_info(), and mt5.copy_rates_from_pos().
+        Safe to call against a live (non-demo) account for signal inspection.
+
+        Uses start_pos=1 (not 0): MT5's position 0 is the currently-forming,
+        not-yet-closed bar, whose OHLC (especially close) is still changing.
+        Evaluating a strategy against an incomplete bar risks a premature or
+        false signal, so this always skips it and returns only bars that have
+        fully closed.
+
+        Args:
+            symbol: Trading instrument symbol (e.g. "USTEC").
+            timeframe: One of the supported timeframe keys (e.g. "M5").
+            count: Number of most-recent closed bars to fetch.
+
+        Returns:
+            Chronologically ordered (oldest first) list of Bar objects.
+
+        Raises:
+            RuntimeError: If timeframe is unsupported, the symbol cannot be
+                selected, or no rates are returned.
+        """
+        if timeframe not in TIMEFRAME_MAPPING:
+            raise RuntimeError(f"Unsupported timeframe: {timeframe}")
+        mt5_tf = TIMEFRAME_MAPPING[timeframe]
+
+        if not mt5.symbol_select(symbol, True):
+            raise RuntimeError(f"Symbol {symbol} is not available in the MT5 terminal.")
+
+        point = get_symbol_point(symbol)
+
+        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 1, count)
+        if rates is None or len(rates) == 0:
+            raise RuntimeError(f"No recent rates returned from MT5 for {symbol} {timeframe}.")
+
+        return rates_to_bars(rates, point)
