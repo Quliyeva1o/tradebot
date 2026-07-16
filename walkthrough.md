@@ -1157,3 +1157,83 @@ yenidən açılanda bu ədəd əsas götürülməlidir (və ya fold sayını art
 kiçildib yüngül örtüşməyə keçmək seçimi yenidən qiymətləndirilməlidir).
 
 **Status: TƏXİRƏ SALINIB (kod dəyişikliyi tətbiq OLUNMAYIB — yalnız sənədləşdirmə).**
+---
+
+## Bug #49: `run_research_campaign.py` Executive Summary Saxta Ədədlər Göstərirdi — DÜZƏLDİLDİ (commit sonrakı)
+
+**Tapıntı (2026-07-16 tam repo auditi):** `campaign_summary` dict-i (əvvəlki sətir 537-564)
+`overall_score`, `robustness_score`, `walk_forward_score`, `monte_carlo_score`,
+`optimization_score`, `profit_factor`, `sharpe`, `risk_of_ruin`, `best_params` sahələrinin
+HAMISINI sabit literal olaraq hardcode edirdi (məs. `"profit_factor": 1.45`, `"sharpe": 1.25`) —
+kampaniya real datada qazandırsın, ya da tam iflas etsin, PDF/MD Executive Summary HƏMİŞƏ EYNİ
+ədədləri göstərirdi. `best_params` isə sətir 410-da artıq mövcud olan real `opt_results`-a
+baxmayaraq ayrıca hardcode-lanmış `"RR=1.5, Buffer=5.0"` string-i idi.
+
+**Düzəliş:**
+- `_compute_walk_forward_score` / `_compute_optimization_score` / `_compute_monte_carlo_score` /
+  `_compute_robustness_score` — hər biri müvafiq fazanın (`wf_results`/`opt_results`/
+  `mc_results`/`rob_results`) real nəticələrindən sadə, sənədləşdirilmiş bir düstur üzrə
+  0-100 aralığında hesablanır (məs. walk-forward score = müsbət val-nəticəli fold-ların faizi).
+- `overall_score` bu 4 alt-skorun çəkili ortalamasıdır (0.30/0.25/0.25/0.20).
+- `_compute_portfolio_metrics` — bütün simvolların tam-tarixi bar-larından TƏZƏDƏN, resume
+  checkpoint-dən asılı olmadan (`campaign_state.json` fərdi ticarətləri saxlamır) birləşdirilmiş,
+  xronoloji sıralanmış bir ticarət dəsti qurur və `BacktestReportGenerator` ilə real
+  `profit_factor`/`sharpe_ratio` hesablayır.
+- `_select_best_params_string` — `opt_results`-dan ən yüksək `best_pnl`-li simvolun HƏQİQİ
+  parametrlərini formatlayır (artıq mövcud olan real datanı sadəcə Executive Summary-yə ötürür).
+- `_build_strengths_and_weaknesses` — sərbəst NLG YOX, sadə if/else həddləri real hesablanmış
+  metriklər üzərində (məs. `profit_factor > 1.2` → güclü tərəf, `< 1.0` → zəif tərəf sətri).
+- `tests/test_research_campaign.py` (17 test) əlavə olundu: hər hesablama funksiyası ayrıca test
+  edilir, VƏ iki sintetik ("yaxşı"/"pis") nəticə seti fərqli Executive Summary ədədləri
+  verdiyini, köhnə sabit literallarla ÜST-ÜSTƏ DÜŞMƏDİYİNİ təsdiqləyir.
+
+**Status: BAĞLANDI (kod dəyişikliyi tətbiq olunub, 17 yeni test ilə doğrulanıb, tam suite
+regressiyasız keçir — 487 test, 486 PASS + 1 XFAIL).**
+
+---
+
+## Bug #54: Data Sonunda Açıq Qalan Pozisiya Sükutla İtirdi — DÜZƏLDİLDİ (commit sonrakı)
+
+**Tapıntı (2026-07-16 tam repo auditi):** `BacktestEngine.run()`-un `for` dövrü bitdikdən dərhal
+sonra metriklər hesablanırdı — əgər `active_trade` hələ AÇIQ idisə (`max_holding_bars`
+təyin olunmayıbsa VƏ SL/TP heç toxunmayıbsa), bu pozisiya `closed_trades`-ə HEÇ VAXT
+əlavə olunmurdu. Nəticədə `final_balance`, `win_rate`, `profit_factor`, `total_trades` bu
+pozisiyanın nəticəsini tamamilə görməzdən gəlirdi — heç bir sayğac da bunu göstərmirdi.
+
+**Düzəliş (`backtest/engine.py`):** dövr bitdikdən sonra, əgər `active_trade is not None`-dursa,
+son bar-ın (`candles[-1]`) CLOSE qiymətindən (spread/slippage ilə, EXPIRED yolundakı eyni
+düstur) MƏCBURİ bağlanır, `TradeResult.EXPIRED` kimi `closed_trades`-ə əlavə olunur, balans və
+max-drawdown mühasibatlığı yenilənir. `BacktestResult.force_closed_at_data_end` (0 və ya 1) sahə
+əlavə olundu ki, bu halın baş verdiyi müşahidə oluna bilsin (`conflicting_setups_dropped`/
+`margin_rejected_setups` ilə eyni şəffaflıq nümunəsi).
+
+**Test:** `tests/test_backtest_engine.py`-ə 3 yeni test əlavə olundu —
+`test_open_position_force_closed_at_data_end` (yeni davranış), differensial
+`test_fully_resolved_backtest_is_unaffected_by_data_end_force_close` (SL/TP ilə əvvəlcədən tam
+bağlanan backtest-in nəticəsi BAYT-BAYTA dəyişməyib) və `test_no_force_close_when_no_position_was_ever_open`
+(heç bir pozisiya açılmadıqda yeni kod yolu no-op-dur).
+
+**Midline Sweep USTEC OOS nəticəsinin Bug #54 düzəlişindən SONRA yenidən doğrulanması**
+(eyni əmr: `--strategy midline_sweep --data-file data/history/USTEC_M5.csv --timeframe M5
+--params '{"body_multiplier": 1.5}' --split out_of_sample --split-ratio 0.7`, `--spread`
+arqumenti verilmədən, CSV-nin real spread sütunu avtomatik oxunur):
+
+| Metrika | Bug #54-dən ƏVVƏL (sənədləşdirilmiş) | Bug #54-dən SONRA (bu sessiya) |
+|---|---:|---:|
+| Trade sayı | 106 | **106 (DƏYİŞMƏYİB)** |
+| Profit Factor | 1.0510 | **1.0509977 ≈ 1.0510 (DƏYİŞMƏYİB)** |
+| Net Profit | ~$374 (sənədləşdirilməmiş dəqiq rəqəm) | **+$379.24** |
+| Max Drawdown | sənədləşdirilməyib | 10.08% |
+| Win Rate | sənədləşdirilməyib | 35.85% |
+
+**NƏTİCƏ: trade sayı 106-dan 107-yə DƏYİŞMƏDİ.** Bu, Bug #54-ün YANLIŞ olduğu demək DEYİL —
+əksinə, bu konkret ssenaridə (USTEC M5, 70/30 OOS bölgüsü, `body_multiplier=1.5`) son bar-da
+`active_trade` artıq `None` idi (son pozisiya bu OOS seqmentinin son bar-ından ƏVVƏL SL/TP və ya
+digər yolla artıq bağlanmışdı) — deməli Bug #54-ün düzəltdiyi kod yolu bu konkret backtest
+üçün İŞƏ DÜŞMƏDİ. Fix real, test edilib və düzgündür (yuxarıdakı 3 yeni test bunu sübut edir),
+sadəcə bu XÜSUSİ, əvvəllər sənədləşdirilmiş nəticəyə təsadüfən təsir etmədi. **Əvvəllər
+sənədləşdirilmiş PF 1.0510 / 106 trade rəqəmi bununla YENİDƏN TƏSDİQLƏNİR, etibarsız deyil.**
+
+**Status: BAĞLANDI (kod dəyişikliyi tətbiq olunub, 3 yeni test ilə doğrulanıb, Midline Sweep
+USTEC OOS nəticəsi yenidən doğrulanıb və dəyişməyib, tam suite regressiyasız keçir — 490 test,
+489 PASS + 1 XFAIL).**
