@@ -1375,3 +1375,33 @@ TradeSetupStrategy-ə keçəcəyik"):** hazırkı nəticələr bu şərti ÖDƏM
 **Status: TƏDQİQAT APARILDI, EFFEKT BU DATADA TƏSDİQLƏNMƏDİ. Gələcək variantlar (istifadəçi
 seçimi gözlənilir): (a) daha uzun tarixçə/başqa broker mənbəyi ilə yenidən sına, (b) digər equity-
 indeks simvollarında (əgər mövcuddursa) sına, (c) bu tədqiqat istiqamətini burada saxla.**
+---
+
+## Turn-of-Month Seasonality — İSTİQAMƏT RƏSMİ OLARAQ BAĞLANDI (istifadəçi qərarı, 2026-07-16)
+
+**Sınaq:** `research/turn_of_month_study.py` (pure event-study aləti) ilə 6 indeksdə
+(USTEC, US30, US500, DE40, UK100, JPN225), 3 hold-period-lə (N=1/3/5 ticarət günü) sınandı —
+cəmi 18 test.
+
+**Nəticə:** Çoxlu-test korreksiyası (18 test, 5% həddində sırf təsadüfən ~0.9 "yalan müsbət"
+gözlənilir) tətbiq edildikdə, **heç bir nəticə inandırıcı deyil**. DE40 (N=3, t=+2.10) ən güclü
+namizəd idi (n=76, tam tarix aralığı), amma **xronoloji yarı-yarı sağlamlıq yoxlaması** göstərdi ki:
+
+| Yarı | n | Orta gəlir | t-statistiku |
+|---|---:|---:|---:|
+| Birinci (2020-01 → 2023-02) | 38 | +1.11% | **+2.88** |
+| İkinci (2023-03 → 2026-06) | 38 | +0.003% | **+0.01** |
+
+Effekt TAMAMİLƏ 2020-2023 alt-dövrünə aiddir, 2023-2026 dövründə TAM YOX OLUB — bu, davamlı struktur
+effekt deyil, rejim-spesifik (ehtimal ki COVID-bərpası/ultra-aşağı-faiz dövrünə xas) artefaktdır.
+UK100-ün "güclü" nəticəsi (t=+3.71, N=3) də ən kiçik (n=29) və ən şübhəli (qeyri-adi bitən, 2026-05-15)
+nümunədən gəlirdi — etibarlı sayılmadı.
+
+**QƏRAR: İSTİQAMƏT BAĞLANDI, əlavə sınaq planlaşdırılmır.** Fərqli data mənbəyinə keçid (əvvəllər
+təklif olunan (a) variantı) araşdırılmayacaq — xərc/fayda baxımından artıq dəyməz.
+
+**Alət saxlanılır:** `research/turn_of_month_study.py` SİLİNMƏYİB — gələcəkdə fərqli bir seasonality
+fikri (məsələn, ilin müəyyən ayları, həftənin günü effektləri və s.) üçün YENİDƏN İSTİFADƏ OLUNA
+BİLƏN, ümumi bir event-study alətidir, dəyərli qalır.
+
+**Status: BAĞLANDI.**
