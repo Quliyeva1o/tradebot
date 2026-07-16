@@ -1,18 +1,22 @@
 """Unit tests for Walk-Forward, Optimization, Monte Carlo, and Robustness modules."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from backtest.models import BacktestConfig, BacktestResult, BacktestTrade, TradeResult
 from core.models import Bar, SignalDirection, Timeframe
+from data.csv_provider import CSVDataProvider
 from research.monte_carlo import MonteCarloSimulator
 from research.research_optimizer import ParameterOptimizer
 from research.robustness import RobustnessTester
 from research.stability import ParameterStabilityAnalyzer
 from research.walk_forward import WalkForwardRunner
 from strategy.continuation import StrategyConfig
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
@@ -29,6 +33,26 @@ def dummy_candles() -> list[Bar]:
         )
         for h in range(30)
     ]
+
+
+@pytest.fixture(scope="module")
+def realistic_candles() -> list[Bar]:
+    """Loads a real, deterministic 8000-bar EURUSD M15 slice (committed under
+    tests/fixtures/, unlike data/history/ which is gitignored and may not exist
+    on a fresh checkout/CI) that produces real trades (Bug #69).
+
+    dummy_candles (above) is a flat, unmoving price series that never forms
+    the swing/BOS/OB/FVG/displacement structure BullishContinuationStrategy/
+    BearishContinuationStrategy require -- every research-module test using it
+    exercises only the zero-trade diagnostics path (Bug #21), never the real
+    simulation logic those modules are actually built to run. This fixture
+    exists so at least one test per module also exercises that real path.
+    Verified (default StrategyConfig): 3 total trades over these 8000 bars.
+    """
+    provider = CSVDataProvider(filepath=FIXTURES_DIR / "eurusd_m15_continuation_sample.csv")
+    bars = provider.load()
+    provider.validate(bars)
+    return bars
 
 
 @pytest.fixture
@@ -416,3 +440,67 @@ def test_stability_report_not_created_when_cells_have_trades(tmp_path, monkeypat
     analyzer._export_artifacts(fake_results, matrix, [10], [2.0])
 
     assert not (tmp_path / "stability_report.md").exists()
+
+
+# --- Bug #69: at least one real-trade-producing test per module -----------------------
+#
+# Every test above this point exercises walk-forward/optimizer/robustness/stability
+# against dummy_candles, a flat/unmoving series that never satisfies
+# BullishContinuationStrategy/BearishContinuationStrategy's swing/BOS/OB/FVG/
+# displacement requirements -- so none of them ever exercise the actual
+# simulation logic these modules exist to run, only the zero-trade diagnostics
+# path. The tests below use realistic_candles (a real, committed 8000-bar
+# EURUSD M15 slice, verified to produce 3 trades under the default
+# StrategyConfig) to close that gap.
+
+
+def test_walk_forward_runner_produces_real_trades_on_realistic_data(
+    realistic_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    # Large train/val/step fractions -> few folds, keeping the real-data run fast.
+    runner = WalkForwardRunner(
+        realistic_candles, "EURUSD", Timeframe.M15, train_size_pct=0.5, val_size_pct=0.3, step_size_pct=0.3
+    )
+    folds = runner.run(StrategyConfig(), dummy_backtest_config)
+
+    assert folds
+    total_trades = sum(f["train_trades"] + f["val_trades"] for f in folds)
+    assert total_trades > 0, "Expected at least one real trade across folds on realistic data"
+
+
+def test_parameter_optimizer_produces_real_trades_on_realistic_data(
+    realistic_candles: list[Bar], tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    optimizer = ParameterOptimizer(realistic_candles, "EURUSD", Timeframe.M15)
+    # A single-value "search" around the validated default -- the point is
+    # proving optimize() drives a real simulation, not exploring a grid.
+    result = optimizer.optimize({"min_risk_reward_ratio": [1.0]})
+
+    assert result["best_pnl"] != 0.0
+    assert result["best_diagnostics"]["0_BullishContinuationStrategy"]["setups_generated"] >= 0
+
+
+def test_robustness_tester_produces_real_trades_on_realistic_data(
+    realistic_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    tester = RobustnessTester(realistic_candles, "EURUSD", Timeframe.M15)
+    metrics = tester.run(StrategyConfig(), dummy_backtest_config)
+
+    assert metrics["baseline"]["total_trades"] > 0
+
+
+def test_stability_analyzer_produces_real_trades_on_realistic_data(
+    realistic_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    analyzer = ParameterStabilityAnalyzer(realistic_candles, "EURUSD", Timeframe.M15)
+    # A tiny 2-cell grid around the validated default lookback -- again, the
+    # point is proving run() drives a real simulation, not grid coverage.
+    results = analyzer.run([20], [3.0, 7.0], StrategyConfig(), dummy_backtest_config)
+
+    assert any(cell["total_trades"] > 0 for cell in results), (
+        "Expected at least one grid cell to produce real trades on realistic data"
+    )
