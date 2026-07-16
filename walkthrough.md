@@ -1335,3 +1335,43 @@ təmizləyir/xronoloji sıralayır (chunking-in özü gətirdiyi yeni risk).
 əhatəsi var idi.
 
 **Status: BAĞLANDI (commit `89f7ad4`).**
+---
+
+## Turn-of-Month Seasonality — Event-Study Nəticəsi (USTEC, 2026-07-16)
+
+**Data:** USTEC D1, MT5-dən birbaşa yükləndi (`data/download_history.py --timeframe D1`),
+2022-07-06 -> 2026-07-16 (1003 bar, ~4 il). 0 dublikat, 0 sıralama xətası, 0 OHLC pozuntusu, 206 gap
+(əksəriyyəti weekend/holiday, normal). **Bir GENİŞ data-fasiləsi aşkarlandı: 2025-07-16 ->
+2025-09-09 (55 gün)** — bu, `turn_of_month_study.py`-in `max_gap_days` qoruması tərəfindən düzgün
+aşkarlanıb bir hadisə kimi ATILDI (süni "2-aylıq gəlir" kimi yanlış hesablanmadı).
+
+**Metod:** `research/turn_of_month_study.py` (pure event-study, TradeSetupStrategy DEYİL) — hər ay
+dönümü üçün gün -1-in bağlanışından gün +N-in bağlanışına qədər faiz gəliri, N=1,3,5 üçün ayrı-ayrı.
+
+**Nəticə:**
+
+| N (gün) | Hadisə sayı | Orta gəlir | Median | Std | t-statistiku | Müsbət/Mənfi |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | 46 | +0.17% | +0.03% | 1.19% | +0.98 | 23/22 |
+| 3 | 46 | -0.002% | +0.20% | 2.62% | -0.01 | 24/22 |
+| 5 | 46 | -0.13% | +0.23% | 3.28% | -0.27 | 25/21 |
+
+**QİYMƏTLƏNDİRMƏ: effekt USTEC-in bu ~4 illik datasında STATİSTİK CƏHƏTDƏN İNANDIRICI GÖRÜNMÜR.**
+Heç bir N dəyəri üçün `|t| > 1.96` (adi 5% həddi) həddinə çatmır — N=1 ən yaxın (t=+0.98), amma hələ
+də çox aşağıdadır. N=3/N=5 üçün orta gəlir demək olar sıfıra bərabər və ya MƏNFİDİR.
+
+**Qeyd olunmalı məhdudiyyətlər (effektin "olmadığı" qəti sübutu DEYİL):**
+- **Nümunə ölçüsü kiçikdir** (n=46) — akademik ədəbiyyatda sitat gətirilən tədqiqatlar adətən
+  onilliklər üzrə yüzlərlə müşahidə istifadə edir.
+- **Tək instrument, qeyri-adi rejim** — USTEC (Nasdaq-100 CFD) yalnız, VƏ məhz bu 4 il (2022 bear
+  bazarı + 2023-2024 AI-güdümlü bull run) ümumi indeks bazarı üçün "normal" mövsümi rejimi əks
+  etdirməyə bilər.
+- **55-günlük data-fasiləsi** faktiki müşahidə sayını azaldıb (əks halda ~47-48 ola bilərdi).
+
+**Qərar (istifadəçi ilə razılaşdırılmış şərtə əsasən — "yalnız effekt inandırıcı görünsə,
+TradeSetupStrategy-ə keçəcəyik"):** hazırkı nəticələr bu şərti ÖDƏMİR.
+**TradeSetupStrategy versiyasına HƏLƏLİK KEÇİLMİR.**
+
+**Status: TƏDQİQAT APARILDI, EFFEKT BU DATADA TƏSDİQLƏNMƏDİ. Gələcək variantlar (istifadəçi
+seçimi gözlənilir): (a) daha uzun tarixçə/başqa broker mənbəyi ilə yenidən sına, (b) digər equity-
+indeks simvollarında (əgər mövcuddursa) sına, (c) bu tədqiqat istiqamətini burada saxla.**
