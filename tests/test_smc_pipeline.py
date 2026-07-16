@@ -3,7 +3,8 @@
 from datetime import datetime, timedelta
 
 from core.models import Bar, Timeframe
-from market_structure.structure_models import MarketState, SMCState
+from market_structure.structure_models import BreakType, MarketState, SMCState, StructureBreak
+from market_structure.swing_models import Swing, SwingClassification, SwingType
 from smc.fvg import FairValueGap, FVGDirection
 from smc.order_block import OBDirection, OrderBlock
 from smc.pipeline import SMCPipeline
@@ -188,3 +189,81 @@ def test_active_zones_never_pruned() -> None:
     assert state.smc_state.order_blocks[0].id == "ob_5_bullish_act"
     assert len(state.smc_state.fair_value_gaps) == 1
     assert state.smc_state.fair_value_gaps[0].id == "fvg_6_bullish_act"
+
+
+def _ohlcv_bar(idx: int, o: float, h: float, low: float, c: float, volume: float = 100.0) -> Bar:
+    """Helper allowing full OHLCV control (unlike _create_bar, which fixes open == close)."""
+    return Bar(
+        timestamp=datetime(2026, 1, 1) + timedelta(minutes=5 * idx),
+        open=o,
+        high=h,
+        low=low,
+        close=c,
+        volume=volume,
+    )
+
+
+def test_repeated_bos_without_intervening_opposite_candle_does_not_duplicate_order_block() -> None:
+    """Regression test for Bug #57.
+
+    SMCPipeline.update() previously called
+    `market_state.smc_state.order_blocks.extend(new_obs)` with no check
+    against zones already accumulated there. OrderBlockDetector's own
+    duplicate guard (`if any(ob.id == ob_id for ob in order_blocks): continue`)
+    only ever sees the LOCAL candidate list built during a single call, which
+    is always at most 1 item here since SMCPipeline passes a single-break
+    StructureState per update() -- so it can never catch a duplicate against
+    history.
+
+    Reproduces the exact failure mode: a sustained bullish trend with two BOS
+    events and no intervening bearish candle between them. Both breaks'
+    backward searches (from each break's own breaking bar) land on the SAME
+    prior bearish candle (index 2), so both produce an OrderBlock with the
+    identical id "ob_2_bullish".
+    """
+    bars = [
+        _ohlcv_bar(0, 100.0, 101.0, 99.5, 100.5),  # bullish
+        _ohlcv_bar(1, 100.5, 101.5, 100.0, 101.0),  # bullish
+        _ohlcv_bar(2, 101.0, 101.2, 99.0, 99.2, volume=200.0),  # BEARISH anchor candle
+        _ohlcv_bar(3, 99.2, 102.0, 99.0, 101.8),  # bullish -- first breaking bar
+        _ohlcv_bar(4, 101.8, 103.5, 101.5, 103.0),  # bullish -- second breaking bar
+    ]
+
+    broken_high = Swing(
+        id="swing_1_high",
+        timestamp=bars[1].timestamp,
+        index=1,
+        price=101.5,
+        type=SwingType.HIGH,
+        classification=SwingClassification.MAJOR,
+    )
+
+    state = MarketState(symbol="TEST", timeframe=Timeframe.M5)
+    for bar in bars[:4]:
+        state.append_bar(bar)
+
+    pipeline = SMCPipeline()
+
+    break_1 = StructureBreak(
+        break_id="break_1",
+        break_type=BreakType.BOS,
+        broken_swing=broken_high,
+        breaking_bar=bars[3],
+        timestamp=bars[3].timestamp,
+    )
+    pipeline.update(state, bars[3], break_1)
+
+    assert [ob.id for ob in state.smc_state.order_blocks] == ["ob_2_bullish"]
+
+    state.append_bar(bars[4])
+    break_2 = StructureBreak(
+        break_id="break_2",
+        break_type=BreakType.BOS,
+        broken_swing=broken_high,
+        breaking_bar=bars[4],
+        timestamp=bars[4].timestamp,
+    )
+    pipeline.update(state, bars[4], break_2)
+
+    ob_ids = [ob.id for ob in state.smc_state.order_blocks]
+    assert ob_ids == ["ob_2_bullish"], f"Expected exactly one entry, got duplicates: {ob_ids}"

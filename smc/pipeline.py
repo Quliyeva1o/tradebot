@@ -92,7 +92,19 @@ class SMCPipeline:
                 breaks_history=[new_break],
             )
             new_obs = self.ob_detector.detect_order_blocks(bars, temp_state)
-            market_state.smc_state.order_blocks.extend(new_obs)
+            # Bug #57: detect_order_blocks() only dedupes within its own local
+            # candidate list (which, since temp_state carries a single break,
+            # never has more than one candidate anyway) -- it never checks
+            # against zones already accumulated in market_state.smc_state
+            # here. Without this check, repeated BOS events that all re-anchor
+            # to the same prior opposite candle (e.g. a sustained trend with no
+            # intervening opposite-direction candle) would append duplicate
+            # OrderBlock objects sharing the same id, violating the "one entry
+            # per id" invariant the pruning step (5b) and mitigation cursor rely on.
+            existing_ob_ids = {ob.id for ob in market_state.smc_state.order_blocks}
+            market_state.smc_state.order_blocks.extend(
+                ob for ob in new_obs if ob.id not in existing_ob_ids
+            )
 
         # 3. Liquidity Pools Detection (refresh liquidity levels using swing graph)
         market_state.smc_state.liquidity_levels = self.liquidity_detector.update_incremental(
