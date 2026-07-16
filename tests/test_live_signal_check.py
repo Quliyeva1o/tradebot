@@ -1,6 +1,10 @@
 """Unit tests for live_signal_check.py (read-only, one-shot Midline Sweep signal check).
 
-No real MT5 connection is made anywhere in this file.
+No real MT5 connection or Telegram send is made anywhere in this file --
+tests that reach the signal-found path always mock the Telegram layer too
+(main() calls send_telegram_alert() unconditionally on a found signal, and
+config.settings.Settings.load() reads whatever is actually configured in the
+real .env, so leaving it unmocked here would attempt a real network call).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -184,12 +188,109 @@ class TestMainEndToEnd:
             def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
                 return all_bars
 
-        with patch("live_signal_check.MT5Connector", FakeConnector):
+        with (
+            patch("live_signal_check.MT5Connector", FakeConnector),
+            patch("live_signal_check.send_telegram_alert") as mock_send_alert,
+        ):
             live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
 
         captured = capsys.readouterr()
         assert "SIGNAL FOUND" in captured.out
         assert "BUY (LONG)" in captured.out
+        mock_send_alert.assert_called_once()
+        assert mock_send_alert.call_args[0][0].direction == SignalDirection.BUY
+
+    def test_main_still_prints_signal_found_when_telegram_network_fails(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A Telegram network/HTTP failure must never affect the console output
+        or crash main() -- it is a best-effort supplementary channel.
+        """
+        base = datetime(2026, 1, 6, 12, 50, tzinfo=UTC)
+        warmup_bars = [
+            _bar(base + timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.5 if i % 2 == 0 else 99.5)
+            for i in range(20)
+        ]
+        build_bars = [
+            _bar(datetime(2026, 1, 6, 14, 30, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 35, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+            _bar(datetime(2026, 1, 6, 14, 40, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 45, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+        ]
+        session_end_bar = _bar(datetime(2026, 1, 6, 14, 50, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5)
+        breakout_bar = _bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+        all_bars = [*warmup_bars, *build_bars, session_end_bar, breakout_bar]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return all_bars
+
+        with (
+            patch("live_signal_check.MT5Connector", FakeConnector),
+            # Real Settings.load() picks up whatever is in .env; only the network
+            # layer is mocked, to prove the *real* TelegramNotifier/Settings wiring
+            # survives a genuine send failure, not just a mocked-away function.
+            patch("notifications.telegram.urllib.request.urlopen", side_effect=OSError("network down")),
+        ):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        captured = capsys.readouterr()
+        assert "SIGNAL FOUND" in captured.out
+        assert "BUY (LONG)" in captured.out
+
+    def test_main_still_prints_signal_found_when_telegram_notifier_raises_unexpectedly(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Defense in depth: even if TelegramNotifier itself misbehaves (raises
+        instead of returning False), send_telegram_alert's own try/except must
+        still stop the failure from reaching main()'s caller.
+        """
+        base = datetime(2026, 1, 6, 12, 50, tzinfo=UTC)
+        warmup_bars = [
+            _bar(base + timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.5 if i % 2 == 0 else 99.5)
+            for i in range(20)
+        ]
+        build_bars = [
+            _bar(datetime(2026, 1, 6, 14, 30, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 35, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+            _bar(datetime(2026, 1, 6, 14, 40, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 45, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+        ]
+        session_end_bar = _bar(datetime(2026, 1, 6, 14, 50, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5)
+        breakout_bar = _bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+        all_bars = [*warmup_bars, *build_bars, session_end_bar, breakout_bar]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return all_bars
+
+        class ExplodingNotifier:
+            def __init__(self, bot_token: str, chat_id: str) -> None:
+                pass
+
+            def send_message(self, message: str) -> bool:
+                raise RuntimeError("simulated unexpected failure")
+
+        with (
+            patch("live_signal_check.MT5Connector", FakeConnector),
+            patch("live_signal_check.TelegramNotifier", ExplodingNotifier),
+        ):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        captured = capsys.readouterr()
+        assert "SIGNAL FOUND" in captured.out
 
     def test_main_exits_when_connect_fails(self) -> None:
         class FailingConnector:

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Read-only, one-shot live signal check for NasdaqMidlineSweepStrategy.
 
-SAFETY -- THIS SCRIPT IS READ-ONLY. It never calls mt5.order_send,
-mt5.order_check, mt5.order_calc_margin, or any other MT5 trading/position-
-modifying API. It only calls MT5Connector.fetch_recent_bars() (itself
-documented read-only -- see mt5/connector.py) and evaluates a strategy
+SAFETY -- THIS SCRIPT IS READ-ONLY WITH RESPECT TO MT5. It never calls
+mt5.order_send, mt5.order_check, mt5.order_calc_margin, or any other MT5
+trading/position-modifying API. It only calls MT5Connector.fetch_recent_bars()
+(itself documented read-only -- see mt5/connector.py) and evaluates a strategy
 against the fetched bars in memory. Safe to run against a live (non-demo)
-account for signal inspection.
+account for signal inspection. The only outbound network call beyond MT5 is a
+best-effort Telegram notification (see notifications/telegram.py) sent ONLY
+when a signal is found -- it never places or affects any trade, and any
+failure there is logged and swallowed, never raised (see send_telegram_alert).
 
 THIS IS NOT A LIVE-TRADING DAEMON. It runs ONCE: connect, fetch, evaluate,
 print, exit. It answers exactly one question -- "as of the most recently
@@ -28,8 +31,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.resolve()))
 
 from application.services.market_state_builder import MarketStateBuilder
-from core.models import Bar, Timeframe
+from config.settings import Settings
+from core.models import Bar, SignalDirection, Timeframe
 from mt5.connector import MT5Connector
+from notifications.telegram import TelegramNotifier
 from strategy.diagnostics import top_rejection_reasons
 from strategy.models import TradeSetup
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
@@ -163,6 +168,41 @@ def format_no_signal(diagnostics: dict[str, dict], final_bar: Bar) -> str:
     return "\n".join(lines)
 
 
+def format_telegram_message(setup: TradeSetup) -> str:
+    """Formats a TradeSetup as a Telegram alert: an emoji-marked header line
+    (color-coded by direction) followed by plain-text fields.
+    """
+    emoji = "\U0001f7e2" if setup.direction == SignalDirection.BUY else "\U0001f534"  # green / red circle
+    direction_label = "BUY (LONG)" if setup.direction == SignalDirection.BUY else "SELL (SHORT)"
+    lines = [
+        f"{emoji} MIDLINE SWEEP SIGNAL -- {setup.symbol} [{setup.timeframe.value}]",
+        f"Direction: {direction_label}",
+        f"Entry: {setup.entry_zone[0]:.2f}",
+        f"Stop-Loss: {setup.stop_zone[0]:.2f}",
+        f"Take-Profit: {setup.target_zone[0]:.2f}",
+        f"Reason: {setup.trigger_reason}",
+        f"Bar time: {setup.timestamp}",
+    ]
+    return "\n".join(lines)
+
+
+def send_telegram_alert(setup: TradeSetup) -> None:
+    """Best-effort Telegram notification for a found signal.
+
+    Never raises: this is a supplementary notification channel, and a
+    misconfigured or unreachable Telegram integration must never affect the
+    signal check's own exit status or console output. Any failure (missing
+    credentials, network/HTTP error, or anything else) is logged and
+    swallowed here.
+    """
+    try:
+        settings = Settings.load()
+        notifier = TelegramNotifier(settings.TELEGRAM_TOKEN, settings.TELEGRAM_CHAT_ID)
+        notifier.send_message(format_telegram_message(setup))
+    except Exception as exc:  # noqa: BLE001 - notification is best-effort, must never affect the caller
+        logger.warning("Telegram alert failed: %s", type(exc).__name__)
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point: connects (read-only), fetches recent bars, checks for a
     signal on the final bar, prints the result, and exits.
@@ -196,6 +236,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if setup is not None:
         print(format_setup(setup))
+        send_telegram_alert(setup)
     else:
         print(format_no_signal(diagnostics, final_bar))
 
