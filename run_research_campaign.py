@@ -195,7 +195,9 @@ def _compute_portfolio_metrics(
             csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
             if csv_path.exists():
                 provider = CSVDataProvider(filepath=csv_path)
-                symbol_bars.extend(provider.load())
+                year_bars = provider.load()
+                provider.validate(year_bars)
+                symbol_bars.extend(year_bars)
 
         if not symbol_bars:
             continue
@@ -481,6 +483,7 @@ def main() -> None:
 
                 provider = CSVDataProvider(filepath=csv_path)
                 bars = provider.load()
+                provider.validate(bars)
 
                 if not bars:
                     continue
@@ -529,7 +532,9 @@ def main() -> None:
                 csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
-                    all_bars.extend(provider.load())
+                    year_bars = provider.load()
+                    provider.validate(year_bars)
+                    all_bars.extend(year_bars)
 
             if len(all_bars) < 30:
                 logger.warning("Insufficient data for full Walk-Forward Validation on %s", symbol)
@@ -567,7 +572,9 @@ def main() -> None:
                 csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
-                    all_bars.extend(provider.load())
+                    year_bars = provider.load()
+                    provider.validate(year_bars)
+                    all_bars.extend(year_bars)
 
             if len(all_bars) < 20:
                 continue
@@ -602,7 +609,9 @@ def main() -> None:
                 csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
-                    all_bars.extend(provider.load())
+                    year_bars = provider.load()
+                    provider.validate(year_bars)
+                    all_bars.extend(year_bars)
 
             if len(all_bars) < 20:
                 continue
@@ -637,7 +646,9 @@ def main() -> None:
                 csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
-                    all_bars.extend(provider.load())
+                    year_bars = provider.load()
+                    provider.validate(year_bars)
+                    all_bars.extend(year_bars)
 
             if len(all_bars) < 20:
                 continue
@@ -665,7 +676,9 @@ def main() -> None:
                 csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
                 if csv_path.exists():
                     provider = CSVDataProvider(filepath=csv_path)
-                    all_bars.extend(provider.load())
+                    year_bars = provider.load()
+                    provider.validate(year_bars)
+                    all_bars.extend(year_bars)
 
             if len(all_bars) < 20:
                 continue

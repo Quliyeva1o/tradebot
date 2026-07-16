@@ -60,7 +60,9 @@ def run_diagnostics_for_symbol(
         SymbolDiagnostics with trend distribution and strategy rejection counts.
     """
     csv_path = history_dir / f"{symbol}_{timeframe}.csv"
-    bars = CSVDataProvider(filepath=csv_path).load()
+    provider = CSVDataProvider(filepath=csv_path)
+    bars = provider.load()
+    provider.validate(bars)
 
     try:
         timeframe_enum = Timeframe[timeframe]

@@ -1,6 +1,12 @@
-"""Regression tests for Bug #49: run_research_campaign.py's Executive Summary
-must be computed from the real wf_results/opt_results/mc_results/rob_results
-gathered during the campaign, not hardcoded placeholder literals.
+"""Regression tests for run_research_campaign.py.
+
+Bug #49: the Executive Summary must be computed from the real
+wf_results/opt_results/mc_results/rob_results gathered during the campaign,
+not hardcoded placeholder literals.
+
+Bug #53: CSVDataProvider.validate() must be called on every loaded year's
+bars, matching run_backtest.py/run_strategy_backtest.py, instead of feeding
+unvalidated data straight into the backtest engine.
 """
 
 from datetime import datetime
@@ -10,6 +16,7 @@ import pytest
 
 import run_research_campaign as campaign_module
 from backtest.models import BacktestResult, BacktestTrade, TradeResult
+from core.exceptions import InvalidNumericDataError
 from core.models import Bar, SignalDirection, Timeframe
 
 # The exact literals Bug #49 hardcoded into every campaign_summary regardless of input.
@@ -239,6 +246,9 @@ class TestComputePortfolioMetrics:
             def load(self) -> list[Bar]:
                 return [Bar(timestamp=datetime(2024, 1, 1), open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0)]
 
+            def validate(self, bars: list[Bar]) -> None:
+                pass
+
         class FakeEngine:
             def __init__(self, config) -> None:
                 self.config = config
@@ -278,3 +288,26 @@ class TestComputePortfolioMetrics:
 
         assert profit_factor == 1.0
         assert sharpe is None
+
+    def test_propagates_validate_failure_on_invalid_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test for Bug #53: _compute_portfolio_metrics must call
+        CSVDataProvider.validate() on every loaded year's bars, matching
+        run_backtest.py/run_strategy_backtest.py, instead of feeding unvalidated
+        data straight into the backtest engine.
+        """
+        history_dir = tmp_path / "data" / "history"
+        history_dir.mkdir(parents=True)
+        # high (1.0990) < low (1.1010) -- physically inconsistent OHLC bar.
+        (history_dir / "EURUSD_H1_2024.csv").write_text(
+            "time,open,high,low,close,volume,spread\n"
+            "2024-01-01 00:00:00,1.1000,1.0990,1.1010,1.1005,100,1\n"
+        )
+
+        monkeypatch.setattr(campaign_module, "PROJECT_ROOT", tmp_path)
+
+        with pytest.raises(InvalidNumericDataError):
+            campaign_module._compute_portfolio_metrics(
+                symbols=["EURUSD"], years=[2024], timeframe="H1", timeframe_enum=Timeframe.H1
+            )

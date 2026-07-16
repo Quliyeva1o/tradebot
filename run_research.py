@@ -87,6 +87,7 @@ def check_and_get_data(config: dict[str, Any]) -> list[Bar]:
 
     provider = CSVDataProvider(filepath=csv_path)
     bars = provider.load()
+    provider.validate(bars)
 
     if bars:
         tz = bars[0].timestamp.tzinfo
