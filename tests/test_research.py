@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+import numpy as np
 import pytest
 
 from backtest.models import BacktestConfig, BacktestResult, BacktestTrade, TradeResult
@@ -323,3 +324,95 @@ def test_stability_analyzer(dummy_candles: list[Bar], dummy_backtest_config: Bac
     results = analyzer.run([10, 20], [2.0, 5.0], StrategyConfig(), dummy_backtest_config)
     assert len(results) == 4
     assert results[0]["lookback_bars"] in [10, 20]
+def test_stability_grid_within_limit_unchanged(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig
+) -> None:
+    """Regression test for Bug #51 fix: small grids (well under the default cap) must keep
+    running to completion exactly as before -- mirrors the production grid used by
+    run_research.py / run_research_campaign.py (5 lookbacks x 5 buffers = 25 combinations).
+    """
+    analyzer = ParameterStabilityAnalyzer(dummy_candles, "EURUSD", Timeframe.H1)
+    results = analyzer.run(
+        [10, 15, 20, 25, 30], [2.0, 3.5, 5.0, 6.5, 8.0], StrategyConfig(), dummy_backtest_config
+    )
+    assert len(results) == 25
+    assert all("lookback_bars" in r and "stop_buffer_pips" in r and "net_profit" in r for r in results)
+
+
+def test_stability_grid_exceeds_limit_raises(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig
+) -> None:
+    """Regression test for Bug #51: an unbounded stability grid must fail fast with a clear
+    error, exactly like ParameterOptimizer.optimize() already does for Bug #19. Previously,
+    run() iterated the full lookback_grid x buffer_grid Cartesian product with no size guard --
+    a 20x20 grid would silently trigger 400 full BacktestEngine.run() calls with no warning.
+    """
+    analyzer = ParameterStabilityAnalyzer(dummy_candles, "EURUSD", Timeframe.H1)
+    lookback_grid = list(range(1, 21))  # 20 values
+    buffer_grid = [float(i) for i in range(1, 21)]  # 20 values -> 400 combinations
+
+    with pytest.raises(ValueError) as exc_info:
+        analyzer.run(lookback_grid, buffer_grid, StrategyConfig(), dummy_backtest_config)
+
+    message = str(exc_info.value)
+    assert "400" in message
+    assert "100" in message
+    assert "max_grid_combinations" in message
+
+
+def test_stability_grid_limit_override_allows_large_grid(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig
+) -> None:
+    """A user who raises max_grid_combinations gets the conscious override they asked for.
+
+    11x10 = 110 combinations exceed the default cap of 100, but explicitly raising
+    max_grid_combinations must let the same grid run to completion instead of raising.
+    """
+    analyzer = ParameterStabilityAnalyzer(dummy_candles, "EURUSD", Timeframe.H1)
+    lookback_grid = list(range(10, 21))  # 11 values
+    buffer_grid = [float(i) for i in range(1, 11)]  # 10 values -> 110 combinations
+
+    results = analyzer.run(
+        lookback_grid, buffer_grid, StrategyConfig(), dummy_backtest_config, max_grid_combinations=150
+    )
+    assert len(results) == 110
+
+
+def test_stability_diagnostics_present_and_reported_for_zero_trade_cells(
+    dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for Bug #51: cell results must carry rejection diagnostics, and
+    stability_report.md must surface the top rejection reasons when a cell has 0 trades.
+
+    dummy_candles is a flat, unmoving price series, so every cell here has 0 trades, which
+    previously left the rejection reason invisible (unlike its 3 sibling research modules).
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    analyzer = ParameterStabilityAnalyzer(dummy_candles, "EURUSD", Timeframe.H1)
+    results = analyzer.run([10, 20], [2.0, 5.0], StrategyConfig(), dummy_backtest_config)
+
+    assert results
+    assert all(r["total_trades"] == 0 for r in results)
+    for r in results:
+        assert "diagnostics" in r
+        assert "0_BullishContinuationStrategy" in r["diagnostics"]
+
+    report = (tmp_path / "stability_report.md").read_text()
+    assert "## Zero-Trade Cell Diagnostics" in report
+    assert "no_trend" in report
+
+
+def test_stability_report_not_created_when_cells_have_trades(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: no stability_report.md is written when every cell has trades > 0,
+    matching the pre-fix behavior of never producing this file.
+    """
+    monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
+    analyzer = ParameterStabilityAnalyzer([], "EURUSD", Timeframe.H1)
+    fake_results = [
+        {"lookback_bars": 10, "stop_buffer_pips": 2.0, "net_profit": 50.0, "total_trades": 4, "diagnostics": {}},
+    ]
+    matrix = np.array([[50.0]])
+
+    analyzer._export_artifacts(fake_results, matrix, [10], [2.0])
+
+    assert not (tmp_path / "stability_report.md").exists()
