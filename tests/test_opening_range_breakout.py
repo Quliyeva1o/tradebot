@@ -187,7 +187,7 @@ class TestOneTradePerDay:
         result = _feed(state, strategy, another_breakout)
 
         assert result is None
-        assert strategy.diagnostics.rejections[RejectionReason.TRADE_ALREADY_TAKEN_TODAY] == 1
+        assert strategy.diagnostics.rejections[RejectionReason.TRADE_ALREADY_TAKEN] == 1
 
     def test_new_day_resets_state_and_allows_a_new_trade(self) -> None:
         state = _new_state()

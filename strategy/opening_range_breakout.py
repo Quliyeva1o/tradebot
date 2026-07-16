@@ -221,7 +221,7 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
 
         # --- Rule 2: One Trade Per Day Guard ---
         if self._trade_taken_today:
-            return self._reject(RejectionReason.TRADE_ALREADY_TAKEN_TODAY)
+            return self._reject(RejectionReason.TRADE_ALREADY_TAKEN)
 
         # --- Rule 3: Breakout + Close-Side Check ---
         attempted_up = latest_bar.high > self._range_high

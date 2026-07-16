@@ -45,10 +45,14 @@ class RejectionReason(str, Enum):
     NO_SWEEP = "no_sweep"
 
     # OpeningRangeBreakoutStrategy gates (Strategy #3)
-    # Reuses NO_BREAKOUT, NO_VOLUME_SPIKE above for its own breakout/volume gates.
+    # Reuses NO_BREAKOUT, NO_VOLUME_SPIKE, and TRADE_ALREADY_TAKEN above for its
+    # own breakout/volume/one-trade-per-day gates (Bug #59: this used to have its
+    # own TRADE_ALREADY_TAKEN_TODAY member, a duplicate of the identical
+    # one-trade-per-day concept already used by AccumulationBreakoutStrategy/
+    # ManipulationReversalStrategy/NasdaqMidlineSweepStrategy, which fragmented
+    # cross-strategy diagnostics aggregation).
     RANGE_NOT_READY = "range_not_ready"
     WRONG_CLOSE_SIDE = "wrong_close_side"
-    TRADE_ALREADY_TAKEN_TODAY = "trade_already_taken_today"
 
     # OrderBlockRetestStrategy gates (Strategy #4)
     # Reuses NO_LATEST_BAR, NON_POSITIVE_RISK, RR_GATE_FAILED above.
