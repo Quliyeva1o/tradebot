@@ -16,6 +16,9 @@ load_dotenv()
 
 logger = setup_logger("settings")
 
+VALID_DUPLICATE_POLICIES = frozenset({"drop", "keep"})
+VALID_MISSING_VALUE_POLICIES = frozenset({"raise", "drop", "fill"})
+
 
 def _parse_mt5_login(raw: str) -> int:
     """Parses MT5_LOGIN from its raw env string, defaulting to 0 on bad input.
@@ -57,6 +60,35 @@ class Settings:
     DATETIME_FORMAT: str = os.getenv("DATETIME_FORMAT", "%Y-%m-%d %H:%M:%S")
     DUPLICATE_POLICY: str = os.getenv("DUPLICATE_POLICY", "drop")  # drop or keep
     MISSING_VALUE_POLICY: str = os.getenv("MISSING_VALUE_POLICY", "raise")  # raise, drop, or fill
+
+    def __post_init__(self) -> None:
+        """Validates policy string settings (Bug #58).
+
+        Unlike _parse_mt5_login (which must never raise, since it runs as a
+        bare default-value expression at class-definition/import time and
+        would otherwise break every module that merely imports Settings),
+        this runs in __post_init__, which only executes when Settings() is
+        actually constructed (e.g. inside CSVDataProvider.__init__) -- so
+        raising here cannot break an unrelated module's import, only the
+        specific caller that's about to use a misconfigured policy. A typo'd
+        DUPLICATE_POLICY/MISSING_VALUE_POLICY previously fell through every
+        `if/elif` branch silently, letting duplicates/NaNs flow through
+        unhandled with no warning at all.
+
+        Raises:
+            ValueError: If DUPLICATE_POLICY or MISSING_VALUE_POLICY is not
+                one of its documented allowed values.
+        """
+        if self.DUPLICATE_POLICY not in VALID_DUPLICATE_POLICIES:
+            raise ValueError(
+                f"DUPLICATE_POLICY={self.DUPLICATE_POLICY!r} is invalid; "
+                f"must be one of {sorted(VALID_DUPLICATE_POLICIES)}."
+            )
+        if self.MISSING_VALUE_POLICY not in VALID_MISSING_VALUE_POLICIES:
+            raise ValueError(
+                f"MISSING_VALUE_POLICY={self.MISSING_VALUE_POLICY!r} is invalid; "
+                f"must be one of {sorted(VALID_MISSING_VALUE_POLICIES)}."
+            )
 
     @classmethod
     def load(cls) -> "Settings":
