@@ -27,20 +27,26 @@ bars become the same series. It also better matches the 20-minute build
 session, which produces a meaningfully coarse 1-2 bar average on any
 timeframe coarser than M5.
 
-Day-reset note: the original Pine resets on `ta.change(time("D"))` (calendar
-day change). This is ported as a transition-based reset (not build-session ->
-build-session, mirroring AccumulationBreakoutStrategy) rather than a literal
-calendar-date comparison: since mid/upper/lower/zone_ready/trade_taken are
-only ever written during or immediately after the build session, and the
-build session always precedes the next day's trading activity, resetting at
-"the next build session opens" is behaviorally equivalent to resetting at
-midnight for every bar that is ever evaluated for a signal, while avoiding a
-separate calendar-day-boundary code path.
+Day-reset note (Bug #50 fix): the original Pine resets on `ta.change(time("D"))`
+(calendar day change). This is ported as a calendar-date comparison at/after
+build_session_start (mirroring OpeningRangeBreakoutStrategy's fix), not a
+build-session-entry transition flag: an earlier version reset on
+`in_build_session and not previously_in_build_session`, which never fires if
+a data gap skips straight over the entire build window on a given day (e.g.
+a broker interruption spanning build_session_start..build_session_end) --
+the transition edge is never observed, so that day's reset silently never
+happens and the previous day's frozen zone/trade-taken flag would carry over
+indefinitely. Tracking "have I already reset for this calendar date" directly
+is immune to this regardless of how a day's bars are gapped. The midline
+freeze (previously also transition-based, on build-session *exit*) is
+ported the same way: it fires once we are at/after build_session_end for the
+already-reset date, rather than needing to observe the exact in-session ->
+out-of-session edge.
 """
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from core.models import SignalDirection, Timeframe
@@ -165,7 +171,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
         self._reset_day_state()
-        self._was_in_build_session = False
+        self._last_build_date: date | None = None
 
     def _reset_day_state(self) -> None:
         """Resets the Pine `var` daily-scoped state (mirrors `if newDay`)."""
@@ -181,7 +187,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         """Resets diagnostics and all daily-scoped state (fresh backtest run)."""
         self.diagnostics.reset()
         self._reset_day_state()
-        self._was_in_build_session = False
+        self._last_build_date = None
 
     def recommended_max_holding_bars(self, timeframe: Timeframe) -> int | None:
         """Bar count for [build_session_start, day_session_end) if
@@ -220,21 +226,27 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         if latest_bar is None:
             return self._reject(RejectionReason.NO_LATEST_BAR)
 
-        prev_in_build_session = self._was_in_build_session
-        in_build_session = self._in_build_session(latest_bar.timestamp)
-        new_build_session = in_build_session and not prev_in_build_session
-        session_end = (not in_build_session) and prev_in_build_session
-        if new_build_session:
+        local_dt = latest_bar.timestamp.astimezone(self._session_tz)
+        at_or_after_build_start = local_dt.time() >= self.build_session_start
+        if at_or_after_build_start and local_dt.date() != self._last_build_date:
             self._reset_day_state()
-        self._was_in_build_session = in_build_session
+            self._last_build_date = local_dt.date()
+
+        in_build_session = self._in_build_session(latest_bar.timestamp)
 
         # --- Rule 1a: Accumulate the build-session midline ---
         if in_build_session:
             self._sum_close += latest_bar.close
             self._count_close += 1
 
-        # --- Rule 1b: Freeze the midline/zone at build-session end ---
-        if session_end and self._count_close > 0:
+        # --- Rule 1b: Freeze the midline/zone once at/after build-session end for today ---
+        at_or_after_build_end = local_dt.time() >= self.build_session_end
+        if (
+            not self._zone_ready
+            and at_or_after_build_end
+            and local_dt.date() == self._last_build_date
+            and self._count_close > 0
+        ):
             self._mid = self._sum_close / self._count_close
             self._upper = self._mid + self.range_size
             self._lower = self._mid - self.range_size

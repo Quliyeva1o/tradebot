@@ -255,6 +255,87 @@ class TestDiagnosticsAndConfig:
         assert strategy.day_session_end == time(16, 0)
 
 
+class TestBug50GapRobustness:
+    """Regression test for Bug #50: the day-reset must be immune to a data gap
+    that skips straight over an entire build session, not just a transition
+    flag that only fires on an observed in-session -> out-of-session edge.
+    """
+
+    def test_gap_skipping_entire_build_session_still_resets_and_blocks_stale_trade(self) -> None:
+        """Day 5: full build session + a breakout that takes a trade (_trade_taken=True,
+        _zone_ready=True, mid=100.0). Then a gap skips ALL of day 6's build session
+        (09:30-09:50) entirely -- the next bar fed is day 6 at 10:00, well after
+        build_session_end.
+
+        Before the Bug #50 fix, the day-reset was a transition flag
+        (`in_build_session and not previously_in_build_session`). At the day-6 10:00
+        bar, in_build_session is False (10:00 is outside 09:30-09:50) and the
+        previous bar's in_build_session was ALSO False (day 5's post-breakout bar
+        was also outside the window) -- the transition edge is never observed, so
+        the reset never fires. Day 6 would silently inherit day 5's stale
+        _trade_taken=True and stale zone, rejecting via TRADE_ALREADY_TAKEN using
+        YESTERDAY's state instead of correctly recognizing day 6 has no zone yet.
+
+        After the fix (calendar-date comparison), the day-6 10:00 bar is
+        recognized as being at/after build_session_start on a NEW date regardless
+        of the gap, so it resets immediately: zone/trade-taken state is correctly
+        cleared, and since the gap also consumed day 6's entire build window (zero
+        bars accumulated), the zone correctly stays NOT ready (there is no
+        fabricated midline) rather than any stale carryover.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+
+        day5_breakout = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        setup = _feed(state, strategy, day5_breakout)
+        assert setup is not None
+        assert strategy._trade_taken is True
+        assert strategy._zone_ready is True
+        assert strategy._mid == 100.0
+
+        # Gap: skip day 6's entire 09:30-09:50 build session. Next bar is day 6, 10:00.
+        gap_bar_after_missed_session = _bar(10, 0, 100.0, 100.6, 99.9, 100.5, day=6)
+        result = _feed(state, strategy, gap_bar_after_missed_session)
+
+        assert result is None
+        assert strategy._trade_taken is False  # correctly cleared, not stale from day 5
+        assert strategy._zone_ready is False  # correctly NOT ready -- gap consumed the build window
+        assert strategy._count_close == 0
+        assert strategy.diagnostics.rejections[RejectionReason.ZONE_NOT_READY] >= 1
+        # Must NOT be misreported as a stale same-day duplicate-trade block.
+        assert RejectionReason.TRADE_ALREADY_TAKEN not in strategy.diagnostics.rejections
+
+    def test_gap_landing_mid_build_session_still_resets_and_partially_accumulates(self) -> None:
+        """A gap that skips only the FIRST part of day 6's build session (e.g. the
+        09:30 and 09:35 bars are missing) must still reset for the new day and
+        accumulate whatever build-session bars remain, rather than either failing
+        to reset or discarding the partial accumulation.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+        day5_breakout = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        _feed(state, strategy, day5_breakout)
+        assert strategy._trade_taken is True
+
+        # Day 6: gap skips 09:30/09:35, first bar seen is 09:40 (still inside the
+        # build window), followed by the normal 09:45 bar and session-end bar.
+        first_seen_bar = _bar(9, 40, 100.0, 100.6, 99.9, 100.5, day=6)
+        result = _feed(state, strategy, first_seen_bar)
+
+        assert result is None
+        assert strategy._trade_taken is False  # reset fired despite the gap
+        assert strategy._zone_ready is False
+        assert strategy._count_close == 1  # the one build-session bar we did see
+
+        _feed(state, strategy, _bar(9, 45, 100.0, 100.1, 99.4, 99.5, day=6))
+        _feed(state, strategy, _bar(9, 50, 100.0, 100.6, 99.9, 100.5, day=6))
+
+        assert strategy._zone_ready is True
+        assert strategy._count_close == 2  # only the two bars actually observed
+
+
 class TestRecommendedMaxHoldingBars:
     """recommended_max_holding_bars() must default to None (unlimited
     holding, identical to pre-existing behavior) unless the caller opts in
