@@ -1237,3 +1237,101 @@ sənədləşdirilmiş PF 1.0510 / 106 trade rəqəmi bununla YENİDƏN TƏSDİQL
 **Status: BAĞLANDI (kod dəyişikliyi tətbiq olunub, 3 yeni test ilə doğrulanıb, Midline Sweep
 USTEC OOS nəticəsi yenidən doğrulanıb və dəyişməyib, tam suite regressiyasız keçir — 490 test,
 489 PASS + 1 XFAIL).**
+---
+
+## Bug #48/#52 — BİRLƏŞDİRİLDİ, TƏXİRƏ SALINDI (istifadəçi qərarı, 2026-07-16)
+
+**Qərar:** Bug #48 (`WalkForwardRunner`-in strategiya-nöqtəsi hardcode-dur) və Bug #52
+(`run_backtest.py`-in eyni naxışı daşıdığı, tam repo auditində aşkarlanan tapıntı) BİRLİKDƏ, TƏK
+bir gələcək iş paketi kimi təxirə salınır.
+
+**Səbəb:** Hər ikisi eyni kök-problemdən (strategiya qeydiyyatının hardcode olması) qaynaqlanır.
+Bunları AYRI-AYRI, fərqli naxışlarla həll etmək gələcəkdə uyğunsuzluq riski yaradar — məsələn
+`run_backtest.py`-in baseline/regressiya mexanizmi (`artifacts/baselines/baseline_v1.json`)
+strategiya-spesifikdir (hazırda yalnız Continuation üçün mənalıdır), bu isə `WalkForwardRunner`-in
+generic ediləcəyi refaktordan MÜSTƏQİL, əlavə bir dizayn qərarı (baseline-ların strategiya üzrə
+açarlanması) tələb edir. Bug #52-nin ayrıca təhlili (bax yuxarı, bu sənəddə) göstərdi ki, bu iş
+`research/run_strategy_backtest.py`-dəki `STRATEGY_REGISTRY` naxışının sadəcə köçürülməsindən
+qat-qat böyükdür: YAML sxem dəyişikliyi (`config/backtest.yaml`-a `strategy`/`strategy_params`
+sahələri), Continuation-un cüt-qeydiyyat xüsusiyyətinin (Bullish+Bearish, paylaşılan
+`StrategyConfig`) digər 5 tək-class strategiyadan fərqli idarə olunması, və baseline-ların
+strategiya üzrə açarlanması — bunların hamısı ayrıca planlaşdırma tələb edir.
+
+**TƏXİRƏ SALINIB** — YALNIZ Roadmap #9-a (Walk-Forward/Monte Carlo validasiyasını Midline Sweep və
+digər strategiyalara həqiqətən keçirmək) keçmək istəyəndə, VAHİD bir dizaynla həll ediləcək:
+`WalkForwardRunner` VƏ `run_backtest.py` üçün EYNİ strategiya-registry naxışı, VƏ strategiya-üzrə
+baseline açarlaması, TƏK bir refaktor sessiyasında, differensial testlərlə (mövcud Continuation
+davranışının dəyişmədiyini təsdiqləyən) birlikdə.
+
+**Status: TƏXİRƏ SALINIB (kod dəyişikliyi tətbiq OLUNMAYIB — yalnız sənədləşdirmə).**
+
+---
+
+## Bug #51 — `research/stability.py`-ə Bug #19/#21 ötürülməsi — DÜZƏLDİLDİ
+
+**Tapıntı:** `research_optimizer.py`, `walk_forward.py`, `robustness.py` artıq Bug #19-un
+(`max_grid_combinations` ölçü-qoruması) və Bug #21-in (diaqnostika/`top_rejection_reasons`
+0-trade şəffaflığı) düzəlişlərini daşıyırdı, amma `ParameterStabilityAnalyzer` bunların HEÇ
+BİRİNİ almamışdı.
+
+**Düzəliş:** `run()`-a `max_grid_combinations` (default 100) parametri əlavə olundu —
+`len(lookback_grid) * len(buffer_grid)` bu həddi keçəndə `ValueError` atılır. `_simulate()` indi
+`strategy_engine.get_diagnostics()`-i də qaytarır; `_export_artifacts()` 0-trade xanalar üçün
+yeni `stability_report.md` yaradır (bacı modulların `*_report.md` formatına uyğun).
+
+**Əlavə tapıntı (test yazarkən üzə çıxdı):** `research/stability.py` heç vaxt özü
+`matplotlib.use("Agg")` çağırmırdı (yalnız `run_research_campaign.py` edirdi) — bu, test
+təcridində flaky nəticəyə səbəb olurdu. Düzəldildi.
+
+**Test:** 5 yeni test (`tests/test_research.py`) — grid-daxili davranış dəyişməyib (differensial),
+grid-limiti aşanda `ValueError`, override ilə böyük grid icazəli, 0-trade diaqnostikası, trade-li
+xanalarda hesabat yaradılmır.
+
+**Status: BAĞLANDI (commit `5876ba3`).**
+
+---
+
+## Bug #53 — `CSVDataProvider.validate()` tutarsız çağırılması — DÜZƏLDİLDİ
+
+**Tapıntı:** `run_backtest.py` və `research/run_strategy_backtest.py` `provider.validate(bars)`-ı
+`load()`-dan dərhal sonra çağırırdı, amma `run_diagnostics.py`, `run_research.py`, və
+`run_research_campaign.py`-in demək olar bütün `CSVDataProvider(...).load()` çağırış nöqtələri
+(Phase 1-6 + `_compute_portfolio_metrics`) çağırmırdı — mənfi/sıfır qiymətli və ya high&lt;low olan
+bir CSV bu yollarda sükutla `MarketStateBuilder`/`StrategyEngine`/`BacktestEngine`-ə axa bilərdi.
+
+**Düzəliş:** `run_diagnostics.py::run_diagnostics_for_symbol`, `run_research.py::check_and_get_data`,
+və `run_research_campaign.py`-dəki 7 yükləmə nöqtəsindən 6-sı (Phase 1, `_compute_portfolio_metrics`,
+Phase 2-6) indi `provider.validate()` çağırır. **İstisna:** `validate_data_quality()` (Phase 0-ın öz
+keyfiyyət-hesabatı funksiyası) BİLƏRƏKDƏN toxunulmadı — o, artıq öz DAHA ƏTRAFLI, kəmiyyətləşdirilmiş
+yoxlamalarını (dublikat sayı, invalid-OHLC sayı, weekend-gap sayı) aparır; `validate()` əlavə etmək
+onu İLK pozuntuda dayandırardı (bu funksiyanın öz dolğun hesabatını yaratmasının qarşısını alardı) —
+bu, düzəliş deyil, reqressiya olardı.
+
+**Test:** `tests/test_run_diagnostics.py`, yeni `tests/test_run_research.py`, və
+`tests/test_research_campaign.py`-ə əlavə test — hər biri indi invalid OHLC datasını rədd etdiyini
+təsdiqləyir.
+
+**Status: BAĞLANDI (commit `ba59f51`).**
+
+---
+
+## Bug #55 — `mt5/history_downloader.py`-də chunking yoxdur — DÜZƏLDİLDİ
+
+**Tapıntı:** `data/download_history.py::fetch_symbol_bars_chunked` MT5-in bar-limitini (
+`copy_rates_range` ~62-74k bardan sonra `None` qaytarır) aşmaq üçün sorğuları chunk-layırdı, amma
+`MT5HistoryDownloader.download()` (istehsalatda AKTİV istifadə olunan, `run_backtest.py`/
+`run_research.py`/`run_research_campaign.py`-in avtomatik-endirmə fallback-ı) eyni sorğunu BİR
+DƏFƏYƏ, chunk-sız edirdi.
+
+**Düzəliş:** Paylaşılan `mt5/chunking.py` çıxarıldı (`TIMEFRAME_DELTA`, `iter_chunk_windows`) —
+`data/download_history.py`-in `_iter_chunk_windows`/`_TIMEFRAME_DELTA`-sı indi bunun nazik
+re-export-udur (mövcud testlərin `patch("data.download_history._iter_chunk_windows", ...)`
+adlandırması TƏSİRLƏNMİR, çünki `mock.patch` modul atributunu əvəz edir, mənşəyindən asılı
+olmayaraq). `MT5HistoryDownloader.download()` indi `iter_chunk_windows()` üzərindən iterasiya edir,
+boş chunk-ları sükutla ötürür (bacı funksiya kimi), və CSV-ə yazmazdan əvvəl sərhəd-dublikatlarını
+təmizləyir/xronoloji sıralayır (chunking-in özü gətirdiyi yeni risk).
+
+**Test:** Yeni `tests/test_history_downloader.py` (7 test) — bu modulun əvvəllər SIFIR test
+əhatəsi var idi.
+
+**Status: BAĞLANDI (commit `89f7ad4`).**
