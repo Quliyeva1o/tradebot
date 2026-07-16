@@ -43,8 +43,9 @@ from reportlab.platypus import (
 
 from application.services.market_state_builder import MarketStateBuilder
 from backtest.engine import BacktestEngine
-from backtest.models import BacktestConfig
-from core.models import Timeframe
+from backtest.models import BacktestConfig, BacktestResult, BacktestTrade
+from backtest.report import BacktestReportGenerator
+from core.models import Bar, Timeframe
 from data.csv_provider import CSVDataProvider
 from mt5.history_downloader import MT5HistoryDownloader
 from research.monte_carlo import MonteCarloSimulator
@@ -171,6 +172,178 @@ def validate_data_quality(symbol: str, csv_path: Path, timeframe: str) -> dict[s
         errors.append(f"Integrity check crashed: {e}")
 
     return report
+
+
+def _compute_portfolio_metrics(
+    symbols: list[str], years: list[int], timeframe: str, timeframe_enum: Timeframe
+) -> tuple[float, float | None]:
+    """Recomputes combined profit factor and Sharpe ratio across all symbols' full-history baselines.
+
+    Runs an independent default-config backtest per symbol from the CSV files on disk and pools every
+    resulting trade into one chronologically-sorted portfolio, so the Executive Summary reflects the
+    current dataset/strategy even when phases 1-6 were restored from a resume checkpoint (whose state
+    file does not retain individual trades).
+
+    Returns:
+        A tuple of (profit_factor, sharpe_ratio). sharpe_ratio is None if there is not enough
+        distinct-day trade data to compute a standard deviation of daily returns.
+    """
+    all_trades: list[BacktestTrade] = []
+    for symbol in symbols:
+        symbol_bars: list[Bar] = []
+        for year in years:
+            csv_path = (PROJECT_ROOT / "data" / "history") / f"{symbol}_{timeframe}_{year}.csv"
+            if csv_path.exists():
+                provider = CSVDataProvider(filepath=csv_path)
+                symbol_bars.extend(provider.load())
+
+        if not symbol_bars:
+            continue
+
+        state_builder = MarketStateBuilder(symbol=symbol, timeframe=timeframe_enum)
+        strategy_engine = StrategyEngine()
+        strategy_engine.register_strategy(BullishContinuationStrategy())
+        strategy_engine.register_strategy(BearishContinuationStrategy())
+        engine = BacktestEngine(config=BacktestConfig(10000.0, 0.01, 0.0001, 5.0, 0.0))
+        result = engine.run(symbol_bars, strategy_engine, state_builder)
+        all_trades.extend(result.trades)
+
+    if not all_trades:
+        return 1.0, None
+
+    sorted_trades = tuple(sorted(all_trades, key=lambda t: t.entry_time))
+    combined_result = BacktestResult(
+        trades=sorted_trades,
+        total_profit=sum(t.pnl for t in sorted_trades),
+        # win_rate/max_drawdown/profit_factor below are placeholders: BacktestReportGenerator.generate()
+        # recomputes all performance metrics directly from `trades`/`initial_balance`, never reads these.
+        win_rate=0.0,
+        max_drawdown=0.0,
+        profit_factor=0.0,
+        initial_balance=10000.0,
+    )
+    metrics = BacktestReportGenerator().generate(combined_result)
+    return metrics.profit_factor, metrics.sharpe_ratio
+
+
+def _compute_walk_forward_score(wf_results: list[dict[str, Any]]) -> float:
+    """Scores walk-forward robustness as the percentage of validation folds that were profitable out-of-sample."""
+    if not wf_results:
+        return 0.0
+    positive_val_folds = sum(1 for fold in wf_results if fold.get("val_net_profit", 0.0) > 0)
+    return (positive_val_folds / len(wf_results)) * 100.0
+
+
+def _compute_optimization_score(opt_results: list[dict[str, Any]]) -> float:
+    """Scores optimization success as the percentage of symbols whose best trial was profitable."""
+    if not opt_results:
+        return 0.0
+    positive = sum(1 for o in opt_results if o.get("best_pnl", 0.0) > 0)
+    return (positive / len(opt_results)) * 100.0
+
+
+def _compute_monte_carlo_score(mc_results: list[dict[str, Any]]) -> float:
+    """Scores Monte Carlo robustness from risk of ruin, penalized further if expected return is non-positive."""
+    if not mc_results:
+        return 0.0
+    scores = []
+    for mc in mc_results:
+        risk_of_ruin = mc.get("risk_of_ruin", 100.0)
+        expected_return = mc.get("expected_return", 0.0)
+        safety = max(0.0, 100.0 - risk_of_ruin)
+        scores.append(safety if expected_return > 0 else safety * 0.5)
+    return sum(scores) / len(scores)
+
+
+def _compute_robustness_score(rob_results: list[dict[str, Any]]) -> float:
+    """Scores robustness as the average fraction of baseline profit retained under stress scenarios."""
+    if not rob_results:
+        return 0.0
+    stress_keys = ["high_spread", "high_commission", "high_slippage", "skipped_10pct", "skipped_25pct"]
+    scores = []
+    for r in rob_results:
+        baseline_profit = r.get("baseline", {}).get("net_profit", 0.0)
+        if baseline_profit <= 0:
+            scores.append(0.0)
+            continue
+        ratios = [
+            max(0.0, min(1.0, r.get(key, {}).get("net_profit", 0.0) / baseline_profit))
+            for key in stress_keys
+        ]
+        scores.append((sum(ratios) / len(ratios)) * 100.0)
+    return sum(scores) / len(scores)
+
+
+def _select_best_params_string(opt_results: list[dict[str, Any]]) -> str:
+    """Formats the highest-best_pnl symbol's optimized parameters from real opt_results."""
+    if not opt_results:
+        return "N/A (no optimization results available)"
+    best_entry = max(opt_results, key=lambda o: o.get("best_pnl", float("-inf")))
+    params = best_entry.get("best_params", {})
+    if not params:
+        return f"{best_entry['symbol']}: (no profitable parameters found)"
+    params_str = ", ".join(f"{k}={v}" for k, v in params.items())
+    return f"{best_entry['symbol']}: {params_str}"
+
+
+def _build_strengths_and_weaknesses(
+    walk_forward_score: float,
+    optimization_score: float,
+    robustness_score: float,
+    profit_factor: float,
+    sharpe: float | None,
+    risk_of_ruin: float,
+    worst_drawdown: float,
+) -> tuple[list[str], list[str]]:
+    """Builds strengths/weaknesses lists via simple threshold rules over real computed metrics.
+
+    Deliberately not free-form NLG: each line is a fixed template gated by an if/else on an actual
+    computed value, so the wording always matches the numbers in the same report.
+    """
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+
+    if profit_factor > 1.2:
+        strengths.append(f"Combined profit factor of {profit_factor:.2f} across all segment backtests indicates a real edge.")
+    elif profit_factor < 1.0:
+        weaknesses.append(f"Combined profit factor of {profit_factor:.2f} is below breakeven across all segment backtests.")
+
+    if sharpe is not None and sharpe > 1.0:
+        strengths.append(f"Sharpe ratio of {sharpe:.2f} indicates favorable risk-adjusted returns.")
+    elif sharpe is not None and sharpe < 0.5:
+        weaknesses.append(f"Sharpe ratio of {sharpe:.2f} indicates weak risk-adjusted returns.")
+
+    if risk_of_ruin < 1.0:
+        strengths.append(f"Monte Carlo risk of ruin averaged {risk_of_ruin:.2f}% across symbols, indicating low tail risk.")
+    else:
+        weaknesses.append(f"Monte Carlo risk of ruin averaged {risk_of_ruin:.2f}% across symbols, indicating material tail risk.")
+
+    if walk_forward_score >= 60.0:
+        strengths.append(f"{walk_forward_score:.0f}% of walk-forward validation folds were profitable out-of-sample.")
+    else:
+        weaknesses.append(f"Only {walk_forward_score:.0f}% of walk-forward validation folds were profitable out-of-sample.")
+
+    if robustness_score >= 60.0:
+        strengths.append(f"Retained {robustness_score:.0f}% of baseline profit on average under spread/commission/slippage/skip stress tests.")
+    else:
+        weaknesses.append(f"Retained only {robustness_score:.0f}% of baseline profit on average under stress tests, indicating sensitivity to execution friction.")
+
+    if optimization_score >= 60.0:
+        strengths.append(f"Parameter optimization found a profitable configuration on {optimization_score:.0f}% of symbols tested.")
+    else:
+        weaknesses.append(f"Parameter optimization found a profitable configuration on only {optimization_score:.0f}% of symbols tested.")
+
+    if worst_drawdown < 0.20:
+        strengths.append(f"Worst segment drawdown of {worst_drawdown*100:.1f}% stayed within a conservative risk budget.")
+    else:
+        weaknesses.append(f"Worst segment drawdown of {worst_drawdown*100:.1f}% exceeded a conservative risk budget.")
+
+    if not strengths:
+        strengths.append("No metric cleared its strength threshold this run.")
+    if not weaknesses:
+        weaknesses.append("No metric fell below its weakness threshold this run.")
+
+    return strengths, weaknesses
 
 
 def main() -> None:
@@ -534,33 +707,67 @@ def main() -> None:
     elif worst_drawdown > 0.40 or total_net_profit < 0:
         verdict = "NOT ROBUST"
 
+    # Bug #49 fix: every field below is computed from the real wf_results/opt_results/mc_results/
+    # rob_results gathered in phases 2-5 above, instead of being a hardcoded placeholder.
+    walk_forward_score = _compute_walk_forward_score(wf_results)
+    optimization_score = _compute_optimization_score(opt_results)
+    monte_carlo_score = _compute_monte_carlo_score(mc_results)
+    robustness_score = _compute_robustness_score(rob_results)
+    overall_score = (
+        0.30 * walk_forward_score
+        + 0.25 * robustness_score
+        + 0.25 * monte_carlo_score
+        + 0.20 * optimization_score
+    )
+
+    profit_factor, sharpe = _compute_portfolio_metrics(symbols, years, timeframe, timeframe_enum)
+    sharpe_display = sharpe if sharpe is not None else 0.0
+    risk_of_ruin = (
+        float(np.mean([mc.get("risk_of_ruin", 0.0) for mc in mc_results])) if mc_results else 0.0
+    )
+    best_params_str = _select_best_params_string(opt_results)
+
+    strengths, weaknesses = _build_strengths_and_weaknesses(
+        walk_forward_score=walk_forward_score,
+        optimization_score=optimization_score,
+        robustness_score=robustness_score,
+        profit_factor=profit_factor,
+        sharpe=sharpe,
+        risk_of_ruin=risk_of_ruin,
+        worst_drawdown=worst_drawdown,
+    )
+
+    if verdict == "READY FOR FORWARD TEST":
+        next_action = (
+            "Proceed to forward testing with tight-spread accounts, and verify execution "
+            "slippage margins in a live-adjacent (demo) environment."
+        )
+    elif verdict == "NOT ROBUST":
+        next_action = (
+            "Do not proceed to forward testing. Net profit or drawdown breached the minimum "
+            "robustness bar -- revisit strategy logic/parameters before re-running this campaign."
+        )
+    else:
+        next_action = (
+            "Address the weaknesses listed above before proceeding to forward testing; "
+            "re-run this campaign after changes to confirm improvement."
+        )
+
     campaign_summary: dict[str, Any] = {
         "verdict": verdict,
-        "overall_score": 65.0,
-        "robustness_score": 75.0,
-        "walk_forward_score": 60.0,
-        "monte_carlo_score": 85.0,
-        "optimization_score": 70.0,
+        "overall_score": overall_score,
+        "robustness_score": robustness_score,
+        "walk_forward_score": walk_forward_score,
+        "monte_carlo_score": monte_carlo_score,
+        "optimization_score": optimization_score,
         "max_drawdown": worst_drawdown,
-        "profit_factor": 1.45,
-        "sharpe": 1.25,
-        "risk_of_ruin": 0.0,
-        "best_params": "RR=1.5, Buffer=5.0",
-        "strengths": [
-            "Consistent profitability on XAUUSD and EURUSD under normal execution",
-            "Zero risk of ruin in Monte Carlo randomized bootstrapping passes",
-            "Broad plateau found in stability plateau grid search",
-            "Strategy config maintains robust parameters on rolling walk-forward test",
-            "No account blown in any test segments",
-        ],
-        "weaknesses": [
-            "Sensitive to high execution delays and slippage costs",
-            "Low trade frequency on hourly timeframe reduces capitalization rate",
-            "Higher drawdown experienced during high spread USDJPY scenarios",
-            "Degradation seen in rolling walk-forward validation compared to train sets",
-            "Expectancy sensitive to stop-loss buffer variations",
-        ],
-        "next_action": "Proceed to forward testing with tight spread accounts, and verify execution slip margins.",
+        "profit_factor": profit_factor,
+        "sharpe": sharpe_display,
+        "risk_of_ruin": risk_of_ruin,
+        "best_params": best_params_str,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "next_action": next_action,
     }
 
     # Compare with previous campaign if available
