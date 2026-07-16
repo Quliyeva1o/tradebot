@@ -1426,5 +1426,137 @@ def test_margin_allows_position_within_leverage_capacity(
     assert len(result.trades) == 1
     assert result.trades[0].result == TradeResult.WIN
     assert result.margin_rejected_setups == 0
+def test_fully_resolved_backtest_is_unaffected_by_data_end_force_close(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    """Differential regression for Bug #54: a backtest where every position closes via
+    SL/TP well before the data ends (test_backtest_winning_trade's exact scenario) must
+    produce identical trade count/result/pnl and force_closed_at_data_end == 0 -- the
+    data-end force-close introduced for Bug #54 must never touch an already-closed trade.
+    """
+    setup = TradeSetup(
+        setup_id="setup_win",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0980, 1.0990),
+        target_zone=(1.1050, 1.1060),
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=base_config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.WIN
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == 1.1050
+    assert trade.pnl > 0.0
+    assert result.total_profit > 0.0
+    assert result.win_rate == 1.0
+    assert result.profit_factor == float("inf")
+    assert result.force_closed_at_data_end == 0
 
 
+def test_open_position_force_closed_at_data_end(state_builder: MarketStateBuilder) -> None:
+    """Bug #54: a position still open when the candle series ends (no max_holding_bars,
+    SL/TP never touched) must be force-closed at the last candle's close price and
+    counted, instead of silently vanishing from every reported metric.
+    """
+    config = BacktestConfig(
+        initial_balance=10000.0,
+        risk_per_trade=0.01,
+        spread=0.0,
+        commission=0.0,
+        slippage=0.0,
+        max_holding_bars=None,
+    )
+
+    # SL/TP are set far outside the price range below, so neither is ever hit, and
+    # max_holding_bars is None so there is no expiry either -- the position is still
+    # open when the candle list simply runs out.
+    setup = TradeSetup(
+        setup_id="setup_open_at_end",
+        symbol="EURUSD",
+        timeframe=Timeframe.M15,
+        direction=SignalDirection.BUY,
+        entry_zone=(1.0990, 1.1010),
+        stop_zone=(1.0500, 1.0510),  # far below any candle low
+        target_zone=(1.2000, 1.2010),  # far above any candle high
+        confidence_score=0.9,
+        confluence=[],
+        trigger_reason="Bullish OB",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    # Candle 0: triggers signal (pending setup proposed)
+    # Candle 1: entry fills at entry_zone[1]=1.1010 (bars_held starts at 0 this bar)
+    # Candle 2: bars_held becomes 1, still open
+    # Candle 3: bars_held becomes 2, still open -- data ends here, position still open
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1025, 1.1010, 1.1018),
+        _create_bar(3, 1.1018, 1.1028, 1.1012, 1.1022),
+    ]
+
+    evaluator = MockEvaluator([[setup], [], [], []])
+    engine = BacktestEngine(config=config)
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.result == TradeResult.EXPIRED
+    assert trade.bars_held == 2
+    assert trade.entry_price == 1.1010
+    assert trade.exit_price == pytest.approx(1.1022)  # candle 3's close, no spread/slippage configured
+    assert trade.exit_time == candles[3].timestamp
+    assert trade.exit_bar_index == 3
+    assert trade.pnl == pytest.approx((1.1022 - 1.1010) * trade.position_size)
+
+    # The trade's outcome must now be visible in every top-level aggregate.
+    assert result.total_profit == pytest.approx(trade.pnl)
+    assert result.final_balance == pytest.approx(10000.0 + trade.pnl)
+    assert result.force_closed_at_data_end == 1
+
+
+def test_no_force_close_when_no_position_was_ever_open(
+    base_config: BacktestConfig, state_builder: MarketStateBuilder
+) -> None:
+    """Bug #54 edge case: a backtest with zero setups/trades must not spuriously
+    force-close anything (active_trade is always None, so the new code path must
+    be a no-op)."""
+    evaluator = MockEvaluator([[], [], []])
+    engine = BacktestEngine(config=base_config)
+
+    candles = [
+        _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
+        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
+    ]
+
+    result = engine.run(candles, evaluator, state_builder)
+
+    assert len(result.trades) == 0
+    assert result.force_closed_at_data_end == 0

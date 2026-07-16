@@ -458,6 +458,82 @@ class BacktestEngine:
                     pending_setup = setups[0]
                     pending_setup_idx = idx
 
+        # Bug #54 fix: a position still open when the candle series ends (no
+        # max_holding_bars configured, or SL/TP simply never touched) was previously
+        # dropped silently -- it never reached closed_trades, so final_balance and
+        # every reported metric (win_rate, profit_factor, total_trades) ignored it.
+        # Force-close it at the last candle's close price (mark-to-market) instead,
+        # and surface that this happened via force_closed_at_data_end.
+        force_closed_at_data_end = 0
+        if active_trade is not None and candles:
+            last_candle = candles[-1]
+            spread = self._effective_spread(last_candle)
+            slippage = self.config.slippage
+            sl = active_trade["stop_loss"]
+            tp = active_trade["take_profit"]
+
+            if active_trade["direction"] == SignalDirection.BUY:
+                exit_price = last_candle.close - spread / 2 - slippage
+            else:
+                exit_price = last_candle.close + spread / 2 + slippage
+
+            pos_size = active_trade["position_size"]
+            entry_p = active_trade["entry_price"]
+
+            if active_trade["direction"] == SignalDirection.BUY:
+                gross_pnl = (exit_price - entry_p) * pos_size
+            else:
+                gross_pnl = (entry_p - exit_price) * pos_size
+
+            if self.config.commission_per_lot is not None:
+                commission = self.config.commission_per_lot * pos_size
+            else:
+                commission = self.config.commission
+
+            net_pnl = gross_pnl - commission
+
+            risk_dist = abs(entry_p - sl)
+            r_multiple = net_pnl / (risk_dist * pos_size) if risk_dist > 0 else 0.0
+
+            trade = BacktestTrade(
+                entry_time=active_trade["entry_time"],
+                exit_time=last_candle.timestamp,
+                direction=active_trade["direction"],
+                entry_price=entry_p,
+                exit_price=exit_price,
+                stop_loss=sl,
+                take_profit=tp,
+                result=TradeResult.EXPIRED,
+                pnl=net_pnl,
+                r_multiple=r_multiple,
+                symbol=active_trade.get("symbol", ""),
+                setup_id=active_trade.get("setup_id", ""),
+                strategy_name=active_trade.get("strategy_name", ""),
+                trigger_reason=active_trade.get("trigger_reason", ""),
+                confidence_score=active_trade.get("confidence_score", 0.0),
+                bars_held=active_trade["bars_held"],
+                position_size=pos_size,
+                entry_bar_index=active_trade["entry_bar_index"],
+                exit_bar_index=len(candles) - 1,
+                trade_duration=(last_candle.timestamp - active_trade["entry_time"]).total_seconds(),
+                entry_spread=active_trade["entry_spread"],
+                exit_spread=spread,
+            )
+            closed_trades.append(trade)
+            balance += net_pnl
+
+            if balance <= 0.0:
+                balance = 0.0
+                account_blown = True
+                blown_at_trade_index = len(closed_trades) - 1
+
+            peak_balance = max(peak_balance, balance)
+            current_dd = (peak_balance - balance) / peak_balance if peak_balance > 0 else 0.0
+            max_drawdown = max(max_drawdown, current_dd)
+
+            force_closed_at_data_end = 1
+            active_trade = None
+
         # Calculate metrics for BacktestResult
         total_profit = balance - self.config.initial_balance
         total_trades = len(closed_trades)
@@ -489,5 +565,6 @@ class BacktestEngine:
             stop_reason=stop_reason,
             conflicting_setups_dropped=conflicting_setups_dropped,
             margin_rejected_setups=margin_rejected_setups,
+            force_closed_at_data_end=force_closed_at_data_end,
         )
 

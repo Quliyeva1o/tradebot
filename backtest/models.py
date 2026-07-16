@@ -81,4 +81,5 @@ class BacktestResult:
     stop_reason: str | None = None
     conflicting_setups_dropped: int = 0
     margin_rejected_setups: int = 0
+    force_closed_at_data_end: int = 0
 
