@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -19,6 +18,8 @@ from pathlib import Path
 import MetaTrader5 as mt5  # noqa: N813
 
 from core.models import Bar, Timeframe
+from mt5.chunking import TIMEFRAME_DELTA as _TIMEFRAME_DELTA
+from mt5.chunking import iter_chunk_windows as _iter_chunk_windows
 from mt5.connector import MT5Connector
 from utils.logging import setup_logger
 from utils.validators import OHLCViolation, check_ohlc_consistency
@@ -39,23 +40,6 @@ _MT5_TIMEFRAME_MAP = {
     "H4": mt5.TIMEFRAME_H4,
     "D1": mt5.TIMEFRAME_D1,
 }
-
-_TIMEFRAME_DELTA = {
-    "M1": timedelta(minutes=1),
-    "M5": timedelta(minutes=5),
-    "M15": timedelta(minutes=15),
-    "M30": timedelta(minutes=30),
-    "H1": timedelta(hours=1),
-    "H4": timedelta(hours=4),
-    "D1": timedelta(days=1),
-}
-
-# MT5's copy_rates_range fails outright (returns None) rather than truncating
-# once a single request would span too many bars (observed cutoff on this
-# broker: succeeds at ~62k bars, fails above ~74k -- consistent with the
-# classic MT5 65535-bar buffer limit). Chunk requests to stay safely under it.
-_CHUNK_TARGET_BARS = 40_000
-
 
 @dataclass(frozen=True)
 class GapRecord:
@@ -149,27 +133,6 @@ def _rows_to_bars(rates: object, point: float) -> list[Bar]:
         )
         for row in rates
     ]
-
-
-def _iter_chunk_windows(
-    start: datetime, end: datetime, timeframe: str
-) -> Iterator[tuple[datetime, datetime]]:
-    """Splits [start, end] into windows sized to stay under MT5's per-request bar limit.
-
-    Args:
-        start: Overall range start (inclusive).
-        end: Overall range end (inclusive).
-        timeframe: One of the supported timeframe keys, used to size each window.
-
-    Yields:
-        (chunk_start, chunk_end) tuples covering [start, end] with no gaps.
-    """
-    span = _TIMEFRAME_DELTA[timeframe] * _CHUNK_TARGET_BARS
-    cursor = start
-    while cursor < end:
-        chunk_end = min(cursor + span, end)
-        yield cursor, chunk_end
-        cursor = chunk_end
 
 
 def fetch_symbol_bars_chunked(

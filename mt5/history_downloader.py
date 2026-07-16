@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import MetaTrader5 as mt5  # noqa: N813
 import pandas as pd
 
+from mt5.chunking import TIMEFRAME_DELTA, iter_chunk_windows
 from mt5.connector import MT5Connector
 from utils.logging import setup_logger
 from utils.paths import PROJECT_ROOT
@@ -19,16 +20,6 @@ TIMEFRAME_MAPPING = {
     "H1": mt5.TIMEFRAME_H1,
     "H4": mt5.TIMEFRAME_H4,
     "D1": mt5.TIMEFRAME_D1,
-}
-
-TIMEFRAME_DELTA = {
-    "M1": timedelta(minutes=1),
-    "M5": timedelta(minutes=5),
-    "M15": timedelta(minutes=15),
-    "M30": timedelta(minutes=30),
-    "H1": timedelta(hours=1),
-    "H4": timedelta(hours=4),
-    "D1": timedelta(days=1),
 }
 
 
@@ -89,13 +80,40 @@ class MT5HistoryDownloader:
 
             logger.info("Fetching rates for %s [%s] from %s to %s...", symbol, tf_key, start_date, end_date)
 
-            # Copy rates
-            rates = mt5.copy_rates_range(symbol, mt5_tf, start_date, end_date)
-            if rates is None or len(rates) == 0:
+            # Copy rates in size-limited chunks: MT5's copy_rates_range() fails outright
+            # (returns None) rather than truncating once a single request would span too
+            # many bars, so a wide [start_date, end_date] range must be split (see
+            # mt5/chunking.py). A chunk with no data (e.g. a window predating the broker's
+            # available history) is logged and skipped, not treated as a fatal error.
+            chunk_frames: list[pd.DataFrame] = []
+            for chunk_start, chunk_end in iter_chunk_windows(start_date, end_date, tf_key):
+                chunk_rates = mt5.copy_rates_range(symbol, mt5_tf, chunk_start, chunk_end)
+                if chunk_rates is None or len(chunk_rates) == 0:
+                    logger.info(
+                        "No data for chunk %s -> %s (skipped).", chunk_start, chunk_end
+                    )
+                    continue
+                logger.info(
+                    "Fetched %d rate(s) for chunk %s -> %s.", len(chunk_rates), chunk_start, chunk_end
+                )
+                chunk_frames.append(pd.DataFrame(chunk_rates))
+
+            if not chunk_frames:
                 logger.error("No historical rates returned from MT5 terminal for %s.", symbol)
                 return None
 
-            logger.info("Retrieved %d rates from MT5 terminal.", len(rates))
+            df = pd.concat(chunk_frames, ignore_index=True)
+
+            # Chunk boundaries can overlap by one bar (or MT5 can clip a window to its
+            # available history), so de-duplicate on the raw epoch-seconds "time" column
+            # before any further processing, keeping the last-seen row per timestamp.
+            dup_count = int(df["time"].duplicated().sum())
+            if dup_count:
+                logger.warning("Removed %d duplicate timestamp row(s) at chunk boundaries.", dup_count)
+                df = df.drop_duplicates(subset="time", keep="last")
+            df = df.sort_values("time").reset_index(drop=True)
+
+            logger.info("Retrieved %d rates from MT5 terminal (across %d chunk(s)).", len(df), len(chunk_frames))
 
             # Export directory
             export_dir = PROJECT_ROOT / "data" / "history"
@@ -105,8 +123,6 @@ class MT5HistoryDownloader:
             file_name = f"{symbol}_{tf_key}_{start_date.year}.csv"
             file_path = export_dir / file_name
 
-            # Convert to DataFrame to process headers cleanly
-            df = pd.DataFrame(rates)
             # rename 'time' to 'timestamp'
             df.rename(columns={"time": "timestamp"}, inplace=True)
             # Convert timestamp to human readable datetime in local/UTC format
