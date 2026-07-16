@@ -36,8 +36,7 @@ class BacktestReportGenerator:
 
         profit_factor = self._calculate_profit_factor(gross_profit, gross_loss)
 
-        average_win = (gross_profit / winning_trades) if winning_trades > 0 else 0.0
-        average_loss = (gross_loss / losing_trades) if losing_trades > 0 else 0.0
+        average_win, average_loss = self._calculate_win_loss_averages(trades)
         expectancy = (win_rate * average_win) - (loss_rate * average_loss)
 
         average_r = sum(t.r_multiple for t in trades) / total_trades if total_trades > 0 else 0.0
@@ -217,8 +216,7 @@ class BacktestReportGenerator:
             net_prof = sum(t.pnl for t in month_trades)
             pf = self._calculate_profit_factor(gross_prof, gross_los)
 
-            avg_w = (gross_prof / wins) if wins > 0 else 0.0
-            avg_l = (gross_los / losses) if losses > 0 else 0.0
+            avg_w, avg_l = self._calculate_win_loss_averages(tuple(month_trades))
             exp = (win_rate * avg_w) - ((1.0 - win_rate) * avg_l)
 
             avg_r = sum(t.r_multiple for t in month_trades) / total if total > 0 else 0.0
@@ -342,6 +340,32 @@ class BacktestReportGenerator:
         gross_profit = sum(t.pnl for t in trades if t.pnl > 0)
         gross_loss = sum(abs(t.pnl) for t in trades if t.pnl < 0)
         return gross_profit, gross_loss
+
+    def _calculate_win_loss_averages(
+        self, trades: tuple[BacktestTrade, ...]
+    ) -> tuple[float, float]:
+        """Calculates the average win/loss PnL, strictly among trades whose
+        `result` is WIN/LOSS respectively (Bug #56).
+
+        Unlike gross_profit/gross_loss (used for profit_factor, which is
+        correctly result-agnostic -- money made is money made regardless of
+        why a trade closed), averaging "wins" must not include an EXPIRED
+        trade that happened to close with a positive PnL: doing so inflates
+        average_win above the true average among trades that actually hit
+        take-profit (and symmetrically for average_loss/EXPIRED-negative).
+
+        Args:
+            trades: A tuple of BacktestTrade objects.
+
+        Returns:
+            A tuple of (average_win, average_loss). average_loss is positive
+            (an absolute average), matching gross_loss's sign convention.
+        """
+        win_pnls = [t.pnl for t in trades if t.result == TradeResult.WIN]
+        loss_pnls = [abs(t.pnl) for t in trades if t.result == TradeResult.LOSS]
+        average_win = sum(win_pnls) / len(win_pnls) if win_pnls else 0.0
+        average_loss = sum(loss_pnls) / len(loss_pnls) if loss_pnls else 0.0
+        return average_win, average_loss
 
     def _calculate_profit_factor(self, gross_profit: float, gross_loss: float) -> float:
         """Calculates the profit factor from gross profit and gross loss.

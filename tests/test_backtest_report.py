@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import pytest
+
 from backtest.models import BacktestResult, BacktestTrade, TradeResult
 from backtest.report import BacktestReportGenerator
 from core.models import SignalDirection
@@ -380,3 +382,98 @@ def test_equity_curve() -> None:
     curve = generator.calculate_equity_curve(result)
 
     assert curve == [10000.0, 10150.0, 10080.0, 10320.0]
+
+
+def test_average_win_excludes_expired_trades_with_positive_pnl() -> None:
+    """Regression test for Bug #56: average_win must be the average PnL among
+    trades whose result is WIN, not "all trades with pnl > 0" -- an EXPIRED
+    trade that happened to close positive must not inflate it.
+
+    5 WIN trades at $100 each (sum $500) + 1 EXPIRED trade at +$50: the true
+    WIN-only average is $100, not ($500 + $50) / 5 = $110.
+    """
+    trades = (
+        _create_trade(pnl=100.0, result=TradeResult.WIN),
+        _create_trade(pnl=100.0, result=TradeResult.WIN),
+        _create_trade(pnl=100.0, result=TradeResult.WIN),
+        _create_trade(pnl=100.0, result=TradeResult.WIN),
+        _create_trade(pnl=100.0, result=TradeResult.WIN),
+        _create_trade(pnl=50.0, result=TradeResult.EXPIRED),
+    )
+    result = BacktestResult(
+        trades=trades,
+        total_profit=550.0,
+        win_rate=5 / 6,
+        max_drawdown=0.0,
+        profit_factor=float("inf"),
+        initial_balance=10000.0,
+        final_balance=10550.0,
+    )
+    generator = BacktestReportGenerator()
+    metrics = generator.generate(result)
+
+    assert metrics.winning_trades == 5
+    assert metrics.expired_trades == 1
+    assert metrics.average_win == 100.0  # NOT 110.0
+    # profit_factor is correctly result-agnostic: the EXPIRED trade's positive
+    # pnl still counts toward gross_profit (money made is money made), unlike
+    # average_win.
+    assert metrics.gross_profit == 550.0
+    assert metrics.profit_factor == float("inf")
+
+
+def test_average_loss_excludes_expired_trades_with_negative_pnl() -> None:
+    """Symmetric regression test for Bug #56: an EXPIRED trade that closed
+    negative must not be averaged into average_loss either.
+
+    3 LOSS trades at $50 each (sum $150) + 1 EXPIRED trade at -$20: the true
+    LOSS-only average is $50, not ($150 + $20) / 3 = $56.67.
+    """
+    trades = (
+        _create_trade(pnl=-50.0, result=TradeResult.LOSS),
+        _create_trade(pnl=-50.0, result=TradeResult.LOSS),
+        _create_trade(pnl=-50.0, result=TradeResult.LOSS),
+        _create_trade(pnl=-20.0, result=TradeResult.EXPIRED),
+    )
+    result = BacktestResult(
+        trades=trades,
+        total_profit=-170.0,
+        win_rate=0.0,
+        max_drawdown=0.0,
+        profit_factor=0.0,
+        initial_balance=10000.0,
+        final_balance=9830.0,
+    )
+    generator = BacktestReportGenerator()
+    metrics = generator.generate(result)
+
+    assert metrics.losing_trades == 3
+    assert metrics.expired_trades == 1
+    assert metrics.average_loss == 50.0  # NOT 56.666...
+    assert metrics.gross_loss == 170.0
+
+
+def test_monthly_statistics_average_win_excludes_expired_trades() -> None:
+    """Bug #56 must also be fixed in calculate_monthly_statistics(), which had
+    the identical gross_profit/wins pattern.
+    """
+    trades = (
+        _create_trade(pnl=100.0, result=TradeResult.WIN, exit_time=datetime(2026, 1, 10)),
+        _create_trade(pnl=100.0, result=TradeResult.WIN, exit_time=datetime(2026, 1, 15)),
+        _create_trade(pnl=50.0, result=TradeResult.EXPIRED, exit_time=datetime(2026, 1, 20)),
+    )
+    result = BacktestResult(
+        trades=trades,
+        total_profit=250.0,
+        win_rate=2 / 3,
+        max_drawdown=0.0,
+        profit_factor=float("inf"),
+        initial_balance=10000.0,
+        final_balance=10250.0,
+    )
+    generator = BacktestReportGenerator()
+    monthly = generator.calculate_monthly_statistics(result)
+
+    assert len(monthly) == 1
+    # Expectancy = win_rate * avg_win - loss_rate * avg_loss = (2/3)*100 - 0 = 66.667
+    assert monthly[0]["Expectancy"] == pytest.approx(200.0 / 3.0)
