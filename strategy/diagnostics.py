@@ -67,6 +67,11 @@ class RejectionReason(str, Enum):
     TRAP_NOT_FROZEN = "trap_not_frozen"
     NO_REVERSAL_YET = "no_reversal_yet"
 
+    # TrendVolumeConfirmationStrategy gates
+    # Reuses NO_TREND, NO_LATEST_BAR, NO_VOLUME_SPIKE, and NON_POSITIVE_RISK
+    # above for its own trend/volume/risk gates.
+    NO_MAJOR_SWING_FOR_SL = "no_major_swing_for_sl"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

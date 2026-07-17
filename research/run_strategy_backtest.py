@@ -39,6 +39,7 @@ from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 from strategy.order_block_retest import OrderBlockRetestStrategy
 from strategy.strategy_engine import StrategyEngine
+from strategy.trend_volume_confirmation import TrendVolumeConfirmationStrategy
 
 STRATEGY_REGISTRY: dict[str, type[TradeSetupStrategy]] = {
     "accumulation_breakout": AccumulationBreakoutStrategy,
@@ -48,6 +49,7 @@ STRATEGY_REGISTRY: dict[str, type[TradeSetupStrategy]] = {
     "continuation_bullish": BullishContinuationStrategy,
     "continuation_bearish": BearishContinuationStrategy,
     "manipulation_reversal": ManipulationReversalStrategy,
+    "trend_volume_confirmation": TrendVolumeConfirmationStrategy,
 }
 
 
