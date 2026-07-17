@@ -1405,3 +1405,53 @@ fikri (məsələn, ilin müəyyən ayları, həftənin günü effektləri və s.
 BİLƏN, ümumi bir event-study alətidir, dəyərli qalır.
 
 **Status: BAĞLANDI.**
+
+---
+
+## TrendVolumeConfirmationStrategy — IN-SAMPLE-də BAĞLANDI, OOS-a APARILMADI (istifadəçi qərarı, 2026-07-17)
+
+**Strategiya:** `strategy/trend_volume_confirmation.py` — mövcud `MarketStructureEngine`-in
+`structure_state.trend`-i istifadə edərək (BULLISH→BUY, BEARISH→SELL, RANGE/TRANSITION/UNKNOWN→heç nə),
+son N=20 bar-ın orta həcmindən `volume_multiplier` qat yüksək bağlanan bar-da giriş, son əks-istiqamətli
+MAJOR swing-dən faiz-buferli SL (`stop_buffer_pct`, default 0.1%), sabit `risk_reward` TP (trailing yox).
+Gün-daxili məhdudiyyət yoxdur — trend olduğu hər an qiymətləndirilir.
+
+**Sınaq:** USTEC-in tam M5 tarixçəsi (99,859 bar), YALNIZ IN-SAMPLE (ilk 70%, 69,901 bar,
+2024-12-10 → 2026-02-05), `research/run_strategy_backtest.py` ilə. Diagnostics göstərdi ki, gate-lər
+düzgün işləyir (`NO_MAJOR_SWING_FOR_SL` heç vaxt tetiklənmədi — trend olan hər anda SL üçün major swing
+mövcud idi), problem strukturaldır, gate-lərin özündə xəta deyil.
+
+| Parametrlər (dəyişən) | Trades | Win Rate | Profit Factor | Net Profit | Max DD |
+|---|---:|---:|---:|---:|---:|
+| Default (volume_multiplier=1.5, risk_reward=2.0) | 362 | 33.15% | 0.924 | -1,728.94 | 22.06% |
+| volume_multiplier=2.0 | 203 | 33.00% | 0.903 | -1,247.20 | 21.02% |
+| volume_multiplier=2.5 | 73 | 28.77% | 0.751 | -1,226.82 | 16.89% |
+| risk_reward=1.5 | 434 | 39.63% | 0.920 | -2,015.06 | 28.42% |
+| risk_reward=1.0 | 533 | 48.41% | 0.875 | -3,188.19 | 34.27% |
+
+**Müşahidələr:**
+- Bütün 5 konfiqurasiyada Profit Factor 1.0-dan AŞAĞI qalıb — heç biri breakeven-i keçməyib.
+- `volume_multiplier`-i artırmaq (daha "keyfiyyətli" spike axtarmaq) əksinə pisləşdirdi: win rate
+  33.15%→28.77%, PF 0.924→0.751. Ekstremal həcm partlayışları daha az proqnozlaşdırıcı çıxdı (çox
+  güman gecikmiş/panik-tipli hərəkətləri tutur).
+- `risk_reward`-u azaltmaq win rate-i xeyli artırdı (33.15%→48.41%), amma breakeven WR eşiyi də eyni
+  templə yüksəldi (1/(1+RR): RR=2.0→33.3%, RR=1.0→50%) — PF yenə də 1.0-ın altında qaldı, üstəlik
+  trade sayının artması (362→533) kumulyativ spread xərcini artırıb net profit-i daha da pisləşdirdi
+  (-1,728.94 → -3,188.19).
+- Nəticə strategiyanın GECİKMİŞ GİRİŞ problemi olduğuna işarə edir: trend+həcm şərti təsdiqləndiyi
+  anda hərəkətin bir hissəsi artıq baş vermiş olur, TP-yə çatmaq üçün RR nə qədər aşağı endirilsə,
+  o qədər tez-tez, kiçik itkilərlə "az-az udmaq, çox-çox uduzmaq" dinamikası davam edir.
+
+**Qərar (istifadəçi ilə əvvəlcədən razılaşdırılmış sərhədə əsasən — "əgər HEÇ BİR RR dəyəri PF-i
+1.0-ın ÜZƏRİNƏ ÇIXARMASA, strategiya OOS-a APARILMADAN BAĞLANACAQ"):** heç bir sınanmış konfiqurasiya
+bu şərti ödəmədi.
+
+**Status: IN-SAMPLE-də BELƏ MƏNFİ QALDI, çoxlu tənzimləmə cəhdindən sonra (default, volume_multiplier
+2.0/2.5, risk_reward 1.0/1.5) heç biri PF>1.0 vermədi, struktural zəiflik (gecikmiş giriş) aşkarlandı,
+OOS resursu israf edilmədi. BAĞLANDI — out-of-sample sınağı APARILMADI.**
+
+**Kod saxlanılır:** `strategy/trend_volume_confirmation.py`, `RejectionReason.NO_MAJOR_SWING_FOR_SL`,
+və `research/run_strategy_backtest.py`-dəki `trend_volume_confirmation` qeydiyyatı SİLİNMƏYİB — unit
+testlər (`tests/test_trend_volume_confirmation.py`) yaşıl qalır, gələcəkdə fərqli bir giriş məntiqi
+(məs. həcm-təsdiqli giriş amma gecikməni azaldan alternativ tetikleyici) üçün əsas kimi istifadə oluna
+bilər.
