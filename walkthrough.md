@@ -1455,3 +1455,103 @@ və `research/run_strategy_backtest.py`-dəki `trend_volume_confirmation` qeydiy
 testlər (`tests/test_trend_volume_confirmation.py`) yaşıl qalır, gələcəkdə fərqli bir giriş məntiqi
 (məs. həcm-təsdiqli giriş amma gecikməni azaldan alternativ tetikleyici) üçün əsas kimi istifadə oluna
 bilər.
+
+---
+
+## NasdaqMidlineSweepStrategy — İndekslərarası Universallıq Testi (US30/DE40/UK100/JPN225, 2026-07-17)
+
+USTEC-də `body_multiplier=1.5` ilə sübut edilmiş Midline Sweep-in digər 4 indeks CFD-inə
+ümumiləşib-ümumiləşmədiyi yoxlandı (əvvəlki [FX universallıq testi](#nasdaqmidlinesweepstrategy--fx-universallıq-testi-eurusdgbpusdusdjpy)
+ilə eyni metodologiya: ATR-nisbəti ilə `range_size`/`mid_buffer` miqyaslama, amma bu dəfə FX əvəzinə
+digər indeks CFD-ləri).
+
+### Addım 1 — M5 Data Yükləmə
+
+`data/download_history.py --timeframe M5` (MT5, 2020-01-01 → 2026-07-17 sorğusu, broker retention
+faktiki aralığı təyin etdi):
+
+| Simvol | Bar sayı | Tarix aralığı | Qeyd |
+|---|---:|---|---|
+| US30 | 100,000 | 2024-12-16 → 2026-07-16 | 100k limit (broker/terminal tavanı) |
+| DE40 | 100,000 | 2024-11-06 → 2026-07-16 | 100k limit |
+| UK100 | 100,000 | 2021-07-29 → **2026-05-15** | Data 2026-05-15-də kəsilir — Turn-of-Month tədqiqatında (D1) da eyni anomaliya qeyd olunmuşdu, broker-tərəfli boşluqdur |
+| JPN225 | 100,108 | 2025-02-14 → 2026-07-16 | — |
+| USTEC (istinad, əvvəlcədən mövcud) | 99,859 | 2024-12-10 → 2026-07-09 | — |
+
+UK100-ün 100k bar tavanı onu 2021-ə qədər geri aparır (günə ~57 bar — digərlərindən (~162-193/gün)
+xeyli az, deməli UK100 M5-də bazar saatları broker tərəfindən daha dar əhatə olunub). Nəticə: UK100-ün
+in-sample dövrü **2021-2022**-dir, digər bütün simvolların (2024-2026) tamamilə fərqli bazar rejimidir.
+
+### Addım 2 — ATR(20) Miqyaslama
+
+USTEC-in son 20 bar ATR-i bu sessiyada yenidən ölçüldü: **18.355** (əvvəlki FX testindəki 18.4316-ya
+yaxın, kiçik fərq son bar sürüşməsindən). Nisbətlər: `range_size/ATR = 0.5448`, `mid_buffer/ATR = 0.2724`.
+
+| Simvol | ATR(20) | Miqyaslanmış `range_size` | Miqyaslanmış `mid_buffer` |
+|---|---:|---:|---:|
+| US30 | 37.56 | 20.463 | 10.232 |
+| DE40 | 30.645 | 16.696 | 8.348 |
+| UK100 | 9.52 | 5.187 | 2.593 |
+| JPN225 | 75.8 | 41.297 | 20.648 |
+
+(`body_multiplier` kod bazasında artıq default **1.5**-dir — USTEC-də sübut edilmiş dəyər default
+olaraq təyin edilib, əlavə ötürməyə ehtiyac olmadı. `risk_reward=2.0`, `sma_period=20` də default.)
+
+### Addım 3 — In-Sample (70%) Nəticələri (hər simvolun öz median spread-i ilə)
+
+| Simvol | Spread | Trades | Win Rate | **Profit Factor** | Net Profit | Max DD |
+|---|---:|---:|---:|---:|---:|---:|
+| USTEC (istinad, `body_multiplier=1.2` default-ilə əvvəlki nəticə) | — | 232 | 35.8% | 1.047 | +$664.24 | — |
+| US30 | 1.2 | 227 | 30.4% | **0.818** | -$2,304.01 | 35.1% |
+| **DE40** | 0.7 | 213 | 38.5% | **1.202** | **+$3,209.58** | 8.8% |
+| UK100 (2021-2022 dövrü!) | 1.0 | 260 | 33.8% | **0.912** | -$1,419.69 | 19.9% |
+| JPN225 | 6.0 | 243 | 33.3% | **0.905** | -$1,556.60 | 24.7% |
+
+4 simvoldan yalnız **DE40** aydın müsbət nəticə göstərdi (PF 1.202). US30/UK100/JPN225 hamısı
+PF < 1.0 — **istifadəçi qərarına əsasən bu 3 simvol IN-SAMPLE-də RƏDD EDİLDİ, OOS-a APARILMADI.**
+
+### DE40 Sağlamlıq Yoxlaması — Xronoloji Yarı-Bölgü (əsl OOS DEYİL, mövcud in-sample datanın təkrar emalı)
+
+DE40-un 213 in-sample trade-i "PF 1.202 HƏR İKİ yarıda sabitdirmi" sualına ucuz cavab üçün
+xronoloji olaraq ikiyə bölündü (Turn-of-Month-dakı DE40 anomaliyası — effekt yalnız bir alt-dövrə
+aid idi — səbəbiylə DE40-un bu layihədə İKİNCİ dəfə "ən yaxşı" çıxması əlavə diqqət tələb etdi):
+
+| Yarı | Trades | Win Rate | **Profit Factor** | Net Profit | Max DD | Tarix aralığı |
+|---|---:|---:|---:|---:|---:|---|
+| Birinci | 94 | 38.3% | **1.194** | +$1,249.03 | 8.8% | 2024-11-06 → 2025-05-28 |
+| İkinci | 119 | 38.7% | **1.208** | +$1,742.86 | 8.0% | 2025-05-28 → 2026-02-03 |
+
+**Hər iki yarı EYNİ İSTİQAMƏTDƏDİR** (hər ikisi PF>1.0, oxşar win rate/Max DD) — Turn-of-Month-dakı
+DE40 davranışından (effekt tamamilə bir alt-dövrə aid, digərində tam yox) FƏRQLİ olaraq, burada
+effekt hər iki alt-dövrdə sabit qaldı. İstifadəçi bunu inandırıcı sayıb DE40-u YEKUN OOS testinə
+apardı.
+
+### DE40 — YEKUN, BİRDƏFƏLİK Out-of-Sample Təsdiq Testi
+
+`--strategy midline_sweep --data-file data/history/DE40_M5.csv --timeframe M5 --params
+'{"range_size": 16.695723, "mid_buffer": 8.347862}' --spread 0.7 --split out_of_sample
+--split-ratio 0.7` (heç bir əlavə tənzimləmə edilmədən, əvvəlki in-sample-də seçilmiş parametrlərlə):
+
+| Metrika | In-Sample (70%) | Out-of-Sample (30%, YEKUN) |
+|---|---:|---:|
+| Trade sayı | 213 | 105 |
+| Win Rate | 38.5% | **32.4%** |
+| Profit Factor | 1.202 | **0.932** |
+| Net Profit | +$3,209.58 | **-$506.90** |
+| Max Drawdown | 8.8% | 16.8% |
+| Tarix aralığı | 2024-11-06 → 2026-02-03 | 2026-02-03 → 2026-07-16 |
+
+**NƏTİCƏ: OOS-da edge TUTMADI.** In-sample PF 1.202-dən out-of-sample PF 0.932-yə düşüb (1.0
+həddinin altına), net profit müsbətdən (+$3,209.58) mənfiyə (-$506.90) dönüb, win rate 38.5%-dən
+32.4%-ə düşüb. Xronoloji yarı-bölgü sağlamlıq yoxlaması (hər iki yarı PF>1.0) DÜZGÜN idi ONUN ÖZ
+sərhədləri daxilində (in-sample datanın öz-özünə tutarlılığını göstərdi) — amma bu, əsl (toxunulmamış)
+out-of-sample datasına ÜMUMİLƏŞMƏ zəmanəti vermədi. Bu, EURUSD-dəki nəticəyə bənzəyir (in-sample
+PF 0.979 → OOS PF 0.820, [yuxarıda](#nasdaqmidlinesweepstrategy--fx-universallıq-testi-eurusdgbpusdusdjpy)) —
+in-sample-də görünən müsbət siqnal out-of-sample-də təsdiqlənmədi.
+
+**Yekun qərar: Midline Sweep strategiyası USTEC-ə XAS bir edge göstərir, digər indekslərə (US30,
+DE40, UK100, JPN225) ÜMUMİLƏŞDİRİLMİR.** DE40 in-sample-də ən inandırıcı namizəd idi (o cümlədən
+xronoloji yarı-bölgü sınağını keçdi), amma YEKUN, birdəfəlik out-of-sample testində uğursuz oldu.
+
+**Status: BAĞLANDI.** 4 simvolun heç biri (US30/UK100/JPN225 in-sample-də, DE40 out-of-sample-də)
+Midline Sweep-i USTEC-dən kənara ümumiləşdirmədi. Əlavə indeks CFD-i planlaşdırılmır.
