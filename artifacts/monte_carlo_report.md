@@ -6,10 +6,10 @@ Runs a randomized trade resampling simulation (N=10) to test equity curve robust
 
 | Parameter | Value |
 | --- | ---: |
-| Expected Return | $99.38 (+0.99%) |
+| Expected Return | $99.30 (+0.99%) |
 | Worst Case Max Drawdown | 0.00% |
-| 95% Confidence Interval Lower Bound | $10098.70 |
-| 95% Confidence Interval Upper Bound | $10099.96 |
+| 95% Confidence Interval Lower Bound | $10098.82 |
+| 95% Confidence Interval Upper Bound | $10099.91 |
 | Risk of Ruin (<30% Account size) | 0.00% |
 | Probability of Final Equity High | 100.00% |
 
