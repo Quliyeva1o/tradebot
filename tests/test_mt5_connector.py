@@ -9,6 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from core.models import AccountInfo
 from mt5.connector import MT5Connector
 
 
@@ -129,3 +130,69 @@ class TestFetchRecentBars:
         ):
             with pytest.raises(RuntimeError, match="No recent rates"):
                 connector.fetch_recent_bars("USTEC", "M5", count=10)
+
+
+def _account_info(
+    balance: float = 10_000.0,
+    equity: float = 10_000.0,
+    margin: float = 0.0,
+    margin_free: float = 10_000.0,
+    margin_level: float = 0.0,
+    currency: str = "USD",
+) -> SimpleNamespace:
+    """Minimal stand-in for MT5's AccountInfo named-tuple-like object,
+    exposing only the fields fetch_account_info() reads."""
+    return SimpleNamespace(
+        balance=balance,
+        equity=equity,
+        margin=margin,
+        margin_free=margin_free,
+        margin_level=margin_level,
+        currency=currency,
+    )
+
+
+class TestFetchAccountInfo:
+    def test_maps_mt5_account_info_fields_to_account_info_model(self) -> None:
+        connector = MT5Connector()
+        with patch(
+            "mt5.connector.mt5.account_info",
+            return_value=_account_info(
+                balance=10_500.25,
+                equity=10_320.10,
+                margin=200.0,
+                margin_free=10_120.10,
+                margin_level=5160.05,
+                currency="USD",
+            ),
+        ):
+            info = connector.fetch_account_info()
+
+        assert isinstance(info, AccountInfo)
+        assert info.balance == 10_500.25
+        assert info.equity == 10_320.10
+        assert info.margin == 200.0
+        assert info.free_margin == 10_120.10  # margin_free -> free_margin
+        assert info.margin_level == 5160.05
+        assert info.currency == "USD"
+
+    def test_raises_when_account_info_returns_none(self) -> None:
+        connector = MT5Connector()
+        with patch("mt5.connector.mt5.account_info", return_value=None):
+            with pytest.raises(RuntimeError, match="account_info"):
+                connector.fetch_account_info()
+
+    def test_never_calls_any_trading_or_position_modifying_api(self) -> None:
+        """Read-only guarantee: fetch_account_info() must call mt5.account_info()
+        and nothing else on the mt5 module."""
+        connector = MT5Connector()
+        with (
+            patch("mt5.connector.mt5.account_info", return_value=_account_info()) as mock_account_info,
+            patch("mt5.connector.mt5.order_send") as mock_order_send,
+            patch("mt5.connector.mt5.order_check") as mock_order_check,
+        ):
+            connector.fetch_account_info()
+
+        mock_account_info.assert_called_once_with()
+        mock_order_send.assert_not_called()
+        mock_order_check.assert_not_called()

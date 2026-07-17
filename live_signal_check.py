@@ -36,6 +36,7 @@ from config.settings import Settings
 from core.models import Bar, SignalDirection, Timeframe
 from mt5.connector import MT5Connector
 from notifications.telegram import TelegramNotifier
+from risk.kill_switch import is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
 from strategy.models import TradeSetup
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
@@ -259,6 +260,15 @@ def main(argv: list[str] | None = None) -> None:
     """
     args = parse_args(argv)
     timeframe = Timeframe[args.timeframe]
+
+    # Phase 6 kill-switch infrastructure (risk/kill_switch.py): a purely
+    # informational status check, deliberately with no Telegram alert here --
+    # this is routine status, not a new event. Checked before connecting to
+    # MT5 at all, so a halted state never even opens an MT5 session.
+    if is_trading_halted():
+        logger.info("RESULT: TRADING HALTED (kill-switch active)")
+        print("TRADING HALTED (kill-switch active)")
+        return
 
     connector = MT5Connector()
     if not connector.connect():

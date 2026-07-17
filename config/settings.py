@@ -35,6 +35,25 @@ def _parse_mt5_login(raw: str) -> int:
         return 0
 
 
+def _parse_max_daily_loss_pct(raw: str) -> float:
+    """Parses MAX_DAILY_LOSS_PCT from its raw env string, defaulting to 0.05 (5%).
+
+    Same never-raise-at-import-time contract as _parse_mt5_login (Bug #26):
+    this runs as a bare dataclass field default at class-definition time, so
+    a malformed or non-positive value must degrade to a safe default instead
+    of crashing every module that imports Settings.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("MAX_DAILY_LOSS_PCT=%r is not a valid float; defaulting to 0.05.", raw)
+        return 0.05
+    if value <= 0:
+        logger.warning("MAX_DAILY_LOSS_PCT=%r must be positive; defaulting to 0.05.", raw)
+        return 0.05
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     """Read-only system configurations loaded from environment settings."""
@@ -48,6 +67,9 @@ class Settings:
     # Telegram notification settings
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # Risk management settings (Phase 6 kill-switch infrastructure)
+    MAX_DAILY_LOSS_PCT: float = _parse_max_daily_loss_pct(os.getenv("MAX_DAILY_LOSS_PCT", "0.05"))
 
     # General configuration parameters
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

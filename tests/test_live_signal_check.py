@@ -560,3 +560,70 @@ class TestMainDedupIntegration:
                 live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
 
         assert mock_send_alert.call_count == 2
+
+
+class TestKillSwitchIntegration:
+    """Phase 6 kill-switch infrastructure (risk/kill_switch.py): main() must
+    check is_trading_halted() before doing anything else -- no MT5 connection,
+    no bar fetch, no Telegram alert -- when trading is halted.
+    """
+
+    def test_halted_never_connects_to_mt5(self, capsys: pytest.CaptureFixture[str]) -> None:
+        connect_calls = []
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                connect_calls.append(1)
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                raise AssertionError("fetch_recent_bars must never be called while halted")
+
+        with (
+            patch("live_signal_check.is_trading_halted", return_value=True),
+            patch("live_signal_check.MT5Connector", FakeConnector),
+        ):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        assert connect_calls == []
+
+    def test_halted_prints_status_and_does_not_raise(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch("live_signal_check.is_trading_halted", return_value=True):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        captured = capsys.readouterr()
+        assert "TRADING HALTED" in captured.out
+
+    def test_halted_never_sends_telegram_alert(self) -> None:
+        with (
+            patch("live_signal_check.is_trading_halted", return_value=True),
+            patch("live_signal_check.send_telegram_alert") as mock_send_alert,
+        ):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        mock_send_alert.assert_not_called()
+
+    def test_not_halted_proceeds_normally(self) -> None:
+        """Sanity check: is_trading_halted()=False must not change existing behavior."""
+        disconnect_calls = []
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                disconnect_calls.append(1)
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return [_bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 100.0, 100.5, 99.5, 100.0)]
+
+        with (
+            patch("live_signal_check.is_trading_halted", return_value=False),
+            patch("live_signal_check.MT5Connector", FakeConnector),
+        ):
+            live_signal_check.main(["--symbol", "USTEC"])
+
+        assert disconnect_calls == [1]

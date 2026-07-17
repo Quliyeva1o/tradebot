@@ -21,6 +21,8 @@ logs/
 data/**/*.csv
 data/**/*.sqlite
 artifacts/diagnostics_results.json
+risk/*.flag
+risk/daily_risk_state.json
 
 # IDEs & System files
 .vscode/

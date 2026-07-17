@@ -18,7 +18,7 @@ import logging
 import pytest
 
 import config.settings as settings_module
-from config.settings import Settings, _parse_mt5_login
+from config.settings import Settings, _parse_max_daily_loss_pct, _parse_mt5_login
 
 
 def test_parse_mt5_login_valid_integer_string() -> None:
@@ -70,6 +70,62 @@ def test_settings_load_with_valid_mt5_login(monkeypatch) -> None:
 def test_default_settings_load_is_unaffected() -> None:
     settings = Settings.load()
     assert isinstance(settings.MT5_LOGIN, int)
+
+
+def test_parse_max_daily_loss_pct_valid_float_string() -> None:
+    assert _parse_max_daily_loss_pct("0.03") == 0.03
+
+
+def test_parse_max_daily_loss_pct_invalid_text_defaults_and_warns(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        result = _parse_max_daily_loss_pct("not_a_float")
+
+    assert result == 0.05
+    assert any("MAX_DAILY_LOSS_PCT" in r.message for r in caplog.records)
+
+
+def test_parse_max_daily_loss_pct_zero_defaults_and_warns(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        result = _parse_max_daily_loss_pct("0")
+
+    assert result == 0.05
+    assert any("MAX_DAILY_LOSS_PCT" in r.message for r in caplog.records)
+
+
+def test_parse_max_daily_loss_pct_negative_defaults_and_warns(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        result = _parse_max_daily_loss_pct("-0.1")
+
+    assert result == 0.05
+    assert any("MAX_DAILY_LOSS_PCT" in r.message for r in caplog.records)
+
+
+def test_settings_load_with_malformed_max_daily_loss_pct_does_not_raise(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_DAILY_LOSS_PCT", "garbage")
+    try:
+        reloaded = importlib.reload(settings_module)
+        settings = reloaded.Settings.load()
+        assert settings.MAX_DAILY_LOSS_PCT == 0.05
+    finally:
+        monkeypatch.delenv("MAX_DAILY_LOSS_PCT", raising=False)
+        importlib.reload(settings_module)
+
+
+def test_settings_load_with_valid_max_daily_loss_pct(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_DAILY_LOSS_PCT", "0.02")
+    try:
+        reloaded = importlib.reload(settings_module)
+        settings = reloaded.Settings.load()
+        assert settings.MAX_DAILY_LOSS_PCT == 0.02
+    finally:
+        monkeypatch.delenv("MAX_DAILY_LOSS_PCT", raising=False)
+        importlib.reload(settings_module)
+
+
+def test_default_max_daily_loss_pct_is_positive_float() -> None:
+    settings = Settings.load()
+    assert isinstance(settings.MAX_DAILY_LOSS_PCT, float)
+    assert settings.MAX_DAILY_LOSS_PCT > 0
 
 
 @pytest.mark.parametrize("policy", ["drop", "keep"])

@@ -5,7 +5,7 @@ import os
 import MetaTrader5 as mt5  # noqa: N813
 from dotenv import load_dotenv
 
-from core.models import Bar
+from core.models import AccountInfo, Bar
 from mt5.rates import TIMEFRAME_MAPPING, get_symbol_point, rates_to_bars
 from utils.logging import setup_logger
 
@@ -113,3 +113,35 @@ class MT5Connector:
             raise RuntimeError(f"No recent rates returned from MT5 for {symbol} {timeframe}.")
 
         return rates_to_bars(rates, point)
+
+    def fetch_account_info(self) -> AccountInfo:
+        """READ-ONLY: fetches the connected account's current balance/equity/margin.
+
+        This method NEVER places orders, modifies positions, or calls any
+        MT5 trading function -- it only calls mt5.account_info(). Safe to
+        call against a live (non-demo) account for risk monitoring.
+
+        Deliberately raises rather than returning a zero-valued AccountInfo
+        on failure: a silent zero balance/equity could otherwise be
+        misread by a caller (e.g. DailyRiskTracker) as a 100% loss and
+        wrongly trigger the kill-switch.
+
+        Returns:
+            An AccountInfo snapshot of the connected account.
+
+        Raises:
+            RuntimeError: If mt5.account_info() returns None (not connected,
+                or the terminal rejected the request).
+        """
+        info = mt5.account_info()
+        if info is None:
+            raise RuntimeError(f"mt5.account_info() returned None. Error code: {mt5.last_error()}")
+
+        return AccountInfo(
+            balance=info.balance,
+            equity=info.equity,
+            margin=info.margin,
+            free_margin=info.margin_free,
+            margin_level=info.margin_level,
+            currency=info.currency,
+        )
