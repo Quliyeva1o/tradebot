@@ -15,7 +15,22 @@ import pytest
 import live_signal_check
 from core.models import Bar, SignalDirection, Timeframe
 from strategy.diagnostics import RejectionReason
+from strategy.models import TradeSetup
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_file(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Points STATE_FILE at a per-test tmp_path location.
+
+    Without this, every test that reaches main()'s signal-found path would
+    read/write the real repo-relative logs/last_signal_state.json --
+    polluting the working tree and leaking signatures across tests (several
+    tests below intentionally reuse the identical breakout bar timestamp,
+    so a real shared file would make later tests see "already sent" from an
+    earlier, unrelated test run).
+    """
+    monkeypatch.setattr(live_signal_check, "STATE_FILE", tmp_path / "last_signal_state.json")
 
 
 def _bar(ts: datetime, o: float, h: float, low: float, c: float) -> Bar:
@@ -325,3 +340,199 @@ class TestMainEndToEnd:
             live_signal_check.main(["--symbol", "USTEC"])
 
         assert disconnect_calls == [1]
+
+
+def _setup(
+    symbol: str = "USTEC",
+    timeframe: Timeframe = Timeframe.M5,
+    direction: SignalDirection = SignalDirection.BUY,
+    timestamp: datetime = datetime(2026, 1, 6, 15, 0, tzinfo=UTC),
+    setup_id: str = "any_id",
+) -> TradeSetup:
+    """Minimal TradeSetup fixture for signature tests -- only the fields
+    _signal_signature() reads (symbol, timeframe, direction, timestamp) plus
+    the required-but-irrelevant-here fields need real values.
+    """
+    return TradeSetup(
+        setup_id=setup_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        direction=direction,
+        entry_zone=(100.0, 100.0),
+        stop_zone=(90.0, 90.0),
+        target_zone=(120.0, 120.0),
+        confidence_score=1.0,
+        confluence=[],
+        trigger_reason="test",
+        invalidations=[],
+        related_structure_break=None,
+        related_order_block=None,
+        related_fvg=None,
+        timestamp=timestamp,
+        strategy_name="NasdaqMidlineSweepStrategy",
+    )
+
+
+class TestSignalSignature:
+    """_signal_signature must be stable across independently-generated
+    TradeSetup objects for the same underlying bar (even though setup_id
+    itself is randomized per call -- see NasdaqMidlineSweepStrategy.evaluate()),
+    and must differ whenever any of symbol/timeframe/direction/bar timestamp
+    differs.
+    """
+
+    def test_same_bar_same_signature_despite_different_setup_id(self) -> None:
+        a = _setup(setup_id="random_id_1")
+        b = _setup(setup_id="random_id_2")
+        assert live_signal_check._signal_signature(a) == live_signal_check._signal_signature(b)
+
+    def test_different_timestamp_different_signature(self) -> None:
+        a = _setup(timestamp=datetime(2026, 1, 6, 15, 0, tzinfo=UTC))
+        b = _setup(timestamp=datetime(2026, 1, 6, 15, 5, tzinfo=UTC))
+        assert live_signal_check._signal_signature(a) != live_signal_check._signal_signature(b)
+
+    def test_different_direction_different_signature(self) -> None:
+        a = _setup(direction=SignalDirection.BUY)
+        b = _setup(direction=SignalDirection.SELL)
+        assert live_signal_check._signal_signature(a) != live_signal_check._signal_signature(b)
+
+    def test_different_symbol_different_signature(self) -> None:
+        a = _setup(symbol="USTEC")
+        b = _setup(symbol="US30")
+        assert live_signal_check._signal_signature(a) != live_signal_check._signal_signature(b)
+
+    def test_different_timeframe_different_signature(self) -> None:
+        a = _setup(timeframe=Timeframe.M5)
+        b = _setup(timeframe=Timeframe.M15)
+        assert live_signal_check._signal_signature(a) != live_signal_check._signal_signature(b)
+
+
+class TestSignalStatePersistence:
+    """_already_sent/_record_sent round-trip, and fail-open on read/write errors."""
+
+    def test_not_sent_when_state_file_missing(self) -> None:
+        assert live_signal_check._already_sent("sig_a") is False
+
+    def test_record_then_already_sent_same_signature(self) -> None:
+        live_signal_check._record_sent("sig_a")
+        assert live_signal_check._already_sent("sig_a") is True
+
+    def test_already_sent_false_for_different_signature(self) -> None:
+        live_signal_check._record_sent("sig_a")
+        assert live_signal_check._already_sent("sig_b") is False
+
+    def test_record_overwrites_previous_signature(self) -> None:
+        live_signal_check._record_sent("sig_a")
+        live_signal_check._record_sent("sig_b")
+        assert live_signal_check._already_sent("sig_a") is False
+        assert live_signal_check._already_sent("sig_b") is True
+
+    def test_fail_open_on_corrupt_state_file(self) -> None:
+        """A corrupt/unreadable state file must be treated as 'not sent yet',
+        never as 'already sent' -- the latter could silently suppress a real,
+        new signal, which is worse than an occasional harmless duplicate.
+        """
+        live_signal_check.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        live_signal_check.STATE_FILE.write_text("not valid json{{{")
+        assert live_signal_check._already_sent("sig_a") is False
+
+    def test_record_sent_does_not_raise_when_parent_cannot_be_created(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_record_sent must never raise -- a broken dedup state must degrade
+        the dedup feature only, never crash the caller (main())."""
+        blocked_parent = tmp_path / "blocked"
+        blocked_parent.write_text("a file, not a directory")  # mkdir() on this path will raise
+        monkeypatch.setattr(live_signal_check, "STATE_FILE", blocked_parent / "state.json")
+
+        live_signal_check._record_sent("sig_a")  # must not raise
+
+    def test_already_sent_false_when_state_file_unreadable_dict_missing_key(self) -> None:
+        """Valid JSON but without the expected key must be treated as 'not sent'."""
+        live_signal_check.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        live_signal_check.STATE_FILE.write_text('{"unexpected_key": "value"}')
+        assert live_signal_check._already_sent("sig_a") is False
+
+
+class TestMainDedupIntegration:
+    """End-to-end: two consecutive main() runs seeing the identical final bar
+    must send exactly one Telegram alert, not two.
+    """
+
+    def _bars_with_breakout(self) -> list[Bar]:
+        base = datetime(2026, 1, 6, 12, 50, tzinfo=UTC)
+        warmup_bars = [
+            _bar(base + timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.5 if i % 2 == 0 else 99.5)
+            for i in range(20)
+        ]
+        build_bars = [
+            _bar(datetime(2026, 1, 6, 14, 30, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 35, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+            _bar(datetime(2026, 1, 6, 14, 40, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 45, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+        ]
+        session_end_bar = _bar(datetime(2026, 1, 6, 14, 50, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5)
+        breakout_bar = _bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+        return [*warmup_bars, *build_bars, session_end_bar, breakout_bar]
+
+    def test_second_run_seeing_same_final_bar_suppresses_duplicate_alert(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        all_bars = self._bars_with_breakout()
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return all_bars
+
+        with (
+            patch("live_signal_check.MT5Connector", FakeConnector),
+            patch("live_signal_check.send_telegram_alert") as mock_send_alert,
+        ):
+            # Two independent "process runs" seeing the identical bar history
+            # (e.g. scheduler fired twice before a new bar closed).
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        captured = capsys.readouterr()
+        assert captured.out.count("SIGNAL FOUND") == 2  # console output is unaffected by dedup
+        mock_send_alert.assert_called_once()  # but Telegram was only notified once
+
+    def test_different_final_bar_still_alerts_on_second_run(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Sanity check: dedup must not suppress a genuinely NEW bar's signal."""
+        first_bars = self._bars_with_breakout()
+        # Same OHLC shape as the proven breakout_bar in _bars_with_breakout()
+        # (sweep+reclaim+displacement), just 5 minutes later -- a genuinely
+        # different bar, not a re-evaluation of the same one.
+        second_bars = [
+            *first_bars[:-1],
+            _bar(datetime(2026, 1, 6, 15, 5, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0),
+        ]
+
+        class FakeConnector:
+            def __init__(self, bars: list[Bar]) -> None:
+                self._bars = bars
+
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return self._bars
+
+        with patch("live_signal_check.send_telegram_alert") as mock_send_alert:
+            with patch("live_signal_check.MT5Connector", lambda: FakeConnector(first_bars)):
+                live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+            with patch("live_signal_check.MT5Connector", lambda: FakeConnector(second_bars)):
+                live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        assert mock_send_alert.call_count == 2

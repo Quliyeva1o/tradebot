@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -41,7 +42,7 @@ from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 
-logger = setup_logger("live_signal_check")
+logger = setup_logger("live_signal_check", log_to_file=True)
 
 # Validated default from the USTEC out-of-sample backtest (106 trades, PF 1.0510
 # -- see walkthrough.md). USTEC's measured density is ~173 M5 bars/trading day, so
@@ -52,6 +53,16 @@ logger = setup_logger("live_signal_check")
 # read raw bars, not that pipeline's output).
 DEFAULT_LOOKBACK_BARS = 1000
 DEFAULT_BODY_MULTIPLIER = 1.5
+
+# Persisted across process invocations (this script is re-run from scratch by an
+# external scheduler every few minutes -- see module docstring) so a duplicate
+# Telegram alert isn't sent if two consecutive runs both evaluate the same "most
+# recently closed" bar (e.g. broker feed latency around the scheduler interval).
+# The one-trade-per-day guard inside NasdaqMidlineSweepStrategy itself is
+# correctly re-derived every run via check_signal()'s replay, so it already
+# prevents re-alerting on a DIFFERENT bar later the same day -- this file only
+# covers the narrower case of the SAME bar being evaluated more than once.
+STATE_FILE = Path(__file__).parent / "logs" / "last_signal_state.json"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -186,6 +197,45 @@ def format_telegram_message(setup: TradeSetup) -> str:
     return "\n".join(lines)
 
 
+def _signal_signature(setup: TradeSetup) -> str:
+    """Builds a stable dedup key for a setup.
+
+    Deliberately NOT setup.setup_id: that field embeds a fresh uuid4 (see
+    NasdaqMidlineSweepStrategy.evaluate()) on every call, so two independent
+    process runs evaluating the exact same closed bar would produce two
+    TradeSetup objects with identical trading fields but different setup_ids
+    -- an id-based comparison would never detect the duplicate. symbol +
+    timeframe + direction + the setup's bar timestamp is stable and
+    identical across repeated evaluations of the same bar.
+    """
+    return f"{setup.symbol}_{setup.timeframe.value}_{setup.direction.name}_{setup.timestamp.isoformat()}"
+
+
+def _already_sent(signature: str) -> bool:
+    """Whether `signature` matches the last-recorded sent signal.
+
+    Fail-open: any read/parse failure (missing file, corrupt JSON, race
+    with a concurrent write) is treated as "not sent yet" -- a missed
+    dedup is a harmless duplicate Telegram message, but treating a broken
+    state file as "already sent" could silently suppress a real, new
+    signal. Same fail-safe direction as send_telegram_alert's own
+    never-raise contract.
+    """
+    try:
+        return json.loads(STATE_FILE.read_text()).get("last_signature") == signature
+    except Exception:  # noqa: BLE001 - dedup state is best-effort, must never block a real alert
+        return False
+
+
+def _record_sent(signature: str) -> None:
+    """Persists `signature` as the last-sent signal. Best-effort, never raises."""
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps({"last_signature": signature}))
+    except Exception as exc:  # noqa: BLE001 - dedup state is best-effort, must never block the caller
+        logger.warning("Could not persist signal state: %s", type(exc).__name__)
+
+
 def send_telegram_alert(setup: TradeSetup) -> None:
     """Best-effort Telegram notification for a found signal.
 
@@ -236,9 +286,28 @@ def main(argv: list[str] | None = None) -> None:
 
     if setup is not None:
         print(format_setup(setup))
-        send_telegram_alert(setup)
+        signature = _signal_signature(setup)
+        if _already_sent(signature):
+            logger.info(
+                "RESULT: SIGNAL %s %s @ %s (duplicate of last-sent bar -- Telegram alert suppressed)",
+                setup.symbol,
+                setup.direction.name,
+                setup.timestamp,
+            )
+        else:
+            send_telegram_alert(setup)
+            _record_sent(signature)
+            logger.info(
+                "RESULT: SIGNAL %s %s @ %s (Telegram alert sent)",
+                setup.symbol,
+                setup.direction.name,
+                setup.timestamp,
+            )
     else:
         print(format_no_signal(diagnostics, final_bar))
+        reasons = top_rejection_reasons(diagnostics)
+        reasons_str = ", ".join(f"{r} ({c})" for r, c in reasons) if reasons else "no diagnostics recorded"
+        logger.info("RESULT: NO SIGNAL (top reason: %s)", reasons_str)
 
 
 if __name__ == "__main__":
