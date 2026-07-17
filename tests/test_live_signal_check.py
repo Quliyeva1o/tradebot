@@ -7,6 +7,7 @@ config.settings.Settings.load() reads whatever is actually configured in the
 real .env, so leaving it unmocked here would attempt a real network call).
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -31,6 +32,29 @@ def _isolated_state_file(tmp_path, monkeypatch: pytest.MonkeyPatch):
     earlier, unrelated test run).
     """
     monkeypatch.setattr(live_signal_check, "STATE_FILE", tmp_path / "last_signal_state.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_log_file():
+    """Detaches live_signal_check's FileHandler for the duration of each test.
+
+    live_signal_check.logger is a module-level singleton, configured once at
+    import time with setup_logger(log_to_file=True) -- unlike STATE_FILE
+    above, it can't be redirected per test (setup_logger's `if logger.handlers:
+    return logger` guard means calling it again is a no-op). Without this
+    fixture, every test's logger.info/warning/error calls (including the
+    intentionally-simulated MT5-connect-failure, Telegram RuntimeError, and
+    FileExistsError fail-open scenarios below) would land in the real
+    logs/live_signal_check.log -- the exact file a human running the script
+    via Task Scheduler relies on to verify it's actually working, polluted
+    with confusing fake-dated test noise indistinguishable from real runs.
+    """
+    file_handlers = [h for h in live_signal_check.logger.handlers if isinstance(h, logging.FileHandler)]
+    for h in file_handlers:
+        live_signal_check.logger.removeHandler(h)
+    yield
+    for h in file_handlers:
+        live_signal_check.logger.addHandler(h)
 
 
 def _bar(ts: datetime, o: float, h: float, low: float, c: float) -> Bar:
