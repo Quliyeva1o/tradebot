@@ -38,6 +38,7 @@ from strategy.manipulation_reversal import ManipulationReversalStrategy
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.opening_range_breakout import OpeningRangeBreakoutStrategy
 from strategy.order_block_retest import OrderBlockRetestStrategy
+from strategy.simple_liquidity_sweep import SimpleLiquiditySweepStrategy
 from strategy.strategy_engine import StrategyEngine
 from strategy.trend_volume_confirmation import TrendVolumeConfirmationStrategy
 
@@ -50,6 +51,7 @@ STRATEGY_REGISTRY: dict[str, type[TradeSetupStrategy]] = {
     "continuation_bearish": BearishContinuationStrategy,
     "manipulation_reversal": ManipulationReversalStrategy,
     "trend_volume_confirmation": TrendVolumeConfirmationStrategy,
+    "simple_liquidity_sweep": SimpleLiquiditySweepStrategy,
 }
 
 

@@ -72,6 +72,11 @@ class RejectionReason(str, Enum):
     # above for its own trend/volume/risk gates.
     NO_MAJOR_SWING_FOR_SL = "no_major_swing_for_sl"
 
+    # SimpleLiquiditySweepStrategy gates (2-candle liquidity grab, no session filter)
+    # Reuses NO_LATEST_BAR, NO_SWEEP, NON_POSITIVE_RISK, and RR_GATE_FAILED
+    # above for its own bar-availability/sweep/risk gates.
+    NO_PREV_BAR = "no_prev_bar"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""
