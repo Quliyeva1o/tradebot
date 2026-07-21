@@ -23,6 +23,7 @@ data/**/*.sqlite
 artifacts/diagnostics_results.json
 risk/*.flag
 risk/daily_risk_state.json
+execution/paper_broker_state.json
 
 # IDEs & System files
 .vscode/

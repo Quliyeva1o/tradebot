@@ -55,6 +55,7 @@ from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+from strategy.risk_reward import calculate_take_profit
 from strategy.session_utils import is_in_session, session_length_in_bars
 
 
@@ -310,8 +311,7 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         if self.risk_reward <= 0.0:
             return self._reject(RejectionReason.RR_GATE_FAILED)
 
-        reward_dist = risk_dist * self.risk_reward
-        tp = entry + reward_dist if direction == SignalDirection.BUY else entry - reward_dist
+        tp = calculate_take_profit(entry, direction, risk_dist, self.risk_reward)
 
         self._trade_taken = True
 

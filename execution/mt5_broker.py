@@ -1,0 +1,308 @@
+"""MT5 implementation of the IBroker execution interface."""
+
+from datetime import UTC, datetime
+
+import MetaTrader5 as mt5  # noqa: N813
+
+from core.models import AccountInfo, OrderType
+from execution.interfaces import IBroker
+from execution.models import OrderRequest, OrderResult, Position
+from mt5.connector import MT5Connector
+from utils.logging import setup_logger
+
+logger = setup_logger("mt5_broker")
+
+_ORDER_TYPE_MAP: dict[OrderType, int] = {
+    OrderType.BUY_MARKET: mt5.ORDER_TYPE_BUY,
+    OrderType.SELL_MARKET: mt5.ORDER_TYPE_SELL,
+    OrderType.BUY_LIMIT: mt5.ORDER_TYPE_BUY_LIMIT,
+    OrderType.SELL_LIMIT: mt5.ORDER_TYPE_SELL_LIMIT,
+    OrderType.BUY_STOP: mt5.ORDER_TYPE_BUY_STOP,
+    OrderType.SELL_STOP: mt5.ORDER_TYPE_SELL_STOP,
+}
+
+_MARKET_ORDER_TYPES = (OrderType.BUY_MARKET, OrderType.SELL_MARKET)
+
+# Retcodes that represent the venue accepting the request: DONE/DONE_PARTIAL
+# for an immediately-executed market order, PLACED for an accepted pending order.
+_SUCCESS_RETCODES = frozenset(
+    {
+        mt5.TRADE_RETCODE_DONE,
+        mt5.TRADE_RETCODE_DONE_PARTIAL,
+        mt5.TRADE_RETCODE_PLACED,
+    }
+)
+
+
+class MT5Broker(IBroker):
+    """Adapts MT5Connector to the IBroker execution interface.
+
+    Wraps an MT5Connector instance by composition rather than inheriting
+    from it: connection and account-info reads delegate to the connector's
+    existing, already-tested implementations, while order
+    placement/cancellation/position lookups are implemented here using the
+    same mt5 module calls and error-handling conventions MT5Connector
+    itself uses. mt5/connector.py is intentionally left unmodified.
+    """
+
+    def __init__(self, connector: MT5Connector | None = None) -> None:
+        """Initializes the MT5Broker.
+
+        Args:
+            connector: The MT5Connector to delegate connection/account-info
+                reads to. Defaults to a new MT5Connector() instance;
+                overridable (e.g. with a test double) via injection.
+        """
+        self._connector = connector if connector is not None else MT5Connector()
+
+    def connect(self) -> bool:
+        """Delegates to MT5Connector.connect().
+
+        Returns:
+            True if connection initialized successfully, False otherwise.
+        """
+        return self._connector.connect()
+
+    def get_account_info(self) -> AccountInfo:
+        """Delegates to MT5Connector.fetch_account_info().
+
+        Returns:
+            An AccountInfo snapshot of the connected account.
+
+        Raises:
+            RuntimeError: If MT5Connector.fetch_account_info() raises (e.g.
+                mt5.account_info() returned None).
+        """
+        return self._connector.fetch_account_info()
+
+    def place_order(self, order: OrderRequest) -> OrderResult:
+        """Submits an order to MT5 via mt5.order_send().
+
+        Raises RuntimeError when the MT5 API itself is unusable (symbol
+        unavailable, no tick data, order_send returns None) -- mirroring
+        MT5Connector's fetch_*() precedent for infrastructure failures.
+        Returns OrderResult(success=False, ...) when MT5 responds but
+        declines the trade (e.g. no money, invalid stops): that is a normal
+        business outcome for the caller to handle, not a system fault.
+
+        Args:
+            order: The order to submit.
+
+        Returns:
+            An OrderResult describing whether the venue accepted the order.
+
+        Raises:
+            RuntimeError: If the symbol cannot be selected, tick data is
+                unavailable for a market order needing a live price, or
+                mt5.order_send() returns None.
+            ValueError: If order.order_type is a pending order type
+                (*_LIMIT/*_STOP) and order.price is not set.
+        """
+        if not mt5.symbol_select(order.symbol, True):
+            raise RuntimeError(f"Symbol {order.symbol} is not available in the MT5 terminal.")
+
+        mt5_type = _ORDER_TYPE_MAP[order.order_type]
+        is_market = order.order_type in _MARKET_ORDER_TYPES
+
+        price = order.price
+        if price is None:
+            if not is_market:
+                raise ValueError(f"price is required for pending order type {order.order_type!r}")
+            tick = mt5.symbol_info_tick(order.symbol)
+            if tick is None:
+                raise RuntimeError(
+                    f"mt5.symbol_info_tick() returned None for {order.symbol}. "
+                    f"Error code: {mt5.last_error()}"
+                )
+            price = tick.ask if order.order_type == OrderType.BUY_MARKET else tick.bid
+
+        request: dict[str, object] = {
+            "action": mt5.TRADE_ACTION_DEAL if is_market else mt5.TRADE_ACTION_PENDING,
+            "symbol": order.symbol,
+            "volume": order.volume,
+            "type": mt5_type,
+            "price": price,
+            "deviation": order.deviation,
+        }
+        if order.stop_loss is not None:
+            request["sl"] = order.stop_loss
+        if order.take_profit is not None:
+            request["tp"] = order.take_profit
+        if order.comment:
+            request["comment"] = order.comment
+
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"mt5.order_send() returned None. Error code: {mt5.last_error()}")
+
+        success = result.retcode in _SUCCESS_RETCODES
+        if success:
+            logger.info(
+                "Order placed for %s: ticket=%s price=%s", order.symbol, result.order, result.price
+            )
+        else:
+            logger.error(
+                "Order rejected for %s: retcode=%s comment=%s",
+                order.symbol,
+                result.retcode,
+                result.comment,
+            )
+
+        return OrderResult(
+            success=success,
+            order_id=str(result.order),
+            position_id=str(result.order),
+            price=result.price,
+            volume=result.volume,
+            retcode=result.retcode,
+            comment=result.comment or "",
+        )
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancels a pending order via mt5.order_send(TRADE_ACTION_REMOVE).
+
+        Args:
+            order_id: The MT5 order ticket, as a string.
+
+        Returns:
+            True if the order was canceled, False if MT5 declined the
+            cancellation (e.g. the order no longer exists).
+
+        Raises:
+            ValueError: If order_id is not a valid integer ticket.
+            RuntimeError: If mt5.order_send() returns None.
+        """
+        try:
+            ticket = int(order_id)
+        except ValueError as exc:
+            raise ValueError(f"order_id must be a valid integer ticket, got {order_id!r}") from exc
+
+        result = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": ticket})
+        if result is None:
+            raise RuntimeError(
+                f"mt5.order_send() (cancel) returned None for order {ticket}. "
+                f"Error code: {mt5.last_error()}"
+            )
+
+        success: bool = result.retcode == mt5.TRADE_RETCODE_DONE
+        if success:
+            logger.info("Canceled order %d", ticket)
+        else:
+            logger.error(
+                "Failed to cancel order %d: retcode=%s comment=%s",
+                ticket,
+                result.retcode,
+                result.comment,
+            )
+        return success
+
+    def close_position(self, position_id: str) -> OrderResult:
+        """Closes an open position via an opposite-direction mt5.order_send(TRADE_ACTION_DEAL).
+
+        Mirrors the MetaTrader5 package's own Close() convenience helper:
+        an opposite-direction market order carrying "position": ticket in
+        the request, which MT5 nets against the existing position instead
+        of opening a new one.
+
+        Args:
+            position_id: The MT5 position ticket, as a string.
+
+        Returns:
+            An OrderResult describing whether the venue accepted the close.
+
+        Raises:
+            ValueError: If position_id is not a valid integer ticket.
+            RuntimeError: If mt5.positions_get() returns None, no open
+                position exists for position_id, tick data is unavailable,
+                or mt5.order_send() returns None.
+        """
+        try:
+            ticket = int(position_id)
+        except ValueError as exc:
+            raise ValueError(f"position_id must be a valid integer ticket, got {position_id!r}") from exc
+
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None:
+            raise RuntimeError(f"mt5.positions_get() returned None. Error code: {mt5.last_error()}")
+        if len(positions) == 0:
+            raise RuntimeError(f"No open position found for ticket {ticket}.")
+        position = positions[0]
+
+        tick = mt5.symbol_info_tick(position.symbol)
+        if tick is None:
+            raise RuntimeError(
+                f"mt5.symbol_info_tick() returned None for {position.symbol}. "
+                f"Error code: {mt5.last_error()}"
+            )
+
+        if position.type == mt5.POSITION_TYPE_BUY:
+            closing_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            closing_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+
+        request: dict[str, object] = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": position.symbol,
+            "volume": position.volume,
+            "type": closing_type,
+            "position": ticket,
+            "price": price,
+            "deviation": 10,
+        }
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"mt5.order_send() (close) returned None. Error code: {mt5.last_error()}")
+
+        success = result.retcode in _SUCCESS_RETCODES
+        if success:
+            logger.info("Closed position %d: price=%s", ticket, result.price)
+        else:
+            logger.error(
+                "Failed to close position %d: retcode=%s comment=%s",
+                ticket,
+                result.retcode,
+                result.comment,
+            )
+
+        return OrderResult(
+            success=success,
+            order_id=str(result.order),
+            position_id=str(ticket),
+            price=result.price,
+            volume=result.volume,
+            retcode=result.retcode,
+            comment=result.comment or "",
+        )
+
+    def get_open_positions(self) -> list[Position]:
+        """Fetches all open positions on the connected account via mt5.positions_get().
+
+        Returns:
+            A list of currently open Position records.
+
+        Raises:
+            RuntimeError: If mt5.positions_get() returns None.
+        """
+        positions = mt5.positions_get()
+        if positions is None:
+            raise RuntimeError(f"mt5.positions_get() returned None. Error code: {mt5.last_error()}")
+
+        return [
+            Position(
+                id=str(pos.ticket),
+                symbol=pos.symbol,
+                order_type=(
+                    OrderType.BUY_MARKET if pos.type == mt5.POSITION_TYPE_BUY else OrderType.SELL_MARKET
+                ),
+                volume=pos.volume,
+                open_price=pos.price_open,
+                current_price=pos.price_current,
+                stop_loss=pos.sl or None,
+                take_profit=pos.tp or None,
+                profit=pos.profit,
+                timestamp=datetime.fromtimestamp(int(pos.time), tz=UTC),
+            )
+            for pos in positions
+        ]

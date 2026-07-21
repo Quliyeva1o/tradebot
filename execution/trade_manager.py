@@ -1,0 +1,206 @@
+"""TradeManager: owns a single open trade's lifecycle bar-by-bar.
+
+Replaces the implicit "check SL/TP every bar" logic embedded in
+BacktestEngine.run() (a historical-replay concept, untouched this sprint)
+with a live/paper-trading equivalent: places the entry via
+IBroker.place_order(), then on each new bar compares the tracked position's
+stop_loss/take_profit against that bar's high/low and closes via
+IBroker.close_position() when either is hit. Same-bar SL/TP conflicts are
+resolved the same conservative way BacktestEngine.run() resolves them (SL
+takes precedence).
+
+Consumes IBroker only -- no direct MT5Connector or PaperBroker-specific
+code -- so it works unchanged against MT5Broker or PaperBroker (Dependency
+Inversion, the same role StrategyEngine plays for TradeSetupStrategy
+implementations).
+"""
+
+from core.models import Bar, OrderType, SignalDirection
+from core.validation import require_positive
+from execution.interfaces import IBroker
+from execution.models import OrderRequest, TradeManagerAction
+from execution.order import Order
+from execution.stop_engine import FixedStopEngine, StopEngine
+from execution.take_profit_engine import FixedTakeProfitEngine, TakeProfitEngine
+from strategy.models import TradeSetup
+from utils.logging import setup_logger
+
+logger = setup_logger("trade_manager")
+
+
+class TradeManager:
+    """Owns a single open trade's lifecycle: entry, bar-by-bar SL/TP tracking, exit."""
+
+    def __init__(self, volume: float = 0.1) -> None:
+        """Initializes the TradeManager with no open trade.
+
+        Args:
+            volume: Position size (lots/units) used for every open_trade()
+                order. TradeSetup carries no volume/position-size field of
+                its own (position sizing is a separate concern -- see
+                backtest.engine.PositionSizer for the historical-replay
+                equivalent, out of scope here), so it is configured once
+                per TradeManager instance.
+
+        Raises:
+            ValueError: If volume is not strictly positive.
+        """
+        require_positive(volume, "volume")
+        self._volume = volume
+        self._broker: IBroker | None = None
+        self._position_id: str | None = None
+        self._direction: SignalDirection | None = None
+        self._stop_loss: float | None = None
+        self._take_profit: float | None = None
+        self.current_order: Order | None = None
+
+    @property
+    def has_open_trade(self) -> bool:
+        """Whether a trade is currently open and being tracked."""
+        return self._position_id is not None
+
+    def open_trade(
+        self,
+        setup: TradeSetup,
+        broker: IBroker,
+        stop_engine: StopEngine | None = None,
+        take_profit_engine: TakeProfitEngine | None = None,
+    ) -> Order:
+        """Places the entry for setup via broker.place_order().
+
+        Always a market order at setup.direction; stop_loss/take_profit are
+        resolved via stop_engine/take_profit_engine -- the strategy still
+        decides those values as part of building the TradeSetup (see
+        strategy/risk_reward.py), these engines only extract the scalars a
+        broker order needs, behind a swappable interface (see
+        execution/stop_engine.py, execution/take_profit_engine.py).
+
+        Args:
+            setup: The TradeSetup to enter.
+            broker: The IBroker to place the order (and later close it)
+                through. Stored for the subsequent on_new_bar()/
+                close_trade() calls -- see class docstring.
+            stop_engine: Resolves setup's stop-loss price. Defaults to
+                FixedStopEngine(), preserving the exact pre-Sprint-4
+                behavior (calling strategy.risk_reward.resolve_stop_and_target()
+                directly) with zero call-site changes required elsewhere.
+            take_profit_engine: Resolves setup's take-profit price. Defaults
+                to FixedTakeProfitEngine(), same zero-call-site-change
+                guarantee as stop_engine.
+
+        Returns:
+            The Order tracking this entry: FILLED if broker.place_order()
+            succeeded (a position is now tracked), REJECTED otherwise (no
+            position tracked; on_new_bar() is a no-op until the next
+            open_trade() call).
+
+        Raises:
+            RuntimeError: If a trade is already open (call close_trade(), or
+                let on_new_bar() close it, before opening another).
+        """
+        if self.has_open_trade:
+            raise RuntimeError(
+                f"TradeManager already has an open trade (position_id={self._position_id!r}); "
+                "close it before opening another."
+            )
+
+        stop_engine = stop_engine if stop_engine is not None else FixedStopEngine()
+        take_profit_engine = (
+            take_profit_engine if take_profit_engine is not None else FixedTakeProfitEngine()
+        )
+        stop_loss = stop_engine.resolve_stop(setup)
+        take_profit = take_profit_engine.resolve_take_profit(setup)
+        order_type = (
+            OrderType.BUY_MARKET if setup.direction == SignalDirection.BUY else OrderType.SELL_MARKET
+        )
+        request = OrderRequest(
+            symbol=setup.symbol,
+            order_type=order_type,
+            volume=self._volume,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            comment=setup.setup_id,
+        )
+
+        result = broker.place_order(request)
+        order = Order(order_id=result.order_id, request=request)
+        self.current_order = order
+
+        if not result.success:
+            order.reject()
+            logger.error("open_trade: broker rejected entry for %s: %s", setup.symbol, result.comment)
+            return order
+
+        order.fill(result.price)
+
+        self._broker = broker
+        self._position_id = result.position_id
+        self._direction = setup.direction
+        self._stop_loss = stop_loss
+        self._take_profit = take_profit
+        logger.info(
+            "Opened trade %s for %s @ %.5f (sl=%.5f, tp=%.5f)",
+            result.position_id,
+            setup.symbol,
+            result.price,
+            stop_loss,
+            take_profit,
+        )
+        return order
+
+    def on_new_bar(self, bar: Bar) -> TradeManagerAction:
+        """Checks the tracked open trade against its SL/TP levels for this bar.
+
+        A no-op (returns HELD) if there is no currently open trade.
+
+        Args:
+            bar: The newly closed bar to check.
+
+        Returns:
+            TradeManagerAction.HELD if neither level was hit (or nothing is
+            open), CLOSED_SL/CLOSED_TP if the trade was closed this bar. If
+            both levels are touched within the same bar, SL takes
+            precedence -- mirrors BacktestEngine.run()'s same-candle SL/TP
+            conflict resolution (conservatively assume SL hit first).
+        """
+        if not self.has_open_trade:
+            return TradeManagerAction.HELD
+
+        sl_hit, tp_hit = self._check_levels(bar)
+        if sl_hit:
+            return self._close(TradeManagerAction.CLOSED_SL)
+        if tp_hit:
+            return self._close(TradeManagerAction.CLOSED_TP)
+        return TradeManagerAction.HELD
+
+    def close_trade(self) -> TradeManagerAction:
+        """Manually closes the currently tracked open trade, if any.
+
+        Returns:
+            TradeManagerAction.CLOSED_MANUAL if a trade was open and closed,
+            HELD if there was nothing open to close.
+        """
+        if not self.has_open_trade:
+            return TradeManagerAction.HELD
+        return self._close(TradeManagerAction.CLOSED_MANUAL)
+
+    def _check_levels(self, bar: Bar) -> tuple[bool, bool]:
+        """Direction-aware SL/TP hit check, matching BacktestEngine.run()'s convention."""
+        assert self._stop_loss is not None and self._take_profit is not None
+        if self._direction == SignalDirection.BUY:
+            sl_hit = bar.low <= self._stop_loss
+            tp_hit = bar.high >= self._take_profit
+        else:
+            sl_hit = bar.high >= self._stop_loss
+            tp_hit = bar.low <= self._take_profit
+        return sl_hit, tp_hit
+
+    def _close(self, action: TradeManagerAction) -> TradeManagerAction:
+        assert self._broker is not None and self._position_id is not None
+        self._broker.close_position(self._position_id)
+        self._broker = None
+        self._position_id = None
+        self._direction = None
+        self._stop_loss = None
+        self._take_profit = None
+        return action
