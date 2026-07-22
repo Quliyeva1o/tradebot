@@ -4,6 +4,7 @@ No real HTTP request is made anywhere in this file -- urllib.request.urlopen
 is always mocked.
 """
 
+import io
 import json
 import urllib.error
 from unittest.mock import MagicMock, patch
@@ -154,3 +155,51 @@ class TestSanitizedErrorLogging:
 
         assert result is False
         assert "not configured" in caplog.text
+
+    def test_http_error_logs_telegrams_own_description_field(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A bare "status=400" required a separate manual investigation.
+
+        2026-07-22 incident: calling the Telegram API directly was needed to
+        discover the actual cause was an invalid chat_id. Telegram's own
+        error response body already says so directly ("Bad Request: chat
+        not found") -- it must be surfaced in the log line instead of being
+        discarded.
+        """
+        notifier = TelegramNotifier(bot_token=FAKE_TOKEN, chat_id="not_a_real_chat_id")
+        url = f"https://api.telegram.org/bot{FAKE_TOKEN}/sendMessage"
+        body = json.dumps(
+            {"ok": False, "error_code": 400, "description": "Bad Request: chat not found"}
+        ).encode("utf-8")
+        http_error = urllib.error.HTTPError(
+            url, 400, "Bad Request", hdrs=None, fp=io.BytesIO(body)  # type: ignore[arg-type]
+        )
+
+        with patch("notifications.telegram.urllib.request.urlopen", side_effect=http_error):
+            with caplog.at_level("WARNING"):
+                result = notifier.send_message("test")
+
+        assert result is False
+        assert FAKE_TOKEN not in caplog.text
+        assert "chat not found" in caplog.text
+
+    def test_http_error_with_unreadable_body_falls_back_gracefully(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """fp=None (no response body captured) must not raise.
+
+        Falls back to a generic description instead of crashing the whole
+        send path.
+        """
+        notifier = TelegramNotifier(bot_token=FAKE_TOKEN, chat_id=FAKE_CHAT_ID)
+        url = f"https://api.telegram.org/bot{FAKE_TOKEN}/sendMessage"
+        http_error = urllib.error.HTTPError(url, 500, "Internal Server Error", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+        with patch("notifications.telegram.urllib.request.urlopen", side_effect=http_error):
+            with caplog.at_level("WARNING"):
+                result = notifier.send_message("test")
+
+        assert result is False
+        assert "500" in caplog.text
+        assert "unavailable" in caplog.text

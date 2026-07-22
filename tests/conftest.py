@@ -1,11 +1,20 @@
-"""Stubs the MetaTrader5 package on platforms where it can't be installed
+"""Suite-wide pytest fixtures and platform stubs.
+
+Stubs the MetaTrader5 package on platforms where it can't be installed
 (Windows-only SDK) so test modules that import it -- but mock every actual
 MT5 call -- can still be collected. No real MT5 behavior is provided here;
 each test replaces the specific attributes it needs via unittest.mock.
+
+Also holds suite-wide autouse fixtures (below) that must apply regardless of
+which test file a test lives in.
 """
 
+import logging
 import sys
 import types
+from collections.abc import Iterator
+
+import pytest
 
 try:
     import MetaTrader5  # noqa: F401
@@ -44,3 +53,64 @@ except ImportError:
     stub.TRADE_RETCODE_DONE_PARTIAL = 10010
     stub.TRADE_RETCODE_PLACED = 10008
     sys.modules["MetaTrader5"] = stub
+
+
+_ISOLATED_LOGGER_NAMES = ("execution_events", "run_live_demo", "trade_events", "live_signal_check")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_execution_or_trade_log_files() -> Iterator[None]:
+    """Detaches FileHandlers for execution/trade-event loggers during every test.
+
+    Mirrors tests/test_live_signal_check.py's _no_real_log_file exactly
+    (same detach-before/reattach-after mechanism), generalized here in
+    conftest.py -- suite-wide and autouse -- rather than duplicated
+    per-file, so no current OR future test can accidentally reintroduce the
+    leak just by being added to a new file.
+
+    execution_events (execution/event_log.py's log_fill(), called by both
+    PaperBroker and MT5Broker on every fill), run_live_demo (run_live_demo.py's
+    own human-readable logger), and trade_events (run_live_demo.py's
+    _log_trade_event()) are all module-level logging singletons configured
+    once at import time via utils.logging.setup_logger()/
+    setup_structured_logger() (see their `if logger.handlers: return logger`
+    guard) -- like live_signal_check.logger, they can't be redirected per
+    test with a STATE_FILE-style monkeypatch; the already-attached
+    FileHandler itself must be removed and restored.
+
+    live_signal_check is included here too, despite test_live_signal_check.py
+    already having its own file-local _no_real_log_file fixture: that
+    fixture only protects tests IN that file. run_live_demo.py reuses
+    live_signal_check.check_data_quality_and_alert() unchanged (which logs
+    via live_signal_check.logger directly), so tests/test_run_live_demo.py's
+    run_once()/main() calls were writing to the real logs/live_signal_check.log
+    with no local fixture to stop them -- discovered via this fix's own
+    before/after byte-for-byte verification (see the Sprint 7 log-isolation
+    report), not something the task anticipated. Covering it here too closes
+    that gap with the same mechanism at negligible extra cost, rather than
+    leaving a newly-found active leak unaddressed.
+
+    Without this, any test that opens/closes a PaperBroker or MT5Broker
+    position, or drives run_live_demo.py's run_once()/main() (currently:
+    tests/test_event_log.py, tests/test_paper_broker.py,
+    tests/test_mt5_broker.py, tests/test_trade_manager.py,
+    tests/test_run_live_demo.py -- and any future test exercising the same
+    code), would land in the real, repo-relative logs/execution_events.log,
+    logs/run_live_demo.log, logs/trade_events.log, and logs/live_signal_check.log
+    -- files a human operator relies on to analyze real demo-account
+    slippage/trade history (see the Sprint 7 slippage-analysis report),
+    polluted with fake test order_ids and synthetic bar timestamps.
+    """
+    detached: list[tuple[logging.Logger, list[logging.FileHandler]]] = []
+    for name in _ISOLATED_LOGGER_NAMES:
+        logger = logging.getLogger(name)
+        file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+        for handler in file_handlers:
+            logger.removeHandler(handler)
+        detached.append((logger, file_handlers))
+
+    yield
+
+    for logger, file_handlers in detached:
+        for handler in file_handlers:
+            logger.addHandler(handler)

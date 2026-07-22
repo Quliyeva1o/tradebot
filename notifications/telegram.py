@@ -18,6 +18,20 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 DEFAULT_TIMEOUT_SECONDS = 8.0
 
 
+def _describe_http_error(exc: urllib.error.HTTPError) -> str:
+    """Extracts Telegram's own error "description" field from a failed response body.
+
+    Never raises: the response body may be missing, unreadable, or not
+    JSON-shaped (e.g. in a test double), in which case a generic fallback is
+    returned instead.
+    """
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+        return str(body.get("description", "no description in response body"))
+    except Exception:  # diagnostic best-effort, must never mask the original failure
+        return "response body unavailable"
+
+
 class TelegramNotifier:
     """Dispatches text messages to a configured Telegram chat via the Bot API.
 
@@ -83,9 +97,19 @@ class TelegramNotifier:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            # Log only the status code -- never exc's default str()/repr() or
-            # the request URL, both of which embed the bot token.
-            logger.warning("Telegram send failed: HTTPError, status=%d", exc.code)
+            # Status code + Telegram's own "description" field (e.g. "Bad
+            # Request: chat not found") -- both safe to log in full, unlike
+            # exc's default str()/repr() or the request URL, which embed the
+            # bot token. The description is Telegram's OWN reply, not
+            # anything we constructed, so it carries no secret -- and it is
+            # what actually distinguishes "bad token" from "bad chat_id"
+            # from any other 4xx cause, instead of a bare status code that
+            # requires separate manual investigation to diagnose.
+            logger.warning(
+                "Telegram send failed: HTTPError, status=%d (%s)",
+                exc.code,
+                _describe_http_error(exc),
+            )
             return False
         except urllib.error.URLError as exc:
             # exc.reason is a plain exception/string (e.g. a timeout or DNS

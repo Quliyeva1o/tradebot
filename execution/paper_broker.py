@@ -21,6 +21,7 @@ from pathlib import Path
 
 from core.models import AccountInfo, OrderType
 from core.validation import require_non_negative, require_positive
+from execution.event_log import log_fill
 from execution.fill_simulator import simulate_market_fill
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, Position
@@ -236,7 +237,7 @@ class PaperBroker(IBroker):
                 comment="Pending order accepted (not yet triggered).",
             )
 
-        fill_price = self._simulate_fill(order.symbol, order.order_type)
+        fill_price, reference_price = self._simulate_fill(order.symbol, order.order_type)
         internal_order.fill(fill_price)
 
         position = Position(
@@ -254,6 +255,16 @@ class PaperBroker(IBroker):
         self._save_state()
 
         logger.info("Filled paper order %s for %s @ %.5f", order_id, order.symbol, fill_price)
+        log_fill(
+            broker="PaperBroker",
+            event="open",
+            order_id=order_id,
+            symbol=order.symbol,
+            order_type=order.order_type,
+            volume=order.volume,
+            intended_price=reference_price,
+            actual_price=fill_price,
+        )
         return OrderResult(
             success=True,
             order_id=order_id,
@@ -323,7 +334,7 @@ class PaperBroker(IBroker):
             if position.order_type == OrderType.BUY_MARKET
             else OrderType.BUY_MARKET
         )
-        fill_price = self._simulate_fill(position.symbol, closing_type)
+        fill_price, reference_price = self._simulate_fill(position.symbol, closing_type)
 
         closing_request = OrderRequest(
             symbol=position.symbol, order_type=closing_type, volume=position.volume
@@ -349,6 +360,16 @@ class PaperBroker(IBroker):
             fill_price,
             pnl,
         )
+        log_fill(
+            broker="PaperBroker",
+            event="close",
+            order_id=closing_order_id,
+            symbol=position.symbol,
+            order_type=closing_type,
+            volume=position.volume,
+            intended_price=reference_price,
+            actual_price=fill_price,
+        )
         return OrderResult(
             success=True,
             order_id=closing_order_id,
@@ -371,15 +392,22 @@ class PaperBroker(IBroker):
         """
         return [self._mark_to_market(position) for position in self._positions.values()]
 
-    def _simulate_fill(self, symbol: str, order_type: OrderType) -> float:
+    def _simulate_fill(self, symbol: str, order_type: OrderType) -> tuple[float, float]:
         """Fetches the latest real bar for symbol and simulates a market fill against it.
 
         Shared by place_order() (opening fill) and close_position() (closing
         fill) so the fetch-bar + simulate_market_fill() sequence is not
         duplicated between them.
+
+        Returns:
+            (fill_price, reference_price): fill_price is the simulated fill
+            (spread/slippage applied); reference_price is next_bar.open
+            BEFORE spread/slippage -- the "intended price" used for
+            structured slippage logging (see execution/event_log.py).
         """
         next_bar = self._connector.fetch_recent_bars(symbol, self._timeframe, count=1)[-1]
-        return simulate_market_fill(order_type, next_bar.open, next_bar.spread, self._slippage)
+        fill_price = simulate_market_fill(order_type, next_bar.open, next_bar.spread, self._slippage)
+        return fill_price, next_bar.open
 
     def _mark_to_market(self, position: Position) -> Position:
         """Returns a copy of position with current_price/profit refreshed from the latest real bar."""

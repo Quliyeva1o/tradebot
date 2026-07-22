@@ -11,7 +11,7 @@ state resets to a fresh account without raising.
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -428,3 +428,57 @@ class TestFailOpen:
         broker = PaperBroker(connector=connector, slippage=0.0)
 
         broker.place_order(_market_order())  # must not raise despite the failed persist
+
+
+class TestSlippageLogging:
+    """Tests for T2 (Sprint 6c): PaperBroker logs realized slippage on every fill."""
+
+    def test_place_order_logs_fill_with_reference_price_as_intended(self) -> None:
+        connector = _connector(_bar(open_=29_000.0, spread=2.0))
+        broker = PaperBroker(connector=connector, slippage=0.5)
+
+        with patch("execution.paper_broker.log_fill") as mock_log_fill:
+            result = broker.place_order(_market_order(volume=1.0, buy=True))
+
+        mock_log_fill.assert_called_once()
+        kwargs = mock_log_fill.call_args.kwargs
+        assert kwargs["broker"] == "PaperBroker"
+        assert kwargs["event"] == "open"
+        assert kwargs["order_id"] == result.order_id
+        assert kwargs["symbol"] == "USTEC"
+        assert kwargs["order_type"] == OrderType.BUY_MARKET
+        assert kwargs["volume"] == 1.0
+        # reference price is the bar's open, BEFORE simulated spread/slippage.
+        assert kwargs["intended_price"] == pytest.approx(29_000.0)
+        assert kwargs["actual_price"] == result.price
+
+    def test_close_position_logs_fill_with_reference_price_as_intended(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.fetch_recent_bars.side_effect = [
+            [_bar(open_=29_000.0, spread=0.0)],
+            [_bar(open_=29_100.0, spread=2.0)],
+        ]
+        broker = PaperBroker(connector=connector, slippage=0.5)
+        open_result = broker.place_order(_market_order(volume=1.0, buy=True))
+
+        with patch("execution.paper_broker.log_fill") as mock_log_fill:
+            close_result = broker.close_position(open_result.order_id)
+
+        mock_log_fill.assert_called_once()
+        kwargs = mock_log_fill.call_args.kwargs
+        assert kwargs["broker"] == "PaperBroker"
+        assert kwargs["event"] == "close"
+        assert kwargs["order_type"] == OrderType.SELL_MARKET  # closes a BUY by selling
+        assert kwargs["intended_price"] == pytest.approx(29_100.0)
+        assert kwargs["actual_price"] == close_result.price
+
+    def test_pending_order_does_not_log_a_fill(self) -> None:
+        """Pending orders (Sprint 2 scope) are stored, not filled -- no fill event exists to log."""
+        connector = _connector()
+        broker = PaperBroker(connector=connector)
+        order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.1, price=28_500.0)
+
+        with patch("execution.paper_broker.log_fill") as mock_log_fill:
+            broker.place_order(order)
+
+        mock_log_fill.assert_not_called()

@@ -63,6 +63,11 @@ class Settings:
     MT5_PASSWORD: str = os.getenv("MT5_PASSWORD", "")
     MT5_SERVER: str = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
     MT5_PATH: str = os.getenv("MT5_PATH", "")
+    # Sprint 7 demo-account safety rail (run_live_demo.py): deliberately no
+    # non-empty default -- an operator who has not explicitly opted in to
+    # "demo" is refused, not silently allowed to trade. See
+    # run_live_demo.py's _ensure_explicit_demo_configuration().
+    MT5_ACCOUNT_TYPE: str = os.getenv("MT5_ACCOUNT_TYPE", "")
 
     # Telegram notification settings
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")

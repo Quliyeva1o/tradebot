@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -58,11 +59,24 @@ from strategy.continuation import (
     BullishContinuationStrategy,
     StrategyConfig,
 )
+from strategy.interfaces import TradeSetupStrategy
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import PROJECT_ROOT, get_artifacts_dir
 
 logger = setup_logger("run_campaign")
+
+
+def _continuation_strategy_factory(strat_config: StrategyConfig) -> list[TradeSetupStrategy]:
+    """Builds fresh Bullish/BearishContinuationStrategy instances for one simulation call.
+
+    Bug #48 fix -- see research/walk_forward.py, research/robustness.py: both now take
+    a strategy_factory instead of importing these strategies directly.
+    """
+    return [
+        BullishContinuationStrategy(config=strat_config),
+        BearishContinuationStrategy(config=strat_config),
+    ]
 
 
 def get_git_info() -> tuple[str, str]:
@@ -549,7 +563,10 @@ def main() -> None:
                 step_size_pct=0.1,
                 expanding=False,
             )
-            folds = wf_runner.run(StrategyConfig(), BacktestConfig(10000.0, 0.01, 0.0001, 5.0, 0.0))
+            folds = wf_runner.run(
+                partial(_continuation_strategy_factory, StrategyConfig()),
+                BacktestConfig(10000.0, 0.01, 0.0001, 5.0, 0.0),
+            )
             for fold_data in folds:
                 fold_data["symbol"] = symbol
                 wf_results.append(fold_data)
@@ -654,7 +671,12 @@ def main() -> None:
                 continue
 
             tester = RobustnessTester(all_bars, symbol, timeframe_enum)
-            metrics_rob = tester.run(StrategyConfig(), BacktestConfig(10000.0, 0.01, 0.0001, 5.0, 0.0))
+            rob_strat_config = StrategyConfig()
+            metrics_rob = tester.run(
+                partial(_continuation_strategy_factory, rob_strat_config),
+                BacktestConfig(10000.0, 0.01, 0.0001, 5.0, 0.0),
+                rob_strat_config.pip_size,
+            )
             metrics_rob["symbol"] = symbol
             rob_results.append(metrics_rob)
 

@@ -139,9 +139,15 @@ def _account_info(
     margin_free: float = 10_000.0,
     margin_level: float = 0.0,
     currency: str = "USD",
+    trade_mode: int = 0,
 ) -> SimpleNamespace:
     """Minimal stand-in for MT5's AccountInfo named-tuple-like object,
-    exposing only the fields fetch_account_info() reads."""
+    exposing only the fields fetch_account_info() reads.
+
+    trade_mode defaults to 0 (mt5.ACCOUNT_TRADE_MODE_DEMO) -- the real value
+    every genuine demo account reports, and the only value this test file's
+    default fixtures need.
+    """
     return SimpleNamespace(
         balance=balance,
         equity=equity,
@@ -149,6 +155,7 @@ def _account_info(
         margin_free=margin_free,
         margin_level=margin_level,
         currency=currency,
+        trade_mode=trade_mode,
     )
 
 
@@ -164,6 +171,7 @@ class TestFetchAccountInfo:
                 margin_free=10_120.10,
                 margin_level=5160.05,
                 currency="USD",
+                trade_mode=2,
             ),
         ):
             info = connector.fetch_account_info()
@@ -175,6 +183,7 @@ class TestFetchAccountInfo:
         assert info.free_margin == 10_120.10  # margin_free -> free_margin
         assert info.margin_level == 5160.05
         assert info.currency == "USD"
+        assert info.trade_mode == 2
 
     def test_raises_when_account_info_returns_none(self) -> None:
         connector = MT5Connector()

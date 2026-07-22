@@ -1,13 +1,17 @@
 """MT5 implementation of the IBroker execution interface."""
 
+import time
 from datetime import UTC, datetime
 
 import MetaTrader5 as mt5  # noqa: N813
 
 from core.models import AccountInfo, OrderType
+from core.validation import require_non_negative, require_positive
+from execution.event_log import log_fill
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, Position
 from mt5.connector import MT5Connector
+from risk.kill_switch import activate_kill_switch
 from utils.logging import setup_logger
 
 logger = setup_logger("mt5_broker")
@@ -45,23 +49,82 @@ class MT5Broker(IBroker):
     itself uses. mt5/connector.py is intentionally left unmodified.
     """
 
-    def __init__(self, connector: MT5Connector | None = None) -> None:
+    def __init__(
+        self,
+        connector: MT5Connector | None = None,
+        max_reconnect_attempts: int = 5,
+        initial_backoff_seconds: float = 1.0,
+        backoff_multiplier: float = 2.0,
+    ) -> None:
         """Initializes the MT5Broker.
 
         Args:
             connector: The MT5Connector to delegate connection/account-info
                 reads to. Defaults to a new MT5Connector() instance;
                 overridable (e.g. with a test double) via injection.
+            max_reconnect_attempts: Maximum consecutive connect() attempts
+                (T4, Sprint 6c) before giving up and activating the
+                kill-switch. The first attempt counts toward this total.
+            initial_backoff_seconds: Delay before the second attempt; grows
+                by backoff_multiplier after each subsequent failure.
+            backoff_multiplier: Growth factor applied to the backoff delay
+                after each failed attempt.
+
+        Raises:
+            ValueError: If max_reconnect_attempts or initial_backoff_seconds
+                is not strictly positive, or backoff_multiplier is negative.
         """
+        require_positive(max_reconnect_attempts, "max_reconnect_attempts")
+        require_positive(initial_backoff_seconds, "initial_backoff_seconds")
+        require_non_negative(backoff_multiplier, "backoff_multiplier")
         self._connector = connector if connector is not None else MT5Connector()
+        self._max_reconnect_attempts = max_reconnect_attempts
+        self._initial_backoff_seconds = initial_backoff_seconds
+        self._backoff_multiplier = backoff_multiplier
 
     def connect(self) -> bool:
-        """Delegates to MT5Connector.connect().
+        """Connects to MT5, retrying with exponential backoff on failure (T4).
+
+        Doubles as both "initial connect" and "reconnect after a detected
+        connection loss" -- a future live loop calls this same method again
+        when it notices the connection is down; the retry/backoff/kill-switch
+        behavior is identical either way, since MT5Connector.connect() itself
+        does not distinguish "never connected" from "was connected, now isn't".
 
         Returns:
-            True if connection initialized successfully, False otherwise.
+            True as soon as MT5Connector.connect() succeeds (on the first
+            attempt or any retry). False only after max_reconnect_attempts
+            consecutive failures.
+
+        Raises:
+            Nothing -- if every attempt fails, the kill-switch
+            (risk.kill_switch.activate_kill_switch) is activated instead of
+            leaving the caller to decide what "connection permanently down"
+            means; an ambiguous half-connected state is exactly what a
+            kill-switch exists to short-circuit. activate_kill_switch()
+            itself never raises (best-effort Telegram alert, fail-open flag
+            write) -- see risk/kill_switch.py.
         """
-        return self._connector.connect()
+        backoff = self._initial_backoff_seconds
+        for attempt in range(1, self._max_reconnect_attempts + 1):
+            if self._connector.connect():
+                if attempt > 1:
+                    logger.info(
+                        "MT5 reconnected successfully on attempt %d/%d.",
+                        attempt,
+                        self._max_reconnect_attempts,
+                    )
+                return True
+
+            logger.warning("MT5 connect attempt %d/%d failed.", attempt, self._max_reconnect_attempts)
+            if attempt < self._max_reconnect_attempts:
+                time.sleep(backoff)
+                backoff *= self._backoff_multiplier
+
+        reason = f"MT5Broker could not connect to MT5 after {self._max_reconnect_attempts} attempts."
+        logger.error(reason)
+        activate_kill_switch(reason)
+        return False
 
     def get_account_info(self) -> AccountInfo:
         """Delegates to MT5Connector.fetch_account_info().
@@ -139,6 +202,16 @@ class MT5Broker(IBroker):
         if success:
             logger.info(
                 "Order placed for %s: ticket=%s price=%s", order.symbol, result.order, result.price
+            )
+            log_fill(
+                broker="MT5Broker",
+                event="open",
+                order_id=str(result.order),
+                symbol=order.symbol,
+                order_type=order.order_type,
+                volume=result.volume,
+                intended_price=price,
+                actual_price=result.price,
             )
         else:
             logger.error(
@@ -237,9 +310,11 @@ class MT5Broker(IBroker):
 
         if position.type == mt5.POSITION_TYPE_BUY:
             closing_type = mt5.ORDER_TYPE_SELL
+            closing_order_type = OrderType.SELL_MARKET
             price = tick.bid
         else:
             closing_type = mt5.ORDER_TYPE_BUY
+            closing_order_type = OrderType.BUY_MARKET
             price = tick.ask
 
         request: dict[str, object] = {
@@ -258,6 +333,16 @@ class MT5Broker(IBroker):
         success = result.retcode in _SUCCESS_RETCODES
         if success:
             logger.info("Closed position %d: price=%s", ticket, result.price)
+            log_fill(
+                broker="MT5Broker",
+                event="close",
+                order_id=str(result.order),
+                symbol=position.symbol,
+                order_type=closing_order_type,
+                volume=result.volume,
+                intended_price=price,
+                actual_price=result.price,
+            )
         else:
             logger.error(
                 "Failed to close position %d: retcode=%s comment=%s",

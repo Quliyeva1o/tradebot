@@ -212,13 +212,28 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         self.diagnostics.record_rejection(reason)
         return None
 
+    def mark_trade_taken(self) -> None:
+        """Explicitly marks today's one-trade-per-day guard as consumed.
+
+        For callers that evaluate() with record_trade_taken=False (see its
+        docstring) but later confirm, through their own means, that a real
+        trade WAS genuinely taken on that setup (e.g. run_live_demo.py,
+        after TradeManager.open_trade() actually succeeds) -- lets that
+        confirmation still correctly block further signals for the rest of
+        the day, exactly as evaluate()'s own automatic marking already does
+        for its default (record_trade_taken=True) callers.
+        """
+        self._trade_taken = True
+
     def _in_build_session(self, timestamp: datetime) -> bool:
         """Whether the given timestamp falls in [build_session_start, build_session_end)."""
         return is_in_session(
             timestamp, self.build_session_start, self.build_session_end, self._session_tz
         )
 
-    def evaluate(self, market_state: MarketState) -> TradeSetup | None:
+    def evaluate(
+        self, market_state: MarketState, *, record_trade_taken: bool = True
+    ) -> TradeSetup | None:
         """Evaluates rules for the fixed-range midline sweep setup.
 
         Required checks:
@@ -228,6 +243,29 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
         4. That side's zone edge was swept (low/high crossed it) and reclaimed
         5. Strong displacement body (>body_multiplier x SMA-N body)
         6. Positive risk distance and a valid risk_reward configuration
+
+        Args:
+            market_state: The MarketState to evaluate the latest bar of.
+            record_trade_taken: Whether a valid setup found on THIS call may
+                mark today's one-trade-per-day guard (mark_trade_taken()) as
+                consumed. Defaults to True -- the existing behavior for
+                every caller (backtest's StrategyEngine.run(), any direct
+                unit test, and a live "final bar" evaluation). Pass False
+                only for a bar being evaluated SOLELY to rebuild daily state
+                (session zone/midline, ...) whose returned TradeSetup will
+                be discarded regardless -- see check_signal()'s replay loop
+                in live_signal_check.py. Without this, a valid setup found
+                ONLY during such a discarded replay pass (because the live
+                "final bar" evaluation that would have seen it was skipped,
+                e.g. a missed scheduler cycle) would permanently and
+                incorrectly consume the day's one-trade allowance, silently
+                blocking a later, genuinely new and unrelated signal that
+                same day -- with no error, exception, or indication that
+                anything went wrong beyond a normal "trade already taken"
+                rejection. Rule 2's CHECK below is unaffected either way: a
+                real mark_trade_taken() call (see that method) still
+                correctly blocks every subsequent evaluation for the rest
+                of the day, replay or not.
         """
         self.diagnostics.record_evaluation()
 
@@ -313,7 +351,8 @@ class NasdaqMidlineSweepStrategy(TradeSetupStrategy):
 
         tp = calculate_take_profit(entry, direction, risk_dist, self.risk_reward)
 
-        self._trade_taken = True
+        if record_trade_taken:
+            self._trade_taken = True
 
         mid, upper, lower = self._mid, self._upper, self._lower
         direction_label = "Bullish" if direction == SignalDirection.BUY else "Bearish"

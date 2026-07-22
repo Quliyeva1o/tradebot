@@ -5,11 +5,15 @@ tests that reach the signal-found path always mock the Telegram layer too
 (main() calls send_telegram_alert() unconditionally on a found signal, and
 config.settings.Settings.load() reads whatever is actually configured in the
 real .env, so leaving it unmocked here would attempt a real network call).
+The same applies to the T3 (Sprint 6c) data-quality alert path -- see
+_mock_data_quality_alert below.
 """
 
 import logging
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,6 +39,22 @@ def _isolated_state_file(tmp_path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_data_quality_state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Points DATA_QUALITY_STATE_FILE at a per-test tmp_path location.
+
+    Same rationale as _isolated_state_file above (Sprint 7's data-quality
+    alert dedup, mirroring the trade-signal dedup it's isolating): without
+    this, every test that reaches check_data_quality_and_alert() would
+    read/write the real repo-relative logs/last_data_quality_alerts.json,
+    leaking alerted-signature state across tests that reuse identical bar
+    timestamps.
+    """
+    monkeypatch.setattr(
+        live_signal_check, "DATA_QUALITY_STATE_FILE", tmp_path / "last_data_quality_alerts.json"
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_real_log_file():
     """Detaches live_signal_check's FileHandler for the duration of each test.
 
@@ -55,6 +75,24 @@ def _no_real_log_file():
     yield
     for h in file_handlers:
         live_signal_check.logger.addHandler(h)
+
+
+@pytest.fixture(autouse=True)
+def _mock_data_quality_alert() -> Generator[MagicMock, None, None]:
+    """Prevents every test in this file from sending a real Telegram data-quality alert.
+
+    T3's staleness check (core.data_quality.check_stale) compares each
+    fetched bar's timestamp against the real wall clock -- every test bar
+    below uses a fixed historical date (e.g. 2026-01-06), which is always
+    "stale" relative to whenever the suite actually runs, so
+    check_data_quality_and_alert() fires on essentially every test that
+    reaches main()'s post-fetch flow. Mirrors _no_real_log_file's rationale.
+    Tests that specifically exercise this path (TestDataQualityIntegration)
+    request this fixture directly to inspect the mock instead of needing
+    their own separate patch.
+    """
+    with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+        yield mock_alert
 
 
 def _bar(ts: datetime, o: float, h: float, low: float, c: float) -> Bar:
@@ -142,7 +180,14 @@ class TestCheckSignal:
         """
         strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
         breakout_bar = _bar(datetime(2026, 1, 5, 10, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
-        # trade_taken becomes True on this bar, then a neutral bar follows as the final one.
+        # Sprint 8: a setup found on this replay bar is discarded, exactly as
+        # before -- but no longer marks trade_taken (see
+        # NasdaqMidlineSweepStrategy.evaluate()'s record_trade_taken
+        # docstring), so final_neutral_bar's own rejection below now reflects
+        # its OWN genuine, honest evaluation (NO_DISPLACEMENT: a 0.5 body vs.
+        # the ~1.4 average pulled up by breakout_bar's own large body in the
+        # SMA window) rather than the previously-misleading
+        # TRADE_ALREADY_TAKEN (no trade was ever actually taken).
         final_neutral_bar = _bar(datetime(2026, 1, 5, 10, 5, tzinfo=UTC), 112.0, 113.0, 108.5, 112.5)
         bars = [*_build_session_bars(), _session_end_bar(), breakout_bar, final_neutral_bar]
 
@@ -153,7 +198,37 @@ class TestCheckSignal:
         assert setup is None  # the breakout happened on an earlier bar, not the final one
         assert final_bar.timestamp == final_neutral_bar.timestamp
         summary = diagnostics["0_NasdaqMidlineSweepStrategy"]
-        assert summary["rejections"] == {RejectionReason.TRADE_ALREADY_TAKEN.value: 1}
+        assert summary["rejections"] == {RejectionReason.NO_DISPLACEMENT.value: 1}
+
+    def test_a_signal_seen_only_during_replay_does_not_block_a_later_genuine_signal(self) -> None:
+        """Sprint 8 regression: the actual production bug scenario.
+
+        A missed scheduler cycle means a valid signal bar is only ever seen
+        as a REPLAY bar (never as the live "final bar") on the run that
+        would have reported it. A completely separate check_signal() call
+        later that day (a subsequent run) must still be able to recognize
+        and report a genuinely new, independently-qualifying signal -- it
+        must not be silently blocked as "trade already taken" by the
+        earlier, never-acted-upon replay-only detection.
+        """
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        missed_breakout = _bar(datetime(2026, 1, 5, 10, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+        later_breakout = _bar(datetime(2026, 1, 5, 10, 5, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+
+        # Run 1 (simulated): the scheduler cycle that should have caught
+        # missed_breakout as the live final bar never happened -- it is only
+        # ever replayed as a non-final bar, in the SAME check_signal() call
+        # that later reports later_breakout as final. This directly mirrors
+        # what a real missed run + the next real run would produce.
+        bars = [*_build_session_bars(), _session_end_bar(), missed_breakout, later_breakout]
+
+        setup, _diagnostics, final_bar = live_signal_check.check_signal(
+            bars, "USTEC", Timeframe.M5, strategy
+        )
+
+        assert setup is not None  # the later, independent signal correctly still fires
+        assert setup.direction == SignalDirection.BUY
+        assert final_bar.timestamp == later_breakout.timestamp
 
 
 class TestFormatting:
@@ -627,3 +702,255 @@ class TestKillSwitchIntegration:
             live_signal_check.main(["--symbol", "USTEC"])
 
         assert disconnect_calls == [1]
+
+
+class TestDataQualityIntegration:
+    """Tests for T3 (Sprint 6c): main() wires in check_data_quality_and_alert().
+
+    Purely additive to the fetch step -- check_signal()'s own detection
+    logic and result are unaffected either way. These tests use minimal
+    bars that never form a signal, since the point is proving the
+    data-quality hook fires/doesn't fire correctly, not exercising a full
+    strategy scenario (already covered elsewhere in this file).
+    """
+
+    def test_stale_bars_trigger_the_alert(
+        self, _mock_data_quality_alert: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Fixed historical date -- always "stale" relative to real wall-clock now().
+        bars = [_bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 100.0, 100.5, 99.5, 100.0)]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return bars
+
+        with patch("live_signal_check.MT5Connector", FakeConnector):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        _mock_data_quality_alert.assert_called_once()
+        issues = _mock_data_quality_alert.call_args[0][0]
+        assert any(issue.kind == "stale" for issue in issues)
+        # check_signal()'s own result is unaffected -- still runs and reports normally.
+        captured = capsys.readouterr()
+        assert "NO SIGNAL" in captured.out
+
+    def test_fresh_gap_free_bars_do_not_trigger_the_alert(
+        self, _mock_data_quality_alert: MagicMock
+    ) -> None:
+        # Dynamically anchored to real "now" so the staleness check finds it fresh.
+        now = datetime.now(UTC)
+        bars = [
+            _bar(now - timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.0) for i in range(5, 0, -1)
+        ]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return bars
+
+        with patch("live_signal_check.MT5Connector", FakeConnector):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        _mock_data_quality_alert.assert_not_called()
+
+    def test_gap_between_fetched_bars_triggers_the_alert(
+        self, _mock_data_quality_alert: MagicMock
+    ) -> None:
+        now = datetime.now(UTC)
+        bars = [
+            _bar(now - timedelta(minutes=60), 100.0, 100.5, 99.5, 100.0),  # big intraday gap
+            _bar(now - timedelta(minutes=5), 100.0, 100.5, 99.5, 100.0),
+        ]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return bars
+
+        with patch("live_signal_check.MT5Connector", FakeConnector):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        _mock_data_quality_alert.assert_called_once()
+        issues = _mock_data_quality_alert.call_args[0][0]
+        assert any(issue.kind == "gap" for issue in issues)
+
+    def test_data_quality_issue_does_not_prevent_signal_evaluation(
+        self, _mock_data_quality_alert: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A data-quality issue is reported, not a reason to abort.
+
+        check_signal() still runs against whatever bars were actually
+        fetched (same fixture as TestMainEndToEnd's signal-found scenario,
+        just with an old fetch timestamp that also trips the staleness check).
+        """
+        base = datetime(2026, 1, 6, 12, 50, tzinfo=UTC)
+        warmup_bars = [
+            _bar(base + timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.5 if i % 2 == 0 else 99.5)
+            for i in range(20)
+        ]
+        build_bars = [
+            _bar(datetime(2026, 1, 6, 14, 30, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 35, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+            _bar(datetime(2026, 1, 6, 14, 40, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5),
+            _bar(datetime(2026, 1, 6, 14, 45, tzinfo=UTC), 100.0, 100.1, 99.4, 99.5),
+        ]
+        session_end_bar = _bar(datetime(2026, 1, 6, 14, 50, tzinfo=UTC), 100.0, 100.6, 99.9, 100.5)
+        breakout_bar = _bar(datetime(2026, 1, 6, 15, 0, tzinfo=UTC), 105.0, 112.5, 108.0, 112.0)
+        all_bars = [*warmup_bars, *build_bars, session_end_bar, breakout_bar]
+
+        class FakeConnector:
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+            def fetch_recent_bars(self, symbol: str, timeframe: str, count: int) -> list[Bar]:
+                return all_bars
+
+        with (
+            patch("live_signal_check.MT5Connector", FakeConnector),
+            patch("live_signal_check.send_telegram_alert") as mock_send_alert,
+        ):
+            live_signal_check.main(["--symbol", "USTEC", "--timeframe", "M5"])
+
+        _mock_data_quality_alert.assert_called_once()  # stale, per the fixed historical date
+        captured = capsys.readouterr()
+        assert "SIGNAL FOUND" in captured.out  # check_signal() still ran normally
+        mock_send_alert.assert_called_once()
+
+
+class TestDataQualityAlertDedup:
+    """Sprint 7: Telegram dedup for gap/stale-bar alerts.
+
+    Mirrors the existing trade-signal dedup mechanism's exact design
+    (_signal_signature()/_already_sent()/_record_sent(), tested in
+    TestSignalSignature/TestSignalStatePersistence/TestMainDedupIntegration
+    above) -- here calling check_data_quality_and_alert() directly (not
+    through main()) since that is the actual unit under test and doing so
+    keeps these tests independent of check_signal()'s own detection.
+    """
+
+    def _gap_bar(self, ts: datetime) -> Bar:
+        return _bar(ts, 100.0, 100.5, 99.5, 100.0)
+
+    def test_same_gap_alerts_once_then_is_suppressed_on_later_runs(self) -> None:
+        bars = [
+            self._gap_bar(datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
+            self._gap_bar(datetime(2026, 1, 5, 9, 30, tzinfo=UTC)),  # 30 min gap (> 7.5 min threshold)
+        ]
+
+        with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+
+        mock_alert.assert_called_once()
+
+    def test_a_genuinely_new_gap_still_alerts_while_an_old_one_is_suppressed(self) -> None:
+        bar_900 = self._gap_bar(datetime(2026, 1, 5, 9, 0, tzinfo=UTC))
+        bar_930 = self._gap_bar(datetime(2026, 1, 5, 9, 30, tzinfo=UTC))  # gap 1: 9:00 -> 9:30 (30 min)
+        bar_935 = self._gap_bar(datetime(2026, 1, 5, 9, 35, tzinfo=UTC))  # 9:30 -> 9:35 (5 min, no gap)
+        bar_1015 = self._gap_bar(datetime(2026, 1, 5, 10, 15, tzinfo=UTC))  # gap 2: 9:35 -> 10:15 (40 min)
+
+        with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+            # Run 1: only gap 1 exists yet (e.g. gap 2's second bar hasn't formed).
+            live_signal_check.check_data_quality_and_alert(
+                [bar_900, bar_930], "USTEC", Timeframe.M5, "M5"
+            )
+            # Run 2: gap 1 is still in the lookback window (same signature) AND
+            # a genuinely new gap 2 has now appeared.
+            live_signal_check.check_data_quality_and_alert(
+                [bar_900, bar_930, bar_935, bar_1015], "USTEC", Timeframe.M5, "M5"
+            )
+
+        assert mock_alert.call_count == 2
+        run_2_issues = mock_alert.call_args_list[1][0][0]
+        # These fixed-historical-date bars also always trip check_stale() (see
+        # _mock_data_quality_alert's docstring above) -- its own event_key is
+        # the latest bar's timestamp, which changed between run 1 and run 2,
+        # so it is independently "new" both times and is present in run 2's
+        # batch alongside the new gap. Only gap 1 (unchanged latest bar pair)
+        # is actually suppressed here.
+        run_2_gap_issues = [issue for issue in run_2_issues if issue.kind == "gap"]
+        assert len(run_2_gap_issues) == 1  # gap 1 suppressed; only the new gap 2 is sent
+        assert "09:35:00" in run_2_gap_issues[0].message
+
+    def test_local_logging_still_happens_every_run_even_when_telegram_is_suppressed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bars = [
+            self._gap_bar(datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
+            self._gap_bar(datetime(2026, 1, 5, 9, 30, tzinfo=UTC)),
+        ]
+
+        with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+            with caplog.at_level(logging.INFO):
+                live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+                caplog.clear()
+                # Second run: Telegram send is now suppressed (duplicate signature)...
+                live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+
+        mock_alert.assert_called_once()  # only sent on run 1
+        # ...but the human-readable WARNING and structured JSON log lines
+        # still fire on run 2, unconditionally, every time.
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("DATA QUALITY: [gap]" in r.message for r in warning_records)
+        structured_records = [r for r in caplog.records if r.name == "data_quality_events"]
+        assert any(
+            isinstance(r.msg, dict) and r.msg.get("kind") == "gap" for r in structured_records
+        )
+
+    def test_signatures_are_scoped_per_symbol_and_timeframe(self) -> None:
+        """The same gap shape on a different symbol/timeframe is a different signature."""
+        bars = [
+            self._gap_bar(datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
+            self._gap_bar(datetime(2026, 1, 5, 9, 30, tzinfo=UTC)),
+        ]
+
+        with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+            live_signal_check.check_data_quality_and_alert(bars, "EURUSD", Timeframe.M5, "M5")
+
+        assert mock_alert.call_count == 2
+
+    def test_dedup_state_self_prunes_once_an_issue_is_no_longer_detected(self) -> None:
+        """A gap rolling out of the lookback window drops its signature.
+
+        Once no longer detected, an identical gap shape appearing again
+        later (extremely unlikely in practice, since exact timestamps are
+        part of the signature, but tested here for the mechanism itself) is
+        treated as new, not suppressed.
+        """
+        bars = [
+            self._gap_bar(datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
+            self._gap_bar(datetime(2026, 1, 5, 9, 30, tzinfo=UTC)),
+        ]
+        # Dynamically anchored to real "now" (unlike `bars` above) so
+        # check_stale() also finds this run's data fresh -- genuinely zero
+        # issues detected this run, not just zero NEW ones.
+        now = datetime.now(UTC)
+        fresh_bars = [_bar(now - timedelta(minutes=5 * i), 100.0, 100.5, 99.5, 100.0) for i in range(3, 0, -1)]
+
+        with patch("live_signal_check.send_data_quality_alert") as mock_alert:
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+            live_signal_check.check_data_quality_and_alert(fresh_bars, "USTEC", Timeframe.M5, "M5")
+            live_signal_check.check_data_quality_and_alert(bars, "USTEC", Timeframe.M5, "M5")
+
+        assert mock_alert.call_count == 2  # run 1 and run 3 both alert; run 2 had nothing to alert

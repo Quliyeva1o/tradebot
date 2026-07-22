@@ -74,9 +74,89 @@ class TestConnect:
     def test_returns_false_when_connector_fails(self) -> None:
         connector = Mock(spec=MT5Connector)
         connector.connect.return_value = False
+        broker = MT5Broker(connector, max_reconnect_attempts=1)
+
+        with patch("execution.mt5_broker.activate_kill_switch") as mock_kill_switch:
+            assert broker.connect() is False
+
+        mock_kill_switch.assert_called_once()
+
+
+class TestConnectReconnectWithBackoff:
+    """Tests for MT5Broker.connect()'s T4 (Sprint 6c) retry/backoff/kill-switch behavior.
+
+    time.sleep is always mocked -- these tests must not actually wait.
+    """
+
+    def test_succeeds_on_first_attempt_without_sleeping(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.connect.return_value = True
         broker = MT5Broker(connector)
 
-        assert broker.connect() is False
+        with patch("execution.mt5_broker.time.sleep") as mock_sleep:
+            assert broker.connect() is True
+
+        connector.connect.assert_called_once_with()
+        mock_sleep.assert_not_called()
+
+    def test_retries_with_exponential_backoff_then_succeeds(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.connect.side_effect = [False, False, True]
+        broker = MT5Broker(
+            connector, max_reconnect_attempts=5, initial_backoff_seconds=1.0, backoff_multiplier=2.0
+        )
+
+        with patch("execution.mt5_broker.time.sleep") as mock_sleep:
+            assert broker.connect() is True
+
+        assert connector.connect.call_count == 3
+        assert mock_sleep.call_args_list == [((1.0,),), ((2.0,),)]
+
+    def test_exhausting_all_attempts_activates_kill_switch_and_returns_false(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.connect.return_value = False
+        broker = MT5Broker(connector, max_reconnect_attempts=3, initial_backoff_seconds=0.1)
+
+        with (
+            patch("execution.mt5_broker.time.sleep") as mock_sleep,
+            patch("execution.mt5_broker.activate_kill_switch") as mock_kill_switch,
+        ):
+            result = broker.connect()
+
+        assert result is False
+        assert connector.connect.call_count == 3
+        assert mock_sleep.call_count == 2  # backoff between attempts, not after the last one
+        mock_kill_switch.assert_called_once()
+        reason = mock_kill_switch.call_args[0][0]
+        assert "3" in reason  # cites the attempt count in the kill-switch reason
+
+    def test_does_not_activate_kill_switch_when_a_retry_succeeds(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.connect.side_effect = [False, True]
+        broker = MT5Broker(connector)
+
+        with (
+            patch("execution.mt5_broker.time.sleep"),
+            patch("execution.mt5_broker.activate_kill_switch") as mock_kill_switch,
+        ):
+            assert broker.connect() is True
+
+        mock_kill_switch.assert_not_called()
+
+    def test_constructor_rejects_non_positive_max_reconnect_attempts(self) -> None:
+        with pytest.raises(ValueError, match="max_reconnect_attempts"):
+            MT5Broker(max_reconnect_attempts=0)
+
+    def test_constructor_rejects_non_positive_initial_backoff_seconds(self) -> None:
+        with pytest.raises(ValueError, match="initial_backoff_seconds"):
+            MT5Broker(initial_backoff_seconds=0.0)
+
+    def test_constructor_rejects_negative_backoff_multiplier(self) -> None:
+        with pytest.raises(ValueError, match="backoff_multiplier"):
+            MT5Broker(backoff_multiplier=-1.0)
+
+    def test_constructor_allows_zero_backoff_multiplier(self) -> None:
+        MT5Broker(backoff_multiplier=0.0)  # constant (non-growing) backoff is a valid choice
 
 
 class TestGetAccountInfo:
@@ -424,3 +504,86 @@ class TestGetOpenPositions:
         with patch("execution.mt5_broker.mt5.positions_get", return_value=None):
             with pytest.raises(RuntimeError, match="positions_get"):
                 broker.get_open_positions()
+
+
+class TestSlippageLogging:
+    """Tests for T2 (Sprint 6c): MT5Broker logs realized slippage on every fill."""
+
+    def test_place_order_logs_fill_with_pre_send_quote_as_intended(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1)
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch("execution.mt5_broker.mt5.symbol_info_tick", return_value=_tick(bid=100.0, ask=101.0)),
+            patch(
+                "execution.mt5_broker.mt5.order_send",
+                return_value=_order_send_result(order=555, price=101.3),
+            ),
+            patch("execution.mt5_broker.log_fill") as mock_log_fill,
+        ):
+            broker.place_order(order)
+
+        mock_log_fill.assert_called_once()
+        kwargs = mock_log_fill.call_args.kwargs
+        assert kwargs["broker"] == "MT5Broker"
+        assert kwargs["event"] == "open"
+        assert kwargs["order_id"] == "555"
+        assert kwargs["symbol"] == "USTEC"
+        assert kwargs["order_type"] == OrderType.BUY_MARKET
+        assert kwargs["intended_price"] == 101.0  # the pre-send ask quote
+        assert kwargs["actual_price"] == 101.3  # what MT5 actually reported
+
+    def test_place_order_does_not_log_a_fill_on_rejection(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1)
+        rejected = _order_send_result(retcode=10019)  # TRADE_RETCODE_NO_MONEY
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch("execution.mt5_broker.mt5.symbol_info_tick", return_value=_tick()),
+            patch("execution.mt5_broker.mt5.order_send", return_value=rejected),
+            patch("execution.mt5_broker.log_fill") as mock_log_fill,
+        ):
+            broker.place_order(order)
+
+        mock_log_fill.assert_not_called()
+
+    def test_close_position_logs_fill_with_pre_send_quote_as_intended(self) -> None:
+        broker = MT5Broker()
+
+        with (
+            patch(
+                "execution.mt5_broker.mt5.positions_get",
+                return_value=[_mt5_position(ticket=777, type_=0, volume=0.3)],
+            ),
+            patch("execution.mt5_broker.mt5.symbol_info_tick", return_value=_tick(bid=100.0, ask=101.0)),
+            patch(
+                "execution.mt5_broker.mt5.order_send",
+                return_value=_order_send_result(order=999, price=99.8),
+            ),
+            patch("execution.mt5_broker.log_fill") as mock_log_fill,
+        ):
+            broker.close_position("777")
+
+        mock_log_fill.assert_called_once()
+        kwargs = mock_log_fill.call_args.kwargs
+        assert kwargs["broker"] == "MT5Broker"
+        assert kwargs["event"] == "close"
+        assert kwargs["order_type"] == OrderType.SELL_MARKET  # closes a BUY position by selling
+        assert kwargs["intended_price"] == 100.0  # the pre-send bid quote
+        assert kwargs["actual_price"] == 99.8
+
+    def test_close_position_does_not_log_a_fill_on_rejection(self) -> None:
+        broker = MT5Broker()
+        rejected = _order_send_result(retcode=10025)  # TRADE_RETCODE_NO_CHANGES
+
+        with (
+            patch("execution.mt5_broker.mt5.positions_get", return_value=[_mt5_position()]),
+            patch("execution.mt5_broker.mt5.symbol_info_tick", return_value=_tick()),
+            patch("execution.mt5_broker.mt5.order_send", return_value=rejected),
+            patch("execution.mt5_broker.log_fill") as mock_log_fill,
+        ):
+            broker.close_position("777")
+
+        mock_log_fill.assert_not_called()

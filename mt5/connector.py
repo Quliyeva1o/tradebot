@@ -127,7 +127,10 @@ class MT5Connector:
         wrongly trigger the kill-switch.
 
         Returns:
-            An AccountInfo snapshot of the connected account.
+            An AccountInfo snapshot of the connected account, including MT5's
+            own trade_mode (0=demo/1=contest/2=real) -- see
+            run_live_demo.py's demo-account safety rail, the only current
+            reader of this field.
 
         Raises:
             RuntimeError: If mt5.account_info() returns None (not connected,
@@ -144,4 +147,5 @@ class MT5Connector:
             free_margin=info.margin_free,
             margin_level=info.margin_level,
             currency=info.currency,
+            trade_mode=info.trade_mode,
         )

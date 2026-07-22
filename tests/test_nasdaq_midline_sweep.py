@@ -204,6 +204,110 @@ class TestOneTradePerDay:
         assert strategy.diagnostics.rejections[RejectionReason.ZONE_NOT_READY] >= 1
 
 
+class TestRecordTradeTaken:
+    """Sprint 8: evaluate()'s record_trade_taken parameter and mark_trade_taken().
+
+    Fixes a bug where check_signal()'s replay mechanism (live_signal_check.py)
+    -- which calls evaluate() on historical bars solely to rebuild daily
+    state, discarding whatever setup a replay bar's evaluation returns --
+    would still let that discarded setup mark _trade_taken=True as a side
+    effect. If the live "final bar" evaluation that would have reported
+    that signal was ever skipped (e.g. a missed scheduler cycle), the day's
+    one-trade allowance was permanently and silently consumed anyway,
+    blocking a later, genuinely new and unrelated signal that same day.
+    """
+
+    def test_record_trade_taken_false_still_returns_the_setup(self) -> None:
+        """A replay-mode call still generates a real setup.
+
+        State-building and setup detection are unaffected -- only the
+        trade_taken side effect is suppressed.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+
+        breakout_bar = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        state.append_bar(breakout_bar)
+        setup = strategy.evaluate(state, record_trade_taken=False)
+
+        assert setup is not None
+        assert setup.direction == SignalDirection.BUY
+
+    def test_record_trade_taken_false_does_not_set_the_flag(self) -> None:
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+
+        breakout_bar = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        state.append_bar(breakout_bar)
+        strategy.evaluate(state, record_trade_taken=False)
+
+        assert strategy._trade_taken is False
+
+    def test_a_missed_replay_signal_does_not_block_a_later_genuine_signal_same_day(self) -> None:
+        """The core regression scenario.
+
+        A setup found ONLY during a replay pass must not consume the day's
+        one-trade guard -- a later, independently-qualifying bar (evaluated
+        normally, i.e. the "live final bar") must still be able to fire.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+
+        missed_breakout = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        state.append_bar(missed_breakout)
+        missed_setup = strategy.evaluate(state, record_trade_taken=False)
+        assert missed_setup is not None  # confirms it WOULD have been a valid signal
+        assert strategy._trade_taken is False
+
+        # A later bar, evaluated normally (the "live final bar" for a
+        # subsequent run), independently qualifies as its own fresh setup.
+        later_breakout = _bar(10, 5, 105.0, 112.5, 108.0, 112.0)
+        setup = _feed(state, strategy, later_breakout)
+
+        assert setup is not None
+        assert setup.direction == SignalDirection.BUY
+
+    def test_mark_trade_taken_blocks_further_signals_for_the_rest_of_the_day(self) -> None:
+        """A real confirmed trade must still block the rest of the day.
+
+        Once confirmed taken (the explicit method, not evaluate()'s
+        automatic side effect), it must still correctly block further
+        evaluation for the rest of the day -- Rule 2's CHECK is unaffected
+        by record_trade_taken.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+        assert strategy._trade_taken is False
+
+        strategy.mark_trade_taken()
+
+        another_sweep = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        result = _feed(state, strategy, another_sweep)
+
+        assert result is None
+        assert strategy.diagnostics.rejections[RejectionReason.TRADE_ALREADY_TAKEN] == 1
+
+    def test_default_evaluate_call_matches_old_unconditional_behavior(self) -> None:
+        """No record_trade_taken kwarg at all must behave exactly as before.
+
+        Every existing caller (backtest's StrategyEngine.run(), direct unit
+        tests, a live final-bar evaluation) still sets the flag automatically.
+        """
+        state = _new_state()
+        strategy = NasdaqMidlineSweepStrategy(sma_period=5, session_timezone="UTC")
+        _feed_build_session(state, strategy)
+
+        breakout_bar = _bar(10, 0, 105.0, 112.5, 108.0, 112.0)
+        setup = _feed(state, strategy, breakout_bar)
+
+        assert setup is not None
+        assert strategy._trade_taken is True
+
+
 class TestDiagnosticsAndConfig:
     """Diagnostics bookkeeping and config-overlay wiring."""
 
