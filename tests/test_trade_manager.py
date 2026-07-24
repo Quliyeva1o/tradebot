@@ -335,6 +335,122 @@ class TestCloseTrade:
         assert manager.close_trade() is TradeManagerAction.HELD
 
 
+class TestCloseFailure:
+    """A broker-declined close_position() must not be reported as a successful close.
+
+    Uses a bare Mock() broker (not PaperBroker, which always succeeds on
+    close_position() once a position exists -- see execution/paper_broker.py)
+    so close_position() can be made to return a failing OrderResult, exactly
+    as real MT5Broker.close_position() does on a declined close (market
+    closed, trading disabled, requote, connection hiccup, ...).
+    """
+
+    def _opened_manager(self, broker: Mock) -> TradeManager:
+        broker.place_order.return_value = Mock(
+            success=True,
+            order_id="pos-1",
+            position_id="pos-1",
+            price=29_000.0,
+            volume=0.1,
+            retcode=10009,
+            comment="",
+        )
+        manager = TradeManager()
+        manager.open_trade(_setup(stop_loss=28_900.0, take_profit=29_200.0), broker)
+        return manager
+
+    def test_failed_close_returns_close_failed_not_a_closed_action(self) -> None:
+        broker = Mock()
+        manager = self._opened_manager(broker)
+        broker.close_position.return_value = Mock(
+            success=False, retcode=10018, comment="Market closed", order_id="", position_id="pos-1"
+        )
+
+        action = manager.on_new_bar(_price_bar(low=28_850.0, high=28_950.0))  # SL hit
+
+        assert action is TradeManagerAction.CLOSE_FAILED
+
+    def test_failed_close_keeps_the_trade_tracked(self) -> None:
+        broker = Mock()
+        manager = self._opened_manager(broker)
+        broker.close_position.return_value = Mock(
+            success=False, retcode=10018, comment="Market closed", order_id="", position_id="pos-1"
+        )
+
+        manager.on_new_bar(_price_bar(low=28_850.0, high=28_950.0))  # SL hit
+
+        assert manager.has_open_trade is True
+        assert manager._position_id == "pos-1"
+        assert manager._stop_loss == pytest.approx(28_900.0)
+        assert manager._take_profit == pytest.approx(29_200.0)
+
+    def test_failed_close_result_is_recoverable_via_last_close_result(self) -> None:
+        broker = Mock()
+        manager = self._opened_manager(broker)
+        broker.close_position.return_value = Mock(
+            success=False, retcode=10018, comment="Market closed", order_id="", position_id="pos-1"
+        )
+
+        manager.on_new_bar(_price_bar(low=28_850.0, high=28_950.0))  # SL hit
+
+        assert manager.last_close_result is not None
+        assert manager.last_close_result.success is False
+        assert manager.last_close_result.comment == "Market closed"
+        assert manager.last_close_result.retcode == 10018
+
+    def test_manual_close_failure_also_returns_close_failed_and_keeps_tracking(self) -> None:
+        broker = Mock()
+        manager = self._opened_manager(broker)
+        broker.close_position.return_value = Mock(
+            success=False, retcode=10004, comment="Trade disabled", order_id="", position_id="pos-1"
+        )
+
+        action = manager.close_trade()
+
+        assert action is TradeManagerAction.CLOSE_FAILED
+        assert manager.has_open_trade is True
+
+    def test_retry_after_a_failed_close_succeeds_and_clears_tracked_state(self) -> None:
+        """Proves the retry path.
+
+        A second on_new_bar() call on the SAME tracked trade re-attempts the
+        close, and a subsequent broker success is reported and clears state
+        normally -- nothing about the trade was silently dropped by the
+        earlier failure.
+        """
+        broker = Mock()
+        manager = self._opened_manager(broker)
+        broker.close_position.side_effect = [
+            Mock(success=False, retcode=10018, comment="Market closed", order_id="", position_id="pos-1"),
+            Mock(
+                success=True,
+                retcode=10009,
+                comment="",
+                order_id="c1",
+                position_id="pos-1",
+                price=28_900.0,
+                volume=0.1,
+            ),
+        ]
+
+        first = manager.on_new_bar(_price_bar(low=28_850.0, high=28_950.0))
+        assert first is TradeManagerAction.CLOSE_FAILED
+        # Captured into locals (rather than re-asserting the same
+        # manager.has_open_trade property expression with opposite literal
+        # values around the intervening on_new_bar() call) -- mypy's
+        # narrowing otherwise treats the property as still Literal[True]
+        # after the second call, making the final assert "unreachable".
+        has_open_trade_after_failure = manager.has_open_trade
+        assert has_open_trade_after_failure is True
+
+        second = manager.on_new_bar(_price_bar(low=28_850.0, high=28_950.0))
+
+        assert second is TradeManagerAction.CLOSED_SL
+        has_open_trade_after_retry = manager.has_open_trade
+        assert has_open_trade_after_retry is False
+        assert broker.close_position.call_count == 2
+
+
 class TestOpenTradeRejection:
     """A broker-rejected entry must not be tracked as an open trade."""
 

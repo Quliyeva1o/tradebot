@@ -17,22 +17,32 @@ from utils.logging import setup_logger
 
 logger = setup_logger("mt5_broker")
 
-# MT5's order-comment field is rejected by order_send() (retcode None,
-# error (-2, 'Invalid "comment" argument')) once it exceeds 31 characters --
-# a hard limit of the MqlTradeRequest.comment field, not configurable per
-# broker. TradeManager.open_trade() passes the full TradeSetup.setup_id as
-# the comment (e.g. "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_
+# MT5's order-comment field is rejected by order_send()/order_check()
+# (retcode None, error (-2, 'Invalid "comment" argument')) past a hard
+# length limit. This is NOT the commonly-cited 31 characters -- a first fix
+# assumed 31 and still lost two real trades to this exact error, because 31
+# itself is already past the real cutoff. Empirically confirmed against the
+# real demo account via mt5.order_check() (validate-only, no order placed;
+# MetaTrader5 package 5.0.5735, USTEC, 2026-07-24): a 29-character comment is
+# accepted (retcode 10017 "Trade disabled" -- a business decline, proving
+# the comment itself passed validation); a 30-character comment reproduces
+# the exact same "(-2, 'Invalid "comment" argument')" order_check()/
+# order_send() failure as the production crash logs. 29 is therefore used
+# here as the confirmed-safe maximum, not another guess.
+#
+# TradeManager.open_trade() passes the full TradeSetup.setup_id as the
+# comment (e.g. "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_
 # 143000_000000", 65 chars), which is always over this limit, so every real
 # order placed through MT5Broker failed before order_send() could even
 # evaluate the rest of the request. The full setup_id remains traceable
 # without it: run_live_demo.py logs setup_id alongside the resulting
 # order_id to trade_events.log, and log_fill() below logs that same
 # order_id to execution_events.log, so the two logs join on order_id.
-_MT5_COMMENT_MAX_LENGTH = 31
+_MT5_COMMENT_MAX_LENGTH = 29
 
 
 def _mt5_comment(comment: str) -> str:
-    """Shrinks `comment` to fit MT5's order-comment length limit.
+    """Shrinks `comment` to fit MT5's order-comment length limit (see constant above).
 
     Short comments pass through untouched. Longer ones are shortened to a
     readable prefix plus a short content hash (rather than a plain

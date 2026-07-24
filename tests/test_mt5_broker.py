@@ -325,45 +325,69 @@ class TestPlaceOrder:
 
 
 class TestMt5CommentHelper:
-    """Tests for _mt5_comment() (MT5's 31-char order-comment length limit)."""
+    """Tests for _mt5_comment() (MT5's order-comment length limit).
+
+    _MT5_COMMENT_MAX_LENGTH is 29, not the previously-assumed 31: that first
+    fix still lost two real trades to the identical "(-2, 'Invalid comment
+    argument')" order_send() failure, because 31 characters is itself past
+    the real cutoff. 29 was empirically confirmed via mt5.order_check()
+    (validate-only, no order placed) against the real demo account: a
+    29-character comment is accepted (order_check reaches a business
+    retcode, e.g. 10017 "Trade disabled", never the comment error); a
+    30-character comment reproduces the exact production failure. See
+    execution/mt5_broker.py's _MT5_COMMENT_MAX_LENGTH comment for the full
+    detail of that probe.
+    """
 
     def test_short_comment_passes_through_unchanged(self) -> None:
         assert _mt5_comment("short-id") == "short-id"
 
     def test_exactly_max_length_passes_through_unchanged(self) -> None:
-        comment = "a" * 31
+        comment = "a" * 29
         assert _mt5_comment(comment) == comment
 
     def test_over_max_length_is_shortened_with_hash_suffix(self) -> None:
         comment = "a" * 40
         result = _mt5_comment(comment)
 
-        assert len(result) == 31
-        assert result.startswith("a" * 22 + "_")
+        assert len(result) == 29
+        assert result.startswith("a" * 20 + "_")
 
     def test_shared_prefix_does_not_collide_after_shortening(self) -> None:
         base = "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_"
         comment_a = _mt5_comment(base + "143000_000000")
         comment_b = _mt5_comment(base + "143500_000001")
 
-        assert len(comment_a) <= 31
-        assert len(comment_b) <= 31
+        assert len(comment_a) <= 29
+        assert len(comment_b) <= 29
         assert comment_a != comment_b
 
 
 class TestPlaceOrderCommentLength:
-    """Tests for T?: place_order() must shorten OrderRequest.comment to fit MT5's limit.
+    """Tests for place_order() shortening OrderRequest.comment to fit MT5's real limit.
 
     Regression coverage for the bug where TradeManager.open_trade() passes the
     full TradeSetup.setup_id (commonly 60+ chars, e.g.
     "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_143000_000000") as
     OrderRequest.comment, which MT5's order_send() rejects outright
     (returns None, error (-2, 'Invalid "comment" argument')) once it exceeds
-    31 characters -- meaning every real order ever attempted through
-    MT5Broker failed before reaching any other validation.
+    29 characters (see _MT5_COMMENT_MAX_LENGTH) -- meaning every real order
+    ever attempted through MT5Broker failed before reaching any other
+    validation. A first fix (previous sprint) assumed the limit was 31 and
+    shortened comments to exactly 31 chars; that value is ALSO past the real
+    cutoff, so two more real signals crashed with the identical error even
+    with that fix deployed. The setup_ids below are the literal comments
+    from those two crash logs.
     """
 
     _LONG_SETUP_ID = "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_143000_000000"
+
+    # The exact two setup_ids from the crash logs that reproduced the bug a
+    # second time, with the (wrong) 31-char fix already deployed.
+    _REAL_CRASHED_SETUP_IDS = (
+        "setup_midline_sweep_USTEC_M5_BUY_2ff1f7a8_20260724_150500_000000",
+        "setup_midline_sweep_USTEC_M5_SELL_7619658f_20260724_154000_000000",
+    )
 
     def test_long_comment_sent_to_order_send_fits_mt5s_limit(self) -> None:
         broker = MT5Broker()
@@ -374,7 +398,7 @@ class TestPlaceOrderCommentLength:
             price=100.0,
             comment=self._LONG_SETUP_ID,
         )
-        assert len(self._LONG_SETUP_ID) > 31  # the bug only reproduces past MT5's limit
+        assert len(self._LONG_SETUP_ID) > 29  # the bug only reproduces past MT5's real limit
 
         with (
             patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
@@ -385,7 +409,45 @@ class TestPlaceOrderCommentLength:
             broker.place_order(order)
 
         sent_comment = mock_send.call_args[0][0]["comment"]
-        assert len(sent_comment) <= 31
+        assert len(sent_comment) <= 29
+
+    def test_real_crashed_setup_ids_fit_the_real_confirmed_limit_end_to_end(self) -> None:
+        """Traces the two ACTUAL crashed setup_ids through the real place_order() path.
+
+        Construct OrderRequest -> place_order() -> the dict handed to
+        mt5.order_send() -- not _mt5_comment() called directly -- since that
+        is the exact path that broke in production even after the first
+        (31-char) fix was deployed, so it's the path that must be proven
+        fixed. Independently confirmed against the real demo account via
+        mt5.order_check() (see this task's investigation) that a 29-char
+        comment is accepted and a 30-char one reproduces the exact crash;
+        this test locks in that both real crashed comments now land at <= 29
+        chars through this exact code path.
+        """
+        broker = MT5Broker()
+
+        for setup_id in self._REAL_CRASHED_SETUP_IDS:
+            order = OrderRequest(
+                symbol="USTEC",
+                order_type=OrderType.BUY_MARKET,
+                volume=0.1,
+                price=100.0,
+                comment=setup_id,
+            )
+
+            with (
+                patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+                patch(
+                    "execution.mt5_broker.mt5.order_send", return_value=_order_send_result()
+                ) as mock_send,
+            ):
+                broker.place_order(order)
+
+            sent_comment = mock_send.call_args[0][0]["comment"]
+            assert len(sent_comment) <= 29, (
+                f"setup_id {setup_id!r} produced a comment of length "
+                f"{len(sent_comment)} ({sent_comment!r}), still over MT5's real limit"
+            )
 
     def test_short_comment_sent_unchanged(self) -> None:
         broker = MT5Broker()

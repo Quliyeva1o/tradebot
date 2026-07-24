@@ -9,9 +9,11 @@ run_live_demo._attach_to_open_position()) actually works across runs, not
 just within one.
 """
 
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -21,7 +23,8 @@ import live_signal_check
 import risk.daily_risk_tracker as daily_risk_tracker_module
 import risk.kill_switch as kill_switch_module
 import run_live_demo
-from core.models import AccountInfo, Bar, SignalDirection, Timeframe
+from core.models import AccountInfo, Bar, OrderType, SignalDirection, Timeframe
+from execution.models import Position
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
 from mt5.connector import MT5Connector
@@ -497,9 +500,6 @@ class TestAttachToOpenPosition:
     """Unit tests for the state-continuity rehydration helper itself."""
 
     def test_rehydrates_all_tracked_fields_from_a_position(self) -> None:
-        from core.models import OrderType
-        from execution.models import Position
-
         broker = Mock()
         position = Position(
             id="pos-1",
@@ -527,9 +527,6 @@ class TestUnmanageablePosition:
     """A position lacking SL/TP is logged and skipped, never crashes the tick."""
 
     def test_position_missing_sl_or_tp_is_skipped_not_crashed(self) -> None:
-        from core.models import OrderType
-        from execution.models import Position
-
         connector = _fake_connector([[_neutral_bar()]])
         broker = Mock()
         broker.get_open_positions.return_value = [
@@ -559,3 +556,137 @@ class TestUnmanageablePosition:
 
         broker.close_position.assert_not_called()
         assert trade_manager.has_open_trade is False
+
+
+class TestManageOpenTradeCloseFailure:
+    """Tests for _manage_open_trade()'s handling of a declined close.
+
+    A broker-declined close must produce a distinct, loud log line and
+    trade_events.log event ("close_failed") instead of the misleading
+    "closed" event/log line -- and must not stop the position from being
+    retried on a later tick.
+    """
+
+    def _position(self, **overrides: object) -> Position:
+        defaults: dict[str, object] = {
+            "id": "pos-1",
+            "symbol": "USTEC",
+            "order_type": OrderType.BUY_MARKET,
+            "volume": 0.1,
+            "open_price": 100.0,
+            "current_price": 95.0,
+            "stop_loss": 90.0,
+            "take_profit": 156.0,
+        }
+        defaults.update(overrides)
+        return Position(**defaults)  # type: ignore[arg-type]
+
+    def _failing_close_result(self) -> Mock:
+        return Mock(
+            success=False, retcode=10018, comment="Market closed", order_id="", position_id="pos-1"
+        )
+
+    def test_failed_close_logs_a_distinct_failed_to_close_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        broker = Mock()
+        broker.close_position.return_value = self._failing_close_result()
+        trade_manager = TradeManager()
+        position = self._position()
+        final_bar = _price_bar(low=85.0, high=95.0)  # low <= stop_loss (90.0)
+
+        with caplog.at_level(logging.ERROR, logger="run_live_demo"):
+            run_live_demo._manage_open_trade(trade_manager, broker, position, final_bar)
+
+        assert "FAILED TO CLOSE" in caplog.text
+        assert "Market closed" in caplog.text
+
+    def test_failed_close_emits_a_close_failed_trade_event_not_closed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        broker = Mock()
+        broker.close_position.return_value = self._failing_close_result()
+        trade_manager = TradeManager()
+        position = self._position()
+        final_bar = _price_bar(low=85.0, high=95.0)
+
+        with caplog.at_level(logging.INFO, logger="trade_events"):
+            run_live_demo._manage_open_trade(trade_manager, broker, position, final_bar)
+
+        events = [r for r in caplog.records if r.name == "trade_events"]
+        assert len(events) == 1
+        payload = cast("dict[str, object]", events[0].msg)
+        assert payload["event_type"] == "close_failed"
+        assert payload["symbol"] == "USTEC"
+        assert payload["position_id"] == "pos-1"
+        assert payload["reason"] == "Market closed"
+        assert payload["retcode"] == 10018
+
+    def test_failed_close_leaves_trade_manager_still_tracking_the_position(self) -> None:
+        broker = Mock()
+        broker.close_position.return_value = self._failing_close_result()
+        trade_manager = TradeManager()
+        position = self._position()
+        final_bar = _price_bar(low=85.0, high=95.0)
+
+        run_live_demo._manage_open_trade(trade_manager, broker, position, final_bar)
+
+        assert trade_manager.has_open_trade is True
+        assert trade_manager._position_id == "pos-1"
+
+    def test_next_tick_retries_the_close_against_the_still_open_position(self) -> None:
+        """Confirms the failed close is retried, not silently dropped, on the next tick.
+
+        After a failed close, the position is still open on the broker (a
+        rejected close changes nothing broker-side), so the next run_once()
+        tick's get_open_positions() reconciliation re-finds it and retries
+        the close -- the same state-continuity design
+        TestTradeHoldsAcrossRuns/TestTradeClosesOnSL rely on for the happy
+        path.
+        """
+        connector = Mock(spec=MT5Connector)
+        connector.fetch_recent_bars.return_value = [_price_bar(low=85.0, high=95.0)]
+        broker = Mock()
+        broker.get_open_positions.return_value = [self._position()]
+        broker.close_position.side_effect = [
+            self._failing_close_result(),
+            Mock(
+                success=True,
+                retcode=10009,
+                comment="",
+                order_id="c1",
+                position_id="pos-1",
+                price=90.0,
+                volume=0.1,
+            ),
+        ]
+
+        first_trade_manager = TradeManager()
+        run_live_demo.run_once(
+            connector=connector,
+            broker=broker,
+            trade_manager=first_trade_manager,
+            strategy=_strategy(),
+            symbol="USTEC",
+            timeframe=Timeframe.M5,
+            timeframe_str="M5",
+            lookback_bars=1000,
+        )
+
+        assert first_trade_manager.has_open_trade is True
+        assert broker.close_position.call_count == 1
+
+        second_trade_manager = TradeManager()
+        run_live_demo.run_once(
+            connector=connector,
+            broker=broker,
+            trade_manager=second_trade_manager,
+            strategy=_strategy(),
+            symbol="USTEC",
+            timeframe=Timeframe.M5,
+            timeframe_str="M5",
+            lookback_bars=1000,
+        )
+
+        assert broker.close_position.call_count == 2
+        assert second_trade_manager.has_open_trade is False

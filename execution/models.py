@@ -81,13 +81,16 @@ class TradeManagerAction(Enum):
     Mirrors backtest/models.py's TradeResult (WIN/LOSS/EXPIRED): a small,
     string-valued, closed-set outcome enum with no attached data -- callers
     that need details (fill price, P&L) read them off the Order/OrderResult
-    returned separately.
+    returned separately. CLOSE_FAILED follows the same convention: the
+    declined OrderResult itself lives on TradeManager.last_close_result, not
+    on this enum member.
     """
 
     HELD = "HELD"
     CLOSED_SL = "CLOSED_SL"
     CLOSED_TP = "CLOSED_TP"
     CLOSED_MANUAL = "CLOSED_MANUAL"
+    CLOSE_FAILED = "CLOSE_FAILED"
 
 
 @dataclass(frozen=True)

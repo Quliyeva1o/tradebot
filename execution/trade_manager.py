@@ -18,7 +18,7 @@ implementations).
 from core.models import Bar, OrderType, SignalDirection
 from core.validation import require_positive
 from execution.interfaces import IBroker
-from execution.models import OrderRequest, TradeManagerAction
+from execution.models import OrderRequest, OrderResult, TradeManagerAction
 from execution.order import Order
 from execution.stop_engine import FixedStopEngine, StopEngine
 from execution.take_profit_engine import FixedTakeProfitEngine, TakeProfitEngine
@@ -53,6 +53,7 @@ class TradeManager:
         self._stop_loss: float | None = None
         self._take_profit: float | None = None
         self.current_order: Order | None = None
+        self.last_close_result: OrderResult | None = None
 
     @property
     def has_open_trade(self) -> bool:
@@ -158,10 +159,15 @@ class TradeManager:
 
         Returns:
             TradeManagerAction.HELD if neither level was hit (or nothing is
-            open), CLOSED_SL/CLOSED_TP if the trade was closed this bar. If
-            both levels are touched within the same bar, SL takes
-            precedence -- mirrors BacktestEngine.run()'s same-candle SL/TP
-            conflict resolution (conservatively assume SL hit first).
+            open). CLOSED_SL/CLOSED_TP if a level was hit and
+            broker.close_position() confirmed the close. CLOSE_FAILED if a
+            level was hit but the broker declined the close (see
+            last_close_result for why) -- the trade is left tracked, so the
+            next on_new_bar() call re-checks the same levels and retries the
+            close against the still-open position. If both levels are
+            touched within the same bar, SL takes precedence -- mirrors
+            BacktestEngine.run()'s same-candle SL/TP conflict resolution
+            (conservatively assume SL hit first).
         """
         if not self.has_open_trade:
             return TradeManagerAction.HELD
@@ -177,8 +183,10 @@ class TradeManager:
         """Manually closes the currently tracked open trade, if any.
 
         Returns:
-            TradeManagerAction.CLOSED_MANUAL if a trade was open and closed,
-            HELD if there was nothing open to close.
+            TradeManagerAction.CLOSED_MANUAL if a trade was open and the
+            broker confirmed the close. HELD if there was nothing open to
+            close. CLOSE_FAILED if the broker declined the close -- the
+            trade is left tracked, so calling close_trade() again retries.
         """
         if not self.has_open_trade:
             return TradeManagerAction.HELD
@@ -196,8 +204,41 @@ class TradeManager:
         return sl_hit, tp_hit
 
     def _close(self, action: TradeManagerAction) -> TradeManagerAction:
+        """Attempts the broker close, applying `action` only if the broker confirms it.
+
+        A real close can be declined by MT5 (market closed, trading
+        disabled, requote, a dropped connection, ...) exactly like a real
+        open can -- see open_trade()'s own `if not result.success` handling,
+        which this mirrors. Unconditionally reporting `action` regardless of
+        the broker's response would tell the caller (and, transitively,
+        trade_events.log) that a position was closed when it might still be
+        open and unmanaged.
+
+        Args:
+            action: The CLOSED_* outcome to report if the broker confirms
+                the close.
+
+        Returns:
+            `action` on a confirmed close (tracked state is cleared).
+            TradeManagerAction.CLOSE_FAILED if the broker declines it --
+            tracked state is deliberately left untouched (see
+            last_close_result for the declined OrderResult) so the next
+            on_new_bar()/close_trade() call retries against the same
+            still-open position.
+        """
         assert self._broker is not None and self._position_id is not None
-        self._broker.close_position(self._position_id)
+        result = self._broker.close_position(self._position_id)
+        self.last_close_result = result
+        if not result.success:
+            logger.error(
+                "close_position failed for position %s (retcode=%s comment=%s); "
+                "leaving the trade tracked so the next tick retries.",
+                self._position_id,
+                result.retcode,
+                result.comment,
+            )
+            return TradeManagerAction.CLOSE_FAILED
+
         self._broker = None
         self._position_id = None
         self._direction = None

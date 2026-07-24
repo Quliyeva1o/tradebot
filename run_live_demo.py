@@ -212,6 +212,12 @@ def _manage_open_trade(
 ) -> None:
     """Checks an already-open position's SL/TP against the latest bar and closes if hit.
 
+    A hit level does not always mean the position ends this tick: TradeManager
+    reports TradeManagerAction.CLOSE_FAILED (not CLOSED_SL/CLOSED_TP) when the
+    broker declines the close, in which case the position is still open and
+    is picked up again -- and another close retried -- on the next tick's
+    broker.get_open_positions() reconciliation.
+
     Args:
         trade_manager: A freshly constructed TradeManager to attach to
             `position` (see _attach_to_open_position()).
@@ -235,6 +241,21 @@ def _manage_open_trade(
     if action is TradeManagerAction.HELD:
         logger.info("Trade %s for %s held (price within SL/TP).", position.id, symbol)
         _log_trade_event("held", symbol=symbol, position_id=position.id)
+    elif action is TradeManagerAction.CLOSE_FAILED:
+        close_result = trade_manager.last_close_result
+        reason = close_result.comment if close_result is not None else "unknown"
+        retcode = close_result.retcode if close_result is not None else None
+        logger.error(
+            "Trade %s for %s FAILED TO CLOSE: %s (retcode=%s) -- position remains open, "
+            "will retry next tick.",
+            position.id,
+            symbol,
+            reason,
+            retcode,
+        )
+        _log_trade_event(
+            "close_failed", symbol=symbol, position_id=position.id, reason=reason, retcode=retcode
+        )
     else:
         logger.info("Trade %s for %s closed: %s", position.id, symbol, action.value)
         _log_trade_event("closed", symbol=symbol, position_id=position.id, outcome=action.value)
