@@ -13,7 +13,7 @@ import pytest
 
 from core.models import AccountInfo, OrderType
 from execution.models import OrderRequest, OrderResult, Position
-from execution.mt5_broker import MT5Broker
+from execution.mt5_broker import MT5Broker, _mt5_comment
 from mt5.connector import MT5Connector
 
 
@@ -322,6 +322,112 @@ class TestPlaceOrder:
         assert result.success is False
         assert result.retcode == 10019
         assert result.comment == "No money"
+
+
+class TestMt5CommentHelper:
+    """Tests for _mt5_comment() (MT5's 31-char order-comment length limit)."""
+
+    def test_short_comment_passes_through_unchanged(self) -> None:
+        assert _mt5_comment("short-id") == "short-id"
+
+    def test_exactly_max_length_passes_through_unchanged(self) -> None:
+        comment = "a" * 31
+        assert _mt5_comment(comment) == comment
+
+    def test_over_max_length_is_shortened_with_hash_suffix(self) -> None:
+        comment = "a" * 40
+        result = _mt5_comment(comment)
+
+        assert len(result) == 31
+        assert result.startswith("a" * 22 + "_")
+
+    def test_shared_prefix_does_not_collide_after_shortening(self) -> None:
+        base = "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_"
+        comment_a = _mt5_comment(base + "143000_000000")
+        comment_b = _mt5_comment(base + "143500_000001")
+
+        assert len(comment_a) <= 31
+        assert len(comment_b) <= 31
+        assert comment_a != comment_b
+
+
+class TestPlaceOrderCommentLength:
+    """Tests for T?: place_order() must shorten OrderRequest.comment to fit MT5's limit.
+
+    Regression coverage for the bug where TradeManager.open_trade() passes the
+    full TradeSetup.setup_id (commonly 60+ chars, e.g.
+    "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_143000_000000") as
+    OrderRequest.comment, which MT5's order_send() rejects outright
+    (returns None, error (-2, 'Invalid "comment" argument')) once it exceeds
+    31 characters -- meaning every real order ever attempted through
+    MT5Broker failed before reaching any other validation.
+    """
+
+    _LONG_SETUP_ID = "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_143000_000000"
+
+    def test_long_comment_sent_to_order_send_fits_mt5s_limit(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(
+            symbol="USTEC",
+            order_type=OrderType.BUY_MARKET,
+            volume=0.1,
+            price=100.0,
+            comment=self._LONG_SETUP_ID,
+        )
+        assert len(self._LONG_SETUP_ID) > 31  # the bug only reproduces past MT5's limit
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch(
+                "execution.mt5_broker.mt5.order_send", return_value=_order_send_result()
+            ) as mock_send,
+        ):
+            broker.place_order(order)
+
+        sent_comment = mock_send.call_args[0][0]["comment"]
+        assert len(sent_comment) <= 31
+
+    def test_short_comment_sent_unchanged(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(
+            symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1, price=100.0, comment="short-id"
+        )
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch(
+                "execution.mt5_broker.mt5.order_send", return_value=_order_send_result()
+            ) as mock_send,
+        ):
+            broker.place_order(order)
+
+        assert mock_send.call_args[0][0]["comment"] == "short-id"
+
+    def test_full_setup_id_remains_recoverable_on_the_order_request(self) -> None:
+        """Confirms OrderRequest.comment itself is never mutated.
+
+        Only the outgoing MT5 request dict's comment is shortened, so
+        run_live_demo.py's trade_events.log entries (which log
+        setup.setup_id directly, not order.comment) keep the full
+        identifier, joinable to execution_events.log via the shared
+        order_id that both logs record.
+        """
+        broker = MT5Broker()
+        order = OrderRequest(
+            symbol="USTEC",
+            order_type=OrderType.BUY_MARKET,
+            volume=0.1,
+            price=100.0,
+            comment=self._LONG_SETUP_ID,
+        )
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch("execution.mt5_broker.mt5.order_send", return_value=_order_send_result(order=555)),
+        ):
+            broker.place_order(order)
+
+        assert order.comment == self._LONG_SETUP_ID
 
 
 class TestCancelOrder:

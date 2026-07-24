@@ -1,5 +1,6 @@
 """MT5 implementation of the IBroker execution interface."""
 
+import hashlib
 import time
 from datetime import UTC, datetime
 
@@ -15,6 +16,43 @@ from risk.kill_switch import activate_kill_switch
 from utils.logging import setup_logger
 
 logger = setup_logger("mt5_broker")
+
+# MT5's order-comment field is rejected by order_send() (retcode None,
+# error (-2, 'Invalid "comment" argument')) once it exceeds 31 characters --
+# a hard limit of the MqlTradeRequest.comment field, not configurable per
+# broker. TradeManager.open_trade() passes the full TradeSetup.setup_id as
+# the comment (e.g. "setup_midline_sweep_USTEC_M5_SELL_0c30fdc3_20260724_
+# 143000_000000", 65 chars), which is always over this limit, so every real
+# order placed through MT5Broker failed before order_send() could even
+# evaluate the rest of the request. The full setup_id remains traceable
+# without it: run_live_demo.py logs setup_id alongside the resulting
+# order_id to trade_events.log, and log_fill() below logs that same
+# order_id to execution_events.log, so the two logs join on order_id.
+_MT5_COMMENT_MAX_LENGTH = 31
+
+
+def _mt5_comment(comment: str) -> str:
+    """Shrinks `comment` to fit MT5's order-comment length limit.
+
+    Short comments pass through untouched. Longer ones are shortened to a
+    readable prefix plus a short content hash (rather than a plain
+    truncation), so two long comments sharing the same prefix -- e.g. two
+    setup_ids from the same symbol/strategy/direction that only differ in
+    their trailing timestamp -- don't collide into the same MT5 comment.
+
+    Args:
+        comment: The caller-supplied comment (e.g. OrderRequest.comment).
+
+    Returns:
+        `comment` unchanged if it already fits; otherwise a truncated
+        prefix + "_" + 8-hex-char sha256 digest of the full string, sized
+        to fit within _MT5_COMMENT_MAX_LENGTH.
+    """
+    if len(comment) <= _MT5_COMMENT_MAX_LENGTH:
+        return comment
+    digest = hashlib.sha256(comment.encode()).hexdigest()[:8]
+    prefix_length = _MT5_COMMENT_MAX_LENGTH - len(digest) - 1
+    return f"{comment[:prefix_length]}_{digest}"
 
 _ORDER_TYPE_MAP: dict[OrderType, int] = {
     OrderType.BUY_MARKET: mt5.ORDER_TYPE_BUY,
@@ -192,7 +230,7 @@ class MT5Broker(IBroker):
         if order.take_profit is not None:
             request["tp"] = order.take_profit
         if order.comment:
-            request["comment"] = order.comment
+            request["comment"] = _mt5_comment(order.comment)
 
         result = mt5.order_send(request)
         if result is None:
