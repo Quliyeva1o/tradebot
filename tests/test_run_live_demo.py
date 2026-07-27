@@ -690,3 +690,77 @@ class TestManageOpenTradeCloseFailure:
 
         assert broker.close_position.call_count == 2
         assert second_trade_manager.has_open_trade is False
+
+
+class TestEvaluateForNewTradeOpenRejection:
+    """Tests for _evaluate_for_new_trade()'s handling of a declined open.
+
+    Regression coverage for the 2026-07-27T11:09:11Z SELL USTEC rejection:
+    trade_events.log recorded a "trade_open_rejected" event with only
+    symbol/setup_id/order_id -- no retcode/comment -- and neither
+    MT5Broker.place_order()'s nor TradeManager.open_trade()'s own
+    logger.error() calls (which DID capture the real reason) ever reached a
+    persisted log file, so the actual MT5 rejection reason (eventually
+    tracked down to retcode 10017, "Trade disabled") took real-account
+    archaeology to recover after the fact. Both the human-readable log line
+    and the structured event must now carry it directly.
+    """
+
+    def _rejecting_broker(self, retcode: int = 10017, comment: str = "Trade disabled") -> Mock:
+        broker = Mock()
+        broker.get_open_positions.return_value = []
+        broker.place_order.return_value = Mock(
+            success=False, retcode=retcode, comment=comment, order_id="0", position_id=""
+        )
+        return broker
+
+    def _signal_bars(self) -> list[Bar]:
+        return [*_build_session_bars(), _session_end_bar(), _breakout_bar()]
+
+    def test_rejected_open_logs_the_reason_and_retcode(self, caplog: pytest.LogCaptureFixture) -> None:
+        broker = self._rejecting_broker()
+        trade_manager = TradeManager(volume=0.1)
+
+        with caplog.at_level(logging.ERROR, logger="run_live_demo"):
+            run_live_demo._evaluate_for_new_trade(
+                trade_manager, broker, _strategy(), self._signal_bars(), "USTEC", Timeframe.M5
+            )
+
+        assert "REJECTED" in caplog.text
+        assert "Trade disabled" in caplog.text
+        assert "10017" in caplog.text
+
+    def test_rejected_open_emits_a_trade_open_rejected_event_with_reason_and_retcode(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        broker = self._rejecting_broker()
+        trade_manager = TradeManager(volume=0.1)
+
+        with caplog.at_level(logging.INFO, logger="trade_events"):
+            run_live_demo._evaluate_for_new_trade(
+                trade_manager, broker, _strategy(), self._signal_bars(), "USTEC", Timeframe.M5
+            )
+
+        events = [
+            r
+            for r in caplog.records
+            if r.name == "trade_events" and cast("dict[str, object]", r.msg)["event_type"] == "trade_open_rejected"
+        ]
+        assert len(events) == 1
+        payload = cast("dict[str, object]", events[0].msg)
+        assert payload["reason"] == "Trade disabled"
+        assert payload["retcode"] == 10017
+
+    def test_rejected_open_leaves_no_open_trade_and_records_last_open_result(self) -> None:
+        broker = self._rejecting_broker()
+        trade_manager = TradeManager(volume=0.1)
+
+        run_live_demo._evaluate_for_new_trade(
+            trade_manager, broker, _strategy(), self._signal_bars(), "USTEC", Timeframe.M5
+        )
+
+        assert trade_manager.has_open_trade is False
+        assert trade_manager.last_open_result is not None
+        assert trade_manager.last_open_result.success is False
+        assert trade_manager.last_open_result.retcode == 10017
+        assert trade_manager.last_open_result.comment == "Trade disabled"

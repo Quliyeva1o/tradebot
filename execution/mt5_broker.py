@@ -15,7 +15,15 @@ from mt5.connector import MT5Connector
 from risk.kill_switch import activate_kill_switch
 from utils.logging import setup_logger
 
-logger = setup_logger("mt5_broker")
+# log_to_file=True (previously the default False): place_order()'s existing
+# "Order rejected for %s: retcode=%s comment=%s" line below was already
+# capturing MT5's real rejection reason, but with no file handler it only
+# ever reached the console -- Task Scheduler runs discard that, so a real
+# rejection's retcode/comment (e.g. the 2026-07-27 SELL USTEC rejection,
+# eventually tracked down to retcode 10017 "Trade disabled") was
+# unrecoverable after the fact. This makes that already-correct log line
+# actually persist.
+logger = setup_logger("mt5_broker", log_to_file=True)
 
 # MT5's order-comment field is rejected by order_send()/order_check()
 # (retcode None, error (-2, 'Invalid "comment" argument')) past a hard
@@ -63,6 +71,54 @@ def _mt5_comment(comment: str) -> str:
     digest = hashlib.sha256(comment.encode()).hexdigest()[:8]
     prefix_length = _MT5_COMMENT_MAX_LENGTH - len(digest) - 1
     return f"{comment[:prefix_length]}_{digest}"
+
+
+# MQL5's SYMBOL_FILLING_MODE bitmask flags on symbol_info().filling_mode --
+# the Python MetaTrader5 package exposes the request-side ORDER_FILLING_*
+# enum (used below) but not these symbol-side bit names, so the bit values
+# are hardcoded here per MQL5's documented, stable numbering (SYMBOL_FILLING_
+# FOK=1, SYMBOL_FILLING_IOC=2; a newer SYMBOL_FILLING_BOC=4 bit exists on some
+# builds but has no ORDER_FILLING_BOC-requiring use here, so it's not checked).
+_SYMBOL_FILLING_FOK_BIT = 1
+_SYMBOL_FILLING_IOC_BIT = 2
+
+
+def _resolve_type_filling(symbol: str) -> int:
+    """Selects the ORDER_FILLING_* mode `symbol` actually supports.
+
+    Leaving order_send()'s type_filling unset lets the terminal fall back to
+    a default that may not be one this symbol's filling_mode bitmask actually
+    allows -- structurally the same failure shape as the comment-length bug
+    (order_send()/order_check() rejecting the whole request outright, here
+    with retcode 10030 "Unsupported filling mode" instead of the comment
+    error), and empirically confirmed as a real gap: USTEC's filling_mode
+    bitmask is 2 (IOC only, no FOK bit set), so an unset/FOK-defaulting
+    type_filling would reject every order once USTEC's trade_mode allows
+    trading again.
+
+    Args:
+        symbol: Trading instrument symbol.
+
+    Returns:
+        mt5.ORDER_FILLING_IOC if the symbol's filling_mode bitmask includes
+        the IOC bit (preferred for market orders -- immediate partial fills
+        allowed, unlike FOK's all-or-nothing). mt5.ORDER_FILLING_FOK if only
+        the FOK bit is set. mt5.ORDER_FILLING_RETURN if neither immediate-
+        execution bit is set (MT5's universal fallback, valid for any symbol).
+
+    Raises:
+        RuntimeError: If mt5.symbol_info(symbol) returns None.
+    """
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"mt5.symbol_info() returned None for {symbol}; cannot resolve filling mode.")
+
+    if info.filling_mode & _SYMBOL_FILLING_IOC_BIT:
+        return int(mt5.ORDER_FILLING_IOC)
+    if info.filling_mode & _SYMBOL_FILLING_FOK_BIT:
+        return int(mt5.ORDER_FILLING_FOK)
+    return int(mt5.ORDER_FILLING_RETURN)
+
 
 _ORDER_TYPE_MAP: dict[OrderType, int] = {
     OrderType.BUY_MARKET: mt5.ORDER_TYPE_BUY,
@@ -204,8 +260,9 @@ class MT5Broker(IBroker):
 
         Raises:
             RuntimeError: If the symbol cannot be selected, tick data is
-                unavailable for a market order needing a live price, or
-                mt5.order_send() returns None.
+                unavailable for a market order needing a live price,
+                symbol_info() is unavailable (see _resolve_type_filling()),
+                or mt5.order_send() returns None.
             ValueError: If order.order_type is a pending order type
                 (*_LIMIT/*_STOP) and order.price is not set.
         """
@@ -234,6 +291,7 @@ class MT5Broker(IBroker):
             "type": mt5_type,
             "price": price,
             "deviation": order.deviation,
+            "type_filling": _resolve_type_filling(order.symbol),
         }
         if order.stop_loss is not None:
             request["sl"] = order.stop_loss
@@ -335,6 +393,7 @@ class MT5Broker(IBroker):
             ValueError: If position_id is not a valid integer ticket.
             RuntimeError: If mt5.positions_get() returns None, no open
                 position exists for position_id, tick data is unavailable,
+                symbol_info() is unavailable (see _resolve_type_filling()),
                 or mt5.order_send() returns None.
         """
         try:
@@ -373,6 +432,7 @@ class MT5Broker(IBroker):
             "position": ticket,
             "price": price,
             "deviation": 10,
+            "type_filling": _resolve_type_filling(position.symbol),
         }
         result = mt5.order_send(request)
         if result is None:

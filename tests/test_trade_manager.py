@@ -463,3 +463,32 @@ class TestOpenTradeRejection:
 
         assert order.status is OrderStatus.REJECTED
         assert manager.has_open_trade is False
+
+    def test_rejected_entry_records_the_full_result_on_last_open_result(self) -> None:
+        """Regression coverage for the 2026-07-27 SELL USTEC rejection.
+
+        The venue's actual retcode/comment must be recoverable off the
+        TradeManager, not just logged to a console line that Task Scheduler
+        discards.
+        """
+        broker = Mock()
+        broker.place_order.return_value = Mock(
+            success=False, order_id="0", position_id="", retcode=10017, comment="Trade disabled"
+        )
+        manager = TradeManager()
+
+        manager.open_trade(_setup(), broker)
+
+        assert manager.last_open_result is not None
+        assert manager.last_open_result.success is False
+        assert manager.last_open_result.retcode == 10017
+        assert manager.last_open_result.comment == "Trade disabled"
+
+    def test_successful_entry_also_records_the_result_on_last_open_result(self) -> None:
+        broker = _broker(_fill_bar(29_000.0))
+        manager = TradeManager(volume=0.2)
+
+        manager.open_trade(_setup(), broker)
+
+        assert manager.last_open_result is not None
+        assert manager.last_open_result.success is True

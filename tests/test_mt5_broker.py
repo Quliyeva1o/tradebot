@@ -6,15 +6,36 @@ Mocking follows the same pattern as tests/test_mt5_connector.py: patch the
 MT5's return objects (only the attributes actually read are set).
 """
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import MetaTrader5 as mt5  # noqa: N813
 import pytest
 
 from core.models import AccountInfo, OrderType
 from execution.models import OrderRequest, OrderResult, Position
-from execution.mt5_broker import MT5Broker, _mt5_comment
+from execution.mt5_broker import MT5Broker, _mt5_comment, _resolve_type_filling
 from mt5.connector import MT5Connector
+
+
+@pytest.fixture(autouse=True)
+def _default_symbol_info() -> Iterator[None]:
+    """Patches mt5.symbol_info() to a sane default for every test in this file.
+
+    place_order()/close_position() now call it unconditionally (via
+    _resolve_type_filling()), so every existing test needs SOME symbol_info()
+    response to avoid a spurious RuntimeError. filling_mode=2 matches the
+    real USTEC symbol (IOC only) confirmed against the live demo account.
+    Tests that need a different filling_mode nest their own patch of
+    mt5.symbol_info around this one, which wins for the duration of their
+    `with` block.
+    """
+    with patch(
+        "execution.mt5_broker.mt5.symbol_info",
+        return_value=SimpleNamespace(filling_mode=2),
+    ):
+        yield
 
 
 def _order_send_result(
@@ -490,6 +511,123 @@ class TestPlaceOrderCommentLength:
             broker.place_order(order)
 
         assert order.comment == self._LONG_SETUP_ID
+
+
+class TestResolveTypeFilling:
+    """Tests for _resolve_type_filling() (MT5's per-symbol filling-mode bitmask).
+
+    Real risk, structurally identical to the comment-length bug: leaving
+    order_send()'s type_filling unset lets the terminal default to a mode a
+    symbol may not actually support, rejecting the whole request (retcode
+    10030, "Unsupported filling mode"). Confirmed against the real demo
+    account that USTEC's filling_mode bitmask is 2 (IOC only, no FOK bit).
+    """
+
+    def _symbol_info(self, filling_mode: int) -> SimpleNamespace:
+        return SimpleNamespace(filling_mode=filling_mode)
+
+    def test_ioc_only_bitmask_selects_ioc(self) -> None:
+
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(2)):
+            assert _resolve_type_filling("USTEC") == mt5.ORDER_FILLING_IOC
+
+    def test_real_ustec_filling_mode_selects_ioc(self) -> None:
+        """Locks in the specific real-world case.
+
+        The bitmask value (2) was empirically confirmed via
+        mt5.symbol_info("USTEC") against the real demo account.
+        """
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(2)):
+            assert _resolve_type_filling("USTEC") == mt5.ORDER_FILLING_IOC == 1
+
+    def test_fok_only_bitmask_selects_fok(self) -> None:
+
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(1)):
+            assert _resolve_type_filling("EURUSD") == mt5.ORDER_FILLING_FOK
+
+    def test_both_fok_and_ioc_supported_prefers_ioc(self) -> None:
+
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(3)):
+            assert _resolve_type_filling("SOMESYMBOL") == mt5.ORDER_FILLING_IOC
+
+    def test_neither_fok_nor_ioc_bit_set_falls_back_to_return(self) -> None:
+
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(0)):
+            assert _resolve_type_filling("SOMESYMBOL") == mt5.ORDER_FILLING_RETURN
+
+    def test_boc_only_bit_falls_back_to_return(self) -> None:
+        """A symbol advertising only BOC (bit 4) support must not be misread as FOK/IOC.
+
+        BOC is a newer filling mode this codebase doesn't request.
+        """
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=self._symbol_info(4)):
+            assert _resolve_type_filling("SOMESYMBOL") == mt5.ORDER_FILLING_RETURN
+
+    def test_symbol_info_unavailable_raises(self) -> None:
+        with patch("execution.mt5_broker.mt5.symbol_info", return_value=None):
+            with pytest.raises(RuntimeError, match="symbol_info"):
+                _resolve_type_filling("USTEC")
+
+
+class TestPlaceOrderAndClosePositionSetTypeFilling:
+    """Tests confirming place_order()/close_position() actually use _resolve_type_filling()."""
+
+    def test_place_order_sends_the_resolved_type_filling(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1, price=100.0)
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch(
+                "execution.mt5_broker.mt5.symbol_info", return_value=SimpleNamespace(filling_mode=2)
+            ),
+            patch(
+                "execution.mt5_broker.mt5.order_send", return_value=_order_send_result()
+            ) as mock_send,
+        ):
+            broker.place_order(order)
+
+
+        assert mock_send.call_args[0][0]["type_filling"] == mt5.ORDER_FILLING_IOC
+
+    def test_place_order_selects_fok_when_only_fok_is_supported(self) -> None:
+        broker = MT5Broker()
+        order = OrderRequest(symbol="EURUSD", order_type=OrderType.BUY_MARKET, volume=0.1, price=1.1)
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch(
+                "execution.mt5_broker.mt5.symbol_info", return_value=SimpleNamespace(filling_mode=1)
+            ),
+            patch(
+                "execution.mt5_broker.mt5.order_send", return_value=_order_send_result()
+            ) as mock_send,
+        ):
+            broker.place_order(order)
+
+
+        assert mock_send.call_args[0][0]["type_filling"] == mt5.ORDER_FILLING_FOK
+
+    def test_close_position_sends_the_resolved_type_filling(self) -> None:
+        broker = MT5Broker()
+
+        with (
+            patch(
+                "execution.mt5_broker.mt5.positions_get",
+                return_value=[_mt5_position(ticket=777, type_=0, volume=0.3)],
+            ),
+            patch("execution.mt5_broker.mt5.symbol_info_tick", return_value=_tick(bid=100.0, ask=101.0)),
+            patch(
+                "execution.mt5_broker.mt5.symbol_info", return_value=SimpleNamespace(filling_mode=2)
+            ),
+            patch(
+                "execution.mt5_broker.mt5.order_send", return_value=_order_send_result(order=999)
+            ) as mock_send,
+        ):
+            broker.close_position("777")
+
+
+        assert mock_send.call_args[0][0]["type_filling"] == mt5.ORDER_FILLING_IOC
 
 
 class TestCancelOrder:

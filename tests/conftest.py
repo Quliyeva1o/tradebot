@@ -55,7 +55,14 @@ except ImportError:
     sys.modules["MetaTrader5"] = stub
 
 
-_ISOLATED_LOGGER_NAMES = ("execution_events", "run_live_demo", "trade_events", "live_signal_check")
+_ISOLATED_LOGGER_NAMES = (
+    "execution_events",
+    "run_live_demo",
+    "trade_events",
+    "live_signal_check",
+    "trade_manager",
+    "mt5_broker",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -90,16 +97,28 @@ def _no_real_execution_or_trade_log_files() -> Iterator[None]:
     that gap with the same mechanism at negligible extra cost, rather than
     leaving a newly-found active leak unaddressed.
 
+    trade_manager (execution/trade_manager.py) and mt5_broker
+    (execution/mt5_broker.py) were added later, once their own rejection-path
+    logger.error() calls were given log_to_file=True -- a rejected real order's
+    retcode/comment (e.g. the 2026-07-27 SELL USTEC "Trade disabled" rejection)
+    was previously only ever printed to console and lost, since neither
+    logger persisted to a file at all; without adding them here too, every
+    test exercising a broker rejection (place_order()/close_position()
+    returning success=False) would start leaking into the real, repo-relative
+    logs/trade_manager.log and logs/mt5_broker.log the same way the four
+    loggers below already had to be protected against.
+
     Without this, any test that opens/closes a PaperBroker or MT5Broker
     position, or drives run_live_demo.py's run_once()/main() (currently:
     tests/test_event_log.py, tests/test_paper_broker.py,
     tests/test_mt5_broker.py, tests/test_trade_manager.py,
     tests/test_run_live_demo.py -- and any future test exercising the same
     code), would land in the real, repo-relative logs/execution_events.log,
-    logs/run_live_demo.log, logs/trade_events.log, and logs/live_signal_check.log
-    -- files a human operator relies on to analyze real demo-account
-    slippage/trade history (see the Sprint 7 slippage-analysis report),
-    polluted with fake test order_ids and synthetic bar timestamps.
+    logs/run_live_demo.log, logs/trade_events.log, logs/live_signal_check.log,
+    logs/trade_manager.log, and logs/mt5_broker.log -- files a human operator
+    relies on to analyze real demo-account slippage/trade history (see the
+    Sprint 7 slippage-analysis report), polluted with fake test order_ids and
+    synthetic bar timestamps.
     """
     detached: list[tuple[logging.Logger, list[logging.FileHandler]]] = []
     for name in _ISOLATED_LOGGER_NAMES:

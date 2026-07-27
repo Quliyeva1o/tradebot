@@ -25,7 +25,7 @@ from execution.take_profit_engine import FixedTakeProfitEngine, TakeProfitEngine
 from strategy.models import TradeSetup
 from utils.logging import setup_logger
 
-logger = setup_logger("trade_manager")
+logger = setup_logger("trade_manager", log_to_file=True)
 
 
 class TradeManager:
@@ -53,6 +53,7 @@ class TradeManager:
         self._stop_loss: float | None = None
         self._take_profit: float | None = None
         self.current_order: Order | None = None
+        self.last_open_result: OrderResult | None = None
         self.last_close_result: OrderResult | None = None
 
     @property
@@ -93,7 +94,9 @@ class TradeManager:
             The Order tracking this entry: FILLED if broker.place_order()
             succeeded (a position is now tracked), REJECTED otherwise (no
             position tracked; on_new_bar() is a no-op until the next
-            open_trade() call).
+            open_trade() call). Either way, the full OrderResult (retcode/
+            comment included) is recorded on last_open_result for a caller
+            that needs the venue's specific rejection reason.
 
         Raises:
             RuntimeError: If a trade is already open (call close_trade(), or
@@ -126,6 +129,7 @@ class TradeManager:
         result = broker.place_order(request)
         order = Order(order_id=result.order_id, request=request)
         self.current_order = order
+        self.last_open_result = result
 
         if not result.success:
             order.reject()

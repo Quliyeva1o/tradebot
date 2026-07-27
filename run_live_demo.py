@@ -331,9 +331,23 @@ def _evaluate_for_new_trade(
             fill_price=order.fill_price,
         )
     else:
-        logger.error("Trade open REJECTED for %s: order_id=%s", symbol, order.order_id)
+        open_result = trade_manager.last_open_result
+        reason = open_result.comment if open_result is not None else "unknown"
+        retcode = open_result.retcode if open_result is not None else None
+        logger.error(
+            "Trade open REJECTED for %s: order_id=%s reason=%s (retcode=%s)",
+            symbol,
+            order.order_id,
+            reason,
+            retcode,
+        )
         _log_trade_event(
-            "trade_open_rejected", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id
+            "trade_open_rejected",
+            symbol=symbol,
+            setup_id=setup.setup_id,
+            order_id=order.order_id,
+            reason=reason,
+            retcode=retcode,
         )
 
 
