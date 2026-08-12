@@ -20,9 +20,11 @@ from core.validation import require_positive
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, TradeManagerAction
 from execution.order import Order
+from execution.position_sizer import PositionSizer
 from execution.stop_engine import FixedStopEngine, StopEngine
 from execution.take_profit_engine import FixedTakeProfitEngine, TakeProfitEngine
 from strategy.models import TradeSetup
+from strategy.risk_reward import resolve_entry_price
 from utils.logging import setup_logger
 
 logger = setup_logger("trade_manager", log_to_file=True)
@@ -31,22 +33,26 @@ logger = setup_logger("trade_manager", log_to_file=True)
 class TradeManager:
     """Owns a single open trade's lifecycle: entry, bar-by-bar SL/TP tracking, exit."""
 
-    def __init__(self, volume: float = 0.1) -> None:
+    def __init__(self, volume: float = 0.1, position_sizer: PositionSizer | None = None) -> None:
         """Initializes the TradeManager with no open trade.
 
         Args:
-            volume: Position size (lots/units) used for every open_trade()
-                order. TradeSetup carries no volume/position-size field of
-                its own (position sizing is a separate concern -- see
-                backtest.engine.PositionSizer for the historical-replay
-                equivalent, out of scope here), so it is configured once
-                per TradeManager instance.
+            volume: Fixed position size (lots/units) used for every
+                open_trade() order when position_sizer is not given.
+                TradeSetup carries no volume/position-size field of its own,
+                so it is configured once per TradeManager instance.
+            position_sizer: If given, takes precedence over `volume`:
+                open_trade() computes a risk-based lot size from the
+                broker's account balance and the symbol's real contract-size/
+                tick-value constraints (see execution/position_sizer.py)
+                instead of using the fixed `volume`.
 
         Raises:
             ValueError: If volume is not strictly positive.
         """
         require_positive(volume, "volume")
         self._volume = volume
+        self._position_sizer = position_sizer
         self._broker: IBroker | None = None
         self._position_id: str | None = None
         self._direction: SignalDirection | None = None
@@ -117,10 +123,21 @@ class TradeManager:
         order_type = (
             OrderType.BUY_MARKET if setup.direction == SignalDirection.BUY else OrderType.SELL_MARKET
         )
+
+        if self._position_sizer is not None:
+            account_info = broker.get_account_info()
+            constraints = broker.get_symbol_constraints(setup.symbol)
+            entry_price = resolve_entry_price(setup)
+            volume = self._position_sizer.calculate_size(
+                account_info.balance, entry_price, stop_loss, constraints
+            )
+        else:
+            volume = self._volume
+
         request = OrderRequest(
             symbol=setup.symbol,
             order_type=order_type,
-            volume=self._volume,
+            volume=volume,
             stop_loss=stop_loss,
             take_profit=take_profit,
             comment=setup.setup_id,

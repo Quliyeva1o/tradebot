@@ -18,6 +18,25 @@ def _symbol_info(point: float) -> SimpleNamespace:
     return SimpleNamespace(point=point)
 
 
+def _symbol_constraints_info(
+    contract_size: float = 1.0,
+    tick_size: float = 0.01,
+    tick_value: float = 1.0,
+    volume_min: float = 0.01,
+    volume_max: float = 100.0,
+    volume_step: float = 0.01,
+) -> SimpleNamespace:
+    """Minimal stand-in for MT5's SymbolInfo, exposing the constraint fields read."""
+    return SimpleNamespace(
+        trade_contract_size=contract_size,
+        trade_tick_size=tick_size,
+        trade_tick_value=tick_value,
+        volume_min=volume_min,
+        volume_max=volume_max,
+        volume_step=volume_step,
+    )
+
+
 def _fake_rates(rows: list[tuple[int, float, float, float, float, int, int]]) -> np.ndarray:
     """Builds a fake MT5 rates array from (epoch, o, h, l, c, tick_volume, spread) rows."""
     return np.array(
@@ -205,3 +224,34 @@ class TestFetchAccountInfo:
         mock_account_info.assert_called_once_with()
         mock_order_send.assert_not_called()
         mock_order_check.assert_not_called()
+
+
+class TestFetchSymbolInfo:
+    def test_maps_mt5_symbol_info_fields_to_symbol_constraints(self) -> None:
+        connector = MT5Connector()
+        with patch(
+            "mt5.connector.mt5.symbol_info",
+            return_value=_symbol_constraints_info(
+                contract_size=100.0,
+                tick_size=0.25,
+                tick_value=2.5,
+                volume_min=0.1,
+                volume_max=50.0,
+                volume_step=0.1,
+            ),
+        ):
+            constraints = connector.fetch_symbol_info("USTEC")
+
+        assert constraints.symbol == "USTEC"
+        assert constraints.contract_size == 100.0
+        assert constraints.tick_size == 0.25
+        assert constraints.tick_value == 2.5
+        assert constraints.volume_min == 0.1
+        assert constraints.volume_max == 50.0
+        assert constraints.volume_step == 0.1
+
+    def test_raises_when_symbol_info_returns_none(self) -> None:
+        connector = MT5Connector()
+        with patch("mt5.connector.mt5.symbol_info", return_value=None):
+            with pytest.raises(RuntimeError, match="symbol_info"):
+                connector.fetch_symbol_info("USTEC")

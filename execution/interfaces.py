@@ -2,7 +2,7 @@
 
 from typing import Protocol, runtime_checkable
 
-from core.models import AccountInfo
+from core.models import AccountInfo, SymbolConstraints
 from execution.models import OrderRequest, OrderResult, Position
 
 
@@ -73,5 +73,19 @@ class IBroker(Protocol):
 
         Returns:
             An AccountInfo snapshot of the connected account.
+        """
+        ...
+
+    def get_symbol_constraints(self, symbol: str) -> SymbolConstraints:
+        """Fetches `symbol`'s contract-size/tick-value/volume constraints.
+
+        Used by execution.position_sizer.PositionSizer to convert a risk
+        percentage into a real lot size.
+
+        Args:
+            symbol: Trading instrument symbol.
+
+        Returns:
+            A SymbolConstraints snapshot of the symbol's trading constraints.
         """
         ...

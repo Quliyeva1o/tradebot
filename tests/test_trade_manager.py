@@ -16,10 +16,11 @@ from unittest.mock import Mock
 import pytest
 
 import execution.paper_broker as paper_broker_module
-from core.models import Bar, SignalDirection, Timeframe
+from core.models import Bar, SignalDirection, SymbolConstraints, Timeframe
 from execution.models import TradeManagerAction
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
+from execution.position_sizer import PositionSizer
 from execution.stop_engine import FixedStopEngine
 from execution.take_profit_engine import FixedTakeProfitEngine
 from execution.trade_manager import TradeManager
@@ -220,6 +221,62 @@ class TestOpenTradeEngines:
         manager.open_trade(setup, broker, take_profit_engine=AlwaysTarget30000())
 
         assert broker.get_open_positions()[0].take_profit == 30_000.0
+
+
+class TestOpenTradeWithPositionSizer:
+    """A configured PositionSizer computes volume instead of the fixed self._volume."""
+
+    def _mock_broker(self, balance: float = 10_000.0) -> Mock:
+        broker = Mock()
+        broker.get_account_info.return_value = Mock(balance=balance)
+        broker.get_symbol_constraints.return_value = SymbolConstraints(
+            symbol="USTEC",
+            contract_size=1.0,
+            tick_size=0.25,
+            tick_value=1.0,
+            volume_min=0.01,
+            volume_max=100.0,
+            volume_step=0.01,
+        )
+        broker.place_order.return_value = Mock(
+            success=True,
+            order_id="o1",
+            position_id="p1",
+            price=29_000.0,
+            volume=0.25,
+            retcode=10009,
+            comment="",
+        )
+        return broker
+
+    def test_computes_volume_from_balance_risk_and_stop_distance(self) -> None:
+        broker = self._mock_broker(balance=10_000.0)
+        manager = TradeManager(position_sizer=PositionSizer(risk_per_trade_pct=0.01))
+
+        manager.open_trade(_setup(entry=29_000.0, stop_loss=28_900.0, take_profit=29_200.0), broker)
+
+        # risk_amount=100, distance=100 price units / tick_size=0.25 -> 400
+        # ticks * tick_value=1.0 -> loss_per_lot=400 -> raw_volume=100/400=0.25
+        request = broker.place_order.call_args[0][0]
+        assert request.volume == pytest.approx(0.25)
+
+    def test_position_sizer_takes_precedence_over_fixed_volume(self) -> None:
+        broker = self._mock_broker(balance=10_000.0)
+        manager = TradeManager(volume=5.0, position_sizer=PositionSizer(risk_per_trade_pct=0.01))
+
+        manager.open_trade(_setup(entry=29_000.0, stop_loss=28_900.0, take_profit=29_200.0), broker)
+
+        request = broker.place_order.call_args[0][0]
+        assert request.volume == pytest.approx(0.25)
+        assert request.volume != 5.0
+
+    def test_fixed_volume_constructor_path_is_unchanged_without_a_sizer(self) -> None:
+        broker = _broker(_fill_bar(29_000.0))
+        manager = TradeManager(volume=0.3)
+
+        manager.open_trade(_setup(), broker)
+
+        assert broker.get_open_positions()[0].volume == pytest.approx(0.3)
 
 
 class TestOnNewBarHoldAndCloseSL:

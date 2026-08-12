@@ -112,6 +112,19 @@ class AccountInfo:
     trade_mode: int | None = None
 
 
+@dataclass(frozen=True)
+class SymbolConstraints:
+    """Venue-reported symbol trading constraints, used for risk-based position sizing."""
+
+    symbol: str
+    contract_size: float
+    tick_size: float
+    tick_value: float
+    volume_min: float
+    volume_max: float
+    volume_step: float
+
+
 class SignalDirection(Enum):
     """Supported signal execution directions."""
 

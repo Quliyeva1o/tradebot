@@ -54,6 +54,25 @@ def _parse_max_daily_loss_pct(raw: str) -> float:
     return value
 
 
+def _parse_risk_per_trade_pct(raw: str) -> float:
+    """Parses RISK_PER_TRADE_PCT from its raw env string, defaulting to 0.01 (1%).
+
+    Same never-raise-at-import-time contract as _parse_max_daily_loss_pct:
+    this runs as a bare dataclass field default at class-definition time, so
+    a malformed or non-positive value must degrade to a safe default instead
+    of crashing every module that imports Settings.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("RISK_PER_TRADE_PCT=%r is not a valid float; defaulting to 0.01.", raw)
+        return 0.01
+    if value <= 0:
+        logger.warning("RISK_PER_TRADE_PCT=%r must be positive; defaulting to 0.01.", raw)
+        return 0.01
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     """Read-only system configurations loaded from environment settings."""
@@ -75,6 +94,7 @@ class Settings:
 
     # Risk management settings (Phase 6 kill-switch infrastructure)
     MAX_DAILY_LOSS_PCT: float = _parse_max_daily_loss_pct(os.getenv("MAX_DAILY_LOSS_PCT", "0.05"))
+    RISK_PER_TRADE_PCT: float = _parse_risk_per_trade_pct(os.getenv("RISK_PER_TRADE_PCT", "0.01"))
 
     # General configuration parameters
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

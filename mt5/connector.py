@@ -5,7 +5,7 @@ import os
 import MetaTrader5 as mt5  # noqa: N813
 from dotenv import load_dotenv
 
-from core.models import AccountInfo, Bar
+from core.models import AccountInfo, Bar, SymbolConstraints
 from mt5.rates import TIMEFRAME_MAPPING, get_symbol_point, rates_to_bars
 from utils.logging import setup_logger
 
@@ -148,4 +148,37 @@ class MT5Connector:
             margin_level=info.margin_level,
             currency=info.currency,
             trade_mode=info.trade_mode,
+        )
+
+    def fetch_symbol_info(self, symbol: str) -> SymbolConstraints:
+        """READ-ONLY: fetches `symbol`'s contract-size/tick-value/volume constraints.
+
+        This method NEVER places orders, modifies positions, or calls any
+        MT5 trading function -- it only calls mt5.symbol_info(). Safe to
+        call against a live (non-demo) account. Used by execution.PositionSizer
+        to convert a risk percentage into a real lot size (see
+        execution/mt5_broker.py and execution/paper_broker.py's
+        get_symbol_constraints(), which both delegate here).
+
+        Args:
+            symbol: Trading instrument symbol (e.g. "USTEC").
+
+        Returns:
+            A SymbolConstraints snapshot of the symbol's trading constraints.
+
+        Raises:
+            RuntimeError: If mt5.symbol_info(symbol) returns None.
+        """
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            raise RuntimeError(f"mt5.symbol_info() returned None for {symbol}. Error code: {mt5.last_error()}")
+
+        return SymbolConstraints(
+            symbol=symbol,
+            contract_size=info.trade_contract_size,
+            tick_size=info.trade_tick_size,
+            tick_value=info.trade_tick_value,
+            volume_min=info.volume_min,
+            volume_max=info.volume_max,
+            volume_step=info.volume_step,
         )

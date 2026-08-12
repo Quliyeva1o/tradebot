@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import MetaTrader5 as mt5  # noqa: N813
 
-from core.models import AccountInfo, OrderType
+from core.models import AccountInfo, OrderType, SymbolConstraints
 from core.validation import require_non_negative, require_positive
 from execution.event_log import log_fill
 from execution.interfaces import IBroker
@@ -241,6 +241,21 @@ class MT5Broker(IBroker):
                 mt5.account_info() returned None).
         """
         return self._connector.fetch_account_info()
+
+    def get_symbol_constraints(self, symbol: str) -> SymbolConstraints:
+        """Delegates to MT5Connector.fetch_symbol_info().
+
+        Args:
+            symbol: Trading instrument symbol.
+
+        Returns:
+            A SymbolConstraints snapshot of the symbol's trading constraints.
+
+        Raises:
+            RuntimeError: If MT5Connector.fetch_symbol_info() raises (e.g.
+                mt5.symbol_info() returned None).
+        """
+        return self._connector.fetch_symbol_info(symbol)
 
     def place_order(self, order: OrderRequest) -> OrderResult:
         """Submits an order to MT5 via mt5.order_send().

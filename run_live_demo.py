@@ -46,6 +46,7 @@ from execution.interfaces import IBroker
 from execution.models import Position, TradeManagerAction
 from execution.mt5_broker import MT5Broker
 from execution.order import OrderStatus
+from execution.position_sizer import PositionSizer
 from execution.trade_manager import TradeManager
 from live_signal_check import (
     check_data_quality_and_alert,
@@ -103,7 +104,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--volume",
         type=float,
         default=DEFAULT_VOLUME,
-        help=f"TradeManager position size (lots) for every new trade (default: {DEFAULT_VOLUME}).",
+        help=f"Fixed TradeManager position size (lots), used when --risk-per-trade-pct is not "
+        f"given (default: {DEFAULT_VOLUME}).",
+    )
+    parser.add_argument(
+        "--risk-per-trade-pct",
+        type=float,
+        default=None,
+        help="If given, overrides --volume: TradeManager sizes each trade to risk this fraction "
+        "of account balance (e.g. 0.01 = 1%%) via PositionSizer, using the symbol's real "
+        "contract-size/tick-value constraints instead of a fixed lot size.",
     )
     return parser.parse_args(argv)
 
@@ -467,7 +477,12 @@ def main(argv: list[str] | None = None) -> None:
         DailyRiskTracker().check_and_update(account_info.equity)
 
         strategy = NasdaqMidlineSweepStrategy(body_multiplier=args.body_multiplier)
-        trade_manager = TradeManager(volume=args.volume)
+        position_sizer = (
+            PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
+            if args.risk_per_trade_pct is not None
+            else None
+        )
+        trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
         run_once(
             connector=connector,
             broker=broker,

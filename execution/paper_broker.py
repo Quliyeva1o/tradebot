@@ -19,7 +19,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from core.models import AccountInfo, OrderType
+from core.models import AccountInfo, OrderType, SymbolConstraints
 from core.validation import require_non_negative, require_positive
 from execution.event_log import log_fill
 from execution.fill_simulator import simulate_market_fill
@@ -199,6 +199,25 @@ class PaperBroker(IBroker):
         floating_pnl = sum(position.profit for position in positions)
         equity = self._balance + floating_pnl
         return AccountInfo(balance=self._balance, equity=equity, margin=0.0, free_margin=equity)
+
+    def get_symbol_constraints(self, symbol: str) -> SymbolConstraints:
+        """Delegates to the underlying MT5Connector.fetch_symbol_info().
+
+        Real MT5 symbol metadata, same as MT5Broker -- purely read-only
+        (mt5.symbol_info()), consistent with PaperBroker's existing use of
+        the connector for real price data while never sending a real order.
+
+        Args:
+            symbol: Trading instrument symbol.
+
+        Returns:
+            A SymbolConstraints snapshot of the symbol's trading constraints.
+
+        Raises:
+            RuntimeError: If MT5Connector.fetch_symbol_info() raises (e.g.
+                mt5.symbol_info() returned None).
+        """
+        return self._connector.fetch_symbol_info(symbol)
 
     def place_order(self, order: OrderRequest) -> OrderResult:
         """Submits an order to the paper account.

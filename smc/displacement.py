@@ -26,6 +26,54 @@ class DisplacementBar:
     atr: float
 
 
+def calculate_tr_and_atr(bars: Sequence[Bar], period: int) -> tuple[list[float], list[float]]:
+    """Calculates True Range (TR) and Wilder's smoothed ATR for a Sequence of Bars.
+
+    Module-level so it can be reused outside DisplacementDetector (e.g. by
+    research/regime_analysis.py's volatility-regime classification) without
+    duplicating the TR/ATR formula.
+
+    Args:
+        bars: Sequence of historical price candlestick Bar objects.
+        period: Average True Range smoothing period window size.
+
+    Returns:
+        A (tr_values, atr_values) pair, one entry per bar.
+    """
+    n = len(bars)
+    if n == 0:
+        return [], []
+
+    tr_values = []
+    for idx, bar in enumerate(bars):
+        if idx == 0:
+            tr_values.append(bar.high - bar.low)
+        else:
+            prev_close = bars[idx - 1].close
+            tr1 = bar.high - bar.low
+            tr2 = abs(bar.high - prev_close)
+            tr3 = abs(bar.low - prev_close)
+            tr_values.append(max(tr1, tr2, tr3))
+
+    atr_values = [0.0] * n
+    if n <= period:
+        # Fallback if too few bars
+        avg = sum(tr_values) / n if n > 0 else 0.0
+        atr_values = [avg] * n
+    else:
+        # Initial ATR is simple average of first 'period' elements
+        first_avg = sum(tr_values[:period]) / period
+        for i in range(period):
+            atr_values[i] = first_avg
+
+        current_atr = first_avg
+        for i in range(period, n):
+            current_atr = (current_atr * (period - 1) + tr_values[i]) / period
+            atr_values[i] = current_atr
+
+    return tr_values, atr_values
+
+
 class DisplacementDetector:
     """Identifies highly energetic expansion runs (displacement) in price action."""
 
@@ -41,38 +89,7 @@ class DisplacementDetector:
 
     def _calculate_tr_and_atr(self, bars: Sequence[Bar]) -> tuple[list[float], list[float]]:
         """Calculates True Range (TR) and Wilder's smoothed ATR for a Sequence of Bars."""
-        n = len(bars)
-        if n == 0:
-            return [], []
-
-        tr_values = []
-        for idx, bar in enumerate(bars):
-            if idx == 0:
-                tr_values.append(bar.high - bar.low)
-            else:
-                prev_close = bars[idx - 1].close
-                tr1 = bar.high - bar.low
-                tr2 = abs(bar.high - prev_close)
-                tr3 = abs(bar.low - prev_close)
-                tr_values.append(max(tr1, tr2, tr3))
-
-        atr_values = [0.0] * n
-        if n <= self.atr_period:
-            # Fallback if too few bars
-            avg = sum(tr_values) / n if n > 0 else 0.0
-            atr_values = [avg] * n
-        else:
-            # Initial ATR is simple average of first 'atr_period' elements
-            first_avg = sum(tr_values[: self.atr_period]) / self.atr_period
-            for i in range(self.atr_period):
-                atr_values[i] = first_avg
-
-            current_atr = first_avg
-            for i in range(self.atr_period, n):
-                current_atr = (current_atr * (self.atr_period - 1) + tr_values[i]) / self.atr_period
-                atr_values[i] = current_atr
-
-        return tr_values, atr_values
+        return calculate_tr_and_atr(bars, self.atr_period)
 
     def find_displacements(self, bars: Sequence[Bar]) -> list[DisplacementBar]:
         """Finds candles that exhibit displacement attributes.

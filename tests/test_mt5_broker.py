@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 import MetaTrader5 as mt5  # noqa: N813
 import pytest
 
-from core.models import AccountInfo, OrderType
+from core.models import AccountInfo, OrderType, SymbolConstraints
 from execution.models import OrderRequest, OrderResult, Position
 from execution.mt5_broker import MT5Broker, _mt5_comment, _resolve_type_filling
 from mt5.connector import MT5Connector
@@ -199,6 +199,35 @@ class TestGetAccountInfo:
 
         with pytest.raises(RuntimeError, match="account_info returned None"):
             broker.get_account_info()
+
+
+class TestGetSymbolConstraints:
+    """Tests for MT5Broker.get_symbol_constraints()."""
+
+    def test_delegates_to_connector_fetch_symbol_info(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        expected = SymbolConstraints(
+            symbol="USTEC",
+            contract_size=1.0,
+            tick_size=0.25,
+            tick_value=0.25,
+            volume_min=0.1,
+            volume_max=50.0,
+            volume_step=0.1,
+        )
+        connector.fetch_symbol_info.return_value = expected
+        broker = MT5Broker(connector)
+
+        assert broker.get_symbol_constraints("USTEC") is expected
+        connector.fetch_symbol_info.assert_called_once_with("USTEC")
+
+    def test_propagates_connector_failure(self) -> None:
+        connector = Mock(spec=MT5Connector)
+        connector.fetch_symbol_info.side_effect = RuntimeError("symbol_info returned None")
+        broker = MT5Broker(connector)
+
+        with pytest.raises(RuntimeError, match="symbol_info returned None"):
+            broker.get_symbol_constraints("USTEC")
 
 
 class TestPlaceOrder:

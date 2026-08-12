@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import execution.paper_broker as paper_broker_module
-from core.models import Bar, OrderType
+from core.models import Bar, OrderType, SymbolConstraints
 from execution.models import OrderRequest
 from execution.paper_broker import PaperBroker
 from mt5.connector import MT5Connector
@@ -309,6 +309,27 @@ class TestGetAccountInfo:
 
         assert info.balance == 10_000.0
         assert info.equity == pytest.approx(10_200.0)  # 10000 + (29200 - 29000) * 1.0
+
+
+class TestGetSymbolConstraints:
+    """Tests for PaperBroker.get_symbol_constraints()."""
+
+    def test_delegates_to_connector_fetch_symbol_info(self) -> None:
+        connector = _connector()
+        expected = SymbolConstraints(
+            symbol="USTEC",
+            contract_size=1.0,
+            tick_size=0.25,
+            tick_value=0.25,
+            volume_min=0.1,
+            volume_max=50.0,
+            volume_step=0.1,
+        )
+        connector.fetch_symbol_info.return_value = expected
+        broker = PaperBroker(connector=connector)
+
+        assert broker.get_symbol_constraints("USTEC") is expected
+        connector.fetch_symbol_info.assert_called_once_with("USTEC")
 
 
 class TestConnect:

@@ -52,6 +52,24 @@ def calculate_take_profit(
     return entry + reward_dist if direction == SignalDirection.BUY else entry - reward_dist
 
 
+def resolve_entry_price(setup: TradeSetup) -> float:
+    """Resolves the scalar entry price a TradeSetup is sized/traded against.
+
+    Mirrors resolve_stop_and_target()'s zone-edge selection rule (BUY takes
+    the low edge, SELL takes the high edge), so execution.position_sizer.
+    PositionSizer sizes against the same scalar entry price convention the
+    rest of the execution layer already uses for stop/target.
+
+    Args:
+        setup: The TradeSetup to resolve.
+
+    Returns:
+        entry_zone's low edge for BUY, high edge for SELL.
+    """
+    entry_low, entry_high = setup.entry_zone
+    return entry_low if setup.direction == SignalDirection.BUY else entry_high
+
+
 def resolve_stop_and_target(setup: TradeSetup) -> tuple[float, float]:
     """Resolves the scalar (stop_loss, take_profit) prices a TradeSetup is traded against.
 
