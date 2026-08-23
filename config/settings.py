@@ -54,6 +54,25 @@ def _parse_max_daily_loss_pct(raw: str) -> float:
     return value
 
 
+def _parse_risk_per_trade_pct(raw: str) -> float:
+    """Parses RISK_PER_TRADE_PCT from its raw env string, defaulting to 0.01 (1%).
+
+    Same never-raise-at-import-time contract as _parse_max_daily_loss_pct:
+    this runs as a bare dataclass field default at class-definition time, so
+    a malformed or non-positive value must degrade to a safe default instead
+    of crashing every module that imports Settings.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("RISK_PER_TRADE_PCT=%r is not a valid float; defaulting to 0.01.", raw)
+        return 0.01
+    if value <= 0:
+        logger.warning("RISK_PER_TRADE_PCT=%r must be positive; defaulting to 0.01.", raw)
+        return 0.01
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     """Read-only system configurations loaded from environment settings."""
@@ -63,6 +82,11 @@ class Settings:
     MT5_PASSWORD: str = os.getenv("MT5_PASSWORD", "")
     MT5_SERVER: str = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
     MT5_PATH: str = os.getenv("MT5_PATH", "")
+    # Sprint 7 demo-account safety rail (run_live_demo.py): deliberately no
+    # non-empty default -- an operator who has not explicitly opted in to
+    # "demo" is refused, not silently allowed to trade. See
+    # run_live_demo.py's _ensure_explicit_demo_configuration().
+    MT5_ACCOUNT_TYPE: str = os.getenv("MT5_ACCOUNT_TYPE", "")
 
     # Telegram notification settings
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
@@ -70,6 +94,7 @@ class Settings:
 
     # Risk management settings (Phase 6 kill-switch infrastructure)
     MAX_DAILY_LOSS_PCT: float = _parse_max_daily_loss_pct(os.getenv("MAX_DAILY_LOSS_PCT", "0.05"))
+    RISK_PER_TRADE_PCT: float = _parse_risk_per_trade_pct(os.getenv("RISK_PER_TRADE_PCT", "0.01"))
 
     # General configuration parameters
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

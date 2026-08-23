@@ -1,6 +1,7 @@
 """Walk-Forward Validation module."""
 
 import csv
+from collections.abc import Callable
 from typing import Any
 
 from application.services.market_state_builder import MarketStateBuilder
@@ -8,12 +9,8 @@ from backtest.engine import BacktestEngine
 from backtest.models import BacktestConfig
 from backtest.report import BacktestReportGenerator
 from core.models import Bar, Timeframe
-from strategy.continuation import (
-    BearishContinuationStrategy,
-    BullishContinuationStrategy,
-    StrategyConfig,
-)
 from strategy.diagnostics import top_rejection_reasons
+from strategy.interfaces import TradeSetupStrategy
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
@@ -53,11 +50,23 @@ class WalkForwardRunner:
         self.step_size = max(5, int(len(candles) * step_size_pct))
         self.expanding = expanding
 
-    def run(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> list[dict[str, Any]]:
+    def run(
+        self,
+        strategy_factory: Callable[[], list[TradeSetupStrategy]],
+        backtest_config: BacktestConfig,
+    ) -> list[dict[str, Any]]:
         """Executes walk-forward folds chronologically.
 
         Args:
-            strat_config: StrategyConfig parameter inject.
+            strategy_factory: Builds the list of TradeSetupStrategy instances
+                to register on a fresh StrategyEngine for each train/val
+                simulation (called once per _simulate() call, so every fold
+                gets brand-new strategy instances with no state carried over
+                from a previous fold -- the same DI pattern StrategyEngine
+                itself uses: it only ever depends on the TradeSetupStrategy
+                interface, never a concrete strategy class). Any
+                strategy-specific configuration (e.g. StrategyConfig) is
+                captured in the factory's closure by the caller.
             backtest_config: BacktestConfig parameter inject.
 
         Returns:
@@ -87,8 +96,8 @@ class WalkForwardRunner:
             val_candles = self.candles[val_start:val_end]
 
             # Run simulations
-            train_metrics = self._simulate(train_candles, strat_config, backtest_config)
-            val_metrics = self._simulate(val_candles, strat_config, backtest_config)
+            train_metrics = self._simulate(train_candles, strategy_factory, backtest_config)
+            val_metrics = self._simulate(val_candles, strategy_factory, backtest_config)
 
             fold_result = {
                 "fold": k + 1,
@@ -111,15 +120,20 @@ class WalkForwardRunner:
         self._export_artifacts(folds)
         return folds
 
-    def _simulate(self, segment_candles: list[Bar], strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
+    def _simulate(
+        self,
+        segment_candles: list[Bar],
+        strategy_factory: Callable[[], list[TradeSetupStrategy]],
+        backtest_config: BacktestConfig,
+    ) -> dict[str, Any]:
         """Runs the simulation for a single candle segment."""
         if not segment_candles:
             return {"total_trades": 0, "net_profit": 0.0, "win_rate": 0.0, "diagnostics": {}}
 
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
-        strategy_engine.register_strategy(BullishContinuationStrategy(config=strat_config))
-        strategy_engine.register_strategy(BearishContinuationStrategy(config=strat_config))
+        for strategy in strategy_factory():
+            strategy_engine.register_strategy(strategy)
 
         engine = BacktestEngine(config=backtest_config)
         result = engine.run(segment_candles, strategy_engine, state_builder)

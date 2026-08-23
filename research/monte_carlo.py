@@ -28,7 +28,14 @@ class MonteCarloSimulator:
 
         Args:
             result: Baseline backtest execution result.
-            pip_size: Price value of a single pip.
+            pip_size: Price-unit value of "1 pip" of adverse execution noise for
+                this instrument (e.g. 0.0001 for a 4-decimal FX pair; an index/
+                metal/crypto CFD's own point size is the natural equivalent --
+                there is no universal "1 pip"). Combined directly with each
+                trade's own position_size (no extra unit-conversion constant --
+                see the noise_cost comment below, Bug #75), so this must be
+                expressed in the same price units as that trade's entry/exit
+                prices, not assumed to be FX-specific.
 
         Returns:
             A dictionary containing simulation summary metrics.
@@ -66,12 +73,23 @@ class MonteCarloSimulator:
 
             # Apply random spread/slippage noise per trade
             for t in resampled:
-                # Noise penalty: random value from 0 to 1 pip, multiplied by position size
+                # Noise penalty: random value from 0 to 1.5 pips, multiplied by position size
                 noise_pips = random.uniform(0.0, 1.5)
-                # Position size fallback to 0.1 lots
+                # Position size fallback if unset (e.g. a hand-built BacktestTrade in a test)
                 pos_size = t.position_size if t.position_size > 0 else 0.1
-                # Spread/slippage noise cost
-                noise_cost = noise_pips * pip_size * pos_size * 100000.0  # 1 lot = 100k standard contract size
+                # Spread/slippage noise cost. Deliberately no extra unit-conversion constant
+                # here (Bug #75 fix): position_size is already denominated in "P&L dollars per
+                # unit price move" by construction -- backtest/engine.py computes every trade's
+                # own pnl the same way, gross_pnl = (exit_price - entry_price) * pos_size, with
+                # no separate lot-size/contract-size multiplier. A noise_pips * pip_size price
+                # move must be converted to dollars identically, or the noise scales completely
+                # differently from the real P&L it's meant to perturb. The removed `* 100000.0`
+                # assumed pos_size was expressed in FX standard lots (100,000 units/lot); this
+                # codebase's SimplePositionSizer never produces lot-denominated sizes for any
+                # instrument (FX included -- verified empirically, see Bug #75 report), so that
+                # constant made noise_cost 100,000x too large across the board, not just for
+                # non-FX instruments.
+                noise_cost = noise_pips * pip_size * pos_size
 
                 pnl = t.pnl - noise_cost
                 balance += pnl

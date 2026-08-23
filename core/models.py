@@ -105,6 +105,24 @@ class AccountInfo:
     free_margin: float
     margin_level: float = 0.0
     currency: str = "USD"
+    # MT5's own account-type indicator (mt5.ACCOUNT_TRADE_MODE_DEMO=0 / _CONTEST=1 /
+    # _REAL=2), populated only by MT5Connector.fetch_account_info() (Sprint 7's
+    # demo-account safety rail -- see run_live_demo.py). None for sources that
+    # don't expose it (e.g. PaperBroker.get_account_info()).
+    trade_mode: int | None = None
+
+
+@dataclass(frozen=True)
+class SymbolConstraints:
+    """Venue-reported symbol trading constraints, used for risk-based position sizing."""
+
+    symbol: str
+    contract_size: float
+    tick_size: float
+    tick_value: float
+    volume_min: float
+    volume_max: float
+    volume_step: float
 
 
 class SignalDirection(Enum):

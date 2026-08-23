@@ -33,6 +33,7 @@ sys.path.append(str(Path(__file__).parent.resolve()))
 
 from application.services.market_state_builder import MarketStateBuilder
 from config.settings import Settings
+from core.data_quality import DataQualityIssue, check_gaps, check_stale
 from core.models import Bar, SignalDirection, Timeframe
 from mt5.connector import MT5Connector
 from notifications.telegram import TelegramNotifier
@@ -41,9 +42,14 @@ from strategy.diagnostics import top_rejection_reasons
 from strategy.models import TradeSetup
 from strategy.nasdaq_midline_sweep import NasdaqMidlineSweepStrategy
 from strategy.strategy_engine import StrategyEngine
-from utils.logging import setup_logger
+from utils.logging import setup_logger, setup_structured_logger
 
 logger = setup_logger("live_signal_check", log_to_file=True)
+
+# T3 (Sprint 6c): a separate structured JSON event stream for data-quality
+# findings (logs/data_quality_events.log), additive alongside the human-
+# readable `logger` above -- see core/data_quality.py, utils/logging.py.
+data_quality_logger = setup_structured_logger("data_quality_events")
 
 # Validated default from the USTEC out-of-sample backtest (106 trades, PF 1.0510
 # -- see walkthrough.md). USTEC's measured density is ~173 M5 bars/trading day, so
@@ -64,6 +70,13 @@ DEFAULT_BODY_MULTIPLIER = 1.5
 # prevents re-alerting on a DIFFERENT bar later the same day -- this file only
 # covers the narrower case of the SAME bar being evaluated more than once.
 STATE_FILE = Path(__file__).parent / "logs" / "last_signal_state.json"
+
+# Sprint 7: mirrors STATE_FILE's rationale above, for data-quality (gap/
+# stale-bar) alerts instead of trade signals -- see _data_quality_signature(),
+# _read_alerted_data_quality_signatures(), _record_alerted_data_quality_signatures().
+# A separate file (distinct schema, distinct concern) rather than reusing
+# STATE_FILE.
+DATA_QUALITY_STATE_FILE = Path(__file__).parent / "logs" / "last_data_quality_alerts.json"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -100,9 +113,19 @@ def check_signal(
 
     All bars except the last are replayed normally (market state AND strategy
     both updated) so the strategy's own daily-scoped state (build-session
-    midline/zone, trade-taken guard) is correctly built up -- this strategy is
-    stateful across evaluate() calls, so skipping the replay would leave that
-    state never initialized. Only the LAST bar's evaluate() outcome is reported.
+    midline/zone) is correctly built up -- this strategy is stateful across
+    evaluate() calls, so skipping the replay would leave that state never
+    initialized. Only the LAST bar's evaluate() outcome is reported.
+
+    Replay bars call strategy.evaluate(market_state, record_trade_taken=False)
+    directly (bypassing strategy_engine.run() only for these calls) -- a
+    setup found on a replay bar is discarded regardless (the same as
+    before), but must NOT be allowed to mark the strategy's one-trade-per-day
+    guard as consumed: that would incorrectly and permanently block a later,
+    genuinely new signal that same day, if the live "final bar" evaluation
+    that would have reported THIS bar's setup was ever skipped (e.g. a
+    missed scheduler cycle) -- see NasdaqMidlineSweepStrategy.evaluate()'s
+    record_trade_taken docstring for the full rationale.
 
     Diagnostics are reset (strategy.diagnostics.reset(), NOT strategy.reset() --
     the latter would also wipe the zone/trade-taken state just built up by the
@@ -132,7 +155,10 @@ def check_signal(
 
     for bar in bars[:-1]:
         market_state = state_builder.append_bar(bar)
-        strategy_engine.run(market_state)  # builds up daily zone/session state; result discarded
+        # record_trade_taken=False: see docstring above -- this call builds up
+        # daily zone/session state only; its returned setup (if any) is
+        # discarded, exactly as before.
+        strategy.evaluate(market_state, record_trade_taken=False)
 
     strategy.diagnostics.reset()
 
@@ -254,6 +280,145 @@ def send_telegram_alert(setup: TradeSetup) -> None:
         logger.warning("Telegram alert failed: %s", type(exc).__name__)
 
 
+def format_data_quality_alert(issues: list[DataQualityIssue], symbol: str, timeframe_str: str) -> str:
+    """Formats detected data-quality issues (T3, Sprint 6c) as a Telegram alert."""
+    lines = [f"⚠️ DATA QUALITY ISSUE -- {symbol} [{timeframe_str}]"]
+    for issue in issues:
+        lines.append(f"[{issue.kind.upper()}] {issue.message}")
+    return "\n".join(lines)
+
+
+def send_data_quality_alert(issues: list[DataQualityIssue], symbol: str, timeframe_str: str) -> None:
+    """Best-effort Telegram notification for detected data-quality issues.
+
+    Same never-raise contract as send_telegram_alert: a misconfigured or
+    unreachable Telegram integration must never affect the signal check's
+    own exit status or console output.
+    """
+    try:
+        settings = Settings.load()
+        notifier = TelegramNotifier(settings.TELEGRAM_TOKEN, settings.TELEGRAM_CHAT_ID)
+        notifier.send_message(format_data_quality_alert(issues, symbol, timeframe_str))
+    except Exception as exc:  # notification is best-effort, must never affect the caller
+        logger.warning("Data quality Telegram alert failed: %s", type(exc).__name__)
+
+
+def _data_quality_signature(issue: DataQualityIssue, symbol: str, timeframe_str: str) -> str:
+    """Builds a stable dedup key for a single detected data-quality issue.
+
+    Mirrors _signal_signature()'s exact approach (symbol + timeframe + a
+    stable identity of the specific event -- here, issue.event_key rather
+    than a TradeSetup's bar timestamp). See DataQualityIssue.event_key's
+    docstring (core/data_quality.py) for why event_key, not message, is
+    used: message embeds a staleness duration for "stale" issues that grows
+    every run and would never repeat.
+    """
+    return f"{symbol}_{timeframe_str}_{issue.kind}_{issue.event_key}"
+
+
+def _read_alerted_data_quality_signatures() -> set[str]:
+    """Reads the set of data-quality issue signatures already Telegram-alerted.
+
+    Fail-open: any read/parse failure (missing file, corrupt JSON, race
+    with a concurrent write) is treated as "nothing alerted yet" -- same
+    fail-safe direction as _already_sent(): a missed dedup is a harmless
+    duplicate Telegram message, but treating a broken state file as
+    "already alerted" could silently suppress a genuinely new, actionable
+    data-quality issue.
+    """
+    try:
+        data = json.loads(DATA_QUALITY_STATE_FILE.read_text())
+        return set(data.get("alerted_signatures", []))
+    except Exception:  # dedup state is best-effort, must never block a real alert
+        return set()
+
+
+def _record_alerted_data_quality_signatures(signatures: set[str]) -> None:
+    """Persists the current run's full set of alerted signatures. Best-effort, never raises.
+
+    Unlike _record_sent() (a single "last signature" value -- only one
+    signal can be relevant at a time), multiple data-quality issues can be
+    simultaneously active, so the full current set is persisted here.
+    Self-pruning by construction: `signatures` is always THIS run's
+    complete set of detected issues (built fresh in
+    check_data_quality_and_alert()), so an issue that has rolled out of the
+    lookback window and is no longer detected is naturally dropped from the
+    persisted state on the very next run, with no separate cleanup pass
+    needed.
+    """
+    try:
+        DATA_QUALITY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DATA_QUALITY_STATE_FILE.write_text(json.dumps({"alerted_signatures": sorted(signatures)}))
+    except Exception as exc:  # dedup state is best-effort, must never block the caller
+        logger.warning("Could not persist data-quality alert state: %s", type(exc).__name__)
+
+
+def check_data_quality_and_alert(
+    bars: list[Bar], symbol: str, timeframe: Timeframe, timeframe_str: str
+) -> None:
+    """Runs the T3 (Sprint 6c) gap/stale-bar checks on freshly fetched bars.
+
+    Alerts (log + best-effort Telegram) if any issue is found. Purely
+    additive to the read-only signal-check flow: does not touch
+    check_signal() or any strategy-evaluation logic, and never raises --
+    a data-quality problem is reported, not a reason to abort the run
+    (check_signal() still evaluates whatever bars were actually fetched).
+
+    Sprint 7: the local log lines (WARNING + structured JSON) below happen
+    unconditionally for EVERY detected issue on EVERY run, regardless of
+    dedup state -- cheap and useful for audit. Only the Telegram send is
+    deduplicated per issue signature (see _data_quality_signature()),
+    mirroring the existing trade-signal dedup mechanism
+    (_signal_signature()/_already_sent()/_record_sent()) so the same gap
+    staying within the lookback window for multiple days does not spam a
+    Telegram alert on every scheduled run.
+
+    Args:
+        bars: The bars fetched via MT5Connector.fetch_recent_bars().
+        symbol: Trading instrument symbol (for the alert message).
+        timeframe: The bars' Timeframe (for interval-aware thresholds).
+        timeframe_str: The raw --timeframe CLI string (for the alert message).
+    """
+    issues = check_gaps(bars, timeframe)
+    stale_issue = check_stale(bars, timeframe)
+    if stale_issue is not None:
+        issues.append(stale_issue)
+
+    previously_alerted = _read_alerted_data_quality_signatures()
+    new_issues_to_alert: list[DataQualityIssue] = []
+    current_signatures: set[str] = set()
+
+    for issue in issues:
+        signature = _data_quality_signature(issue, symbol, timeframe_str)
+        current_signatures.add(signature)
+
+        logger.warning("DATA QUALITY: [%s] %s", issue.kind, issue.message)
+        data_quality_logger.info(
+            {
+                "event_type": "data_quality_issue",
+                "kind": issue.kind,
+                "message": issue.message,
+                "symbol": symbol,
+                "timeframe": timeframe_str,
+            }
+        )
+
+        if signature in previously_alerted:
+            logger.info(
+                "DATA QUALITY: [%s] already alerted in a previous run (signature=%s); "
+                "Telegram send suppressed.",
+                issue.kind,
+                signature,
+            )
+        else:
+            new_issues_to_alert.append(issue)
+
+    if new_issues_to_alert:
+        send_data_quality_alert(new_issues_to_alert, symbol, timeframe_str)
+
+    _record_alerted_data_quality_signatures(current_signatures)
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point: connects (read-only), fetches recent bars, checks for a
     signal on the final bar, prints the result, and exits.
@@ -290,6 +455,11 @@ def main(argv: list[str] | None = None) -> None:
         bars[0].timestamp,
         bars[-1].timestamp,
     )
+
+    # T3 (Sprint 6c): gap/stale-bar data-quality check on the freshly fetched
+    # bars, before strategy evaluation. Purely additive -- does not affect
+    # check_signal()'s own detection logic or result.
+    check_data_quality_and_alert(bars, args.symbol, timeframe, args.timeframe)
 
     strategy = NasdaqMidlineSweepStrategy(body_multiplier=args.body_multiplier)
     setup, diagnostics, final_bar = check_signal(bars, args.symbol, timeframe, strategy)

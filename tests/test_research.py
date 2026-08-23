@@ -14,9 +14,22 @@ from research.research_optimizer import ParameterOptimizer
 from research.robustness import RobustnessTester
 from research.stability import ParameterStabilityAnalyzer
 from research.walk_forward import WalkForwardRunner
-from strategy.continuation import StrategyConfig
+from strategy.continuation import (
+    BearishContinuationStrategy,
+    BullishContinuationStrategy,
+    StrategyConfig,
+)
+from strategy.interfaces import TradeSetupStrategy
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _continuation_factory() -> list[TradeSetupStrategy]:
+    """Default-config Bullish/BearishContinuationStrategy pair.
+
+    For WalkForwardRunner/RobustnessTester's strategy_factory parameter (Bug #48 fix).
+    """
+    return [BullishContinuationStrategy(), BearishContinuationStrategy()]
 
 
 @pytest.fixture
@@ -77,7 +90,7 @@ def test_walk_forward_runner(dummy_candles: list[Bar], dummy_backtest_config: Ba
         val_size_pct=0.2,
         step_size_pct=0.1,
     )
-    results = runner.run(StrategyConfig(), dummy_backtest_config)
+    results = runner.run(_continuation_factory, dummy_backtest_config)
     assert len(results) > 0
     assert "fold" in results[0]
     assert "train_net_profit" in results[0]
@@ -174,7 +187,7 @@ def test_walk_forward_diagnostics_present_and_reported_for_zero_trade_folds(
     runner = WalkForwardRunner(
         dummy_candles, "EURUSD", Timeframe.H1, train_size_pct=0.5, val_size_pct=0.2, step_size_pct=0.1
     )
-    folds = runner.run(StrategyConfig(), dummy_backtest_config)
+    folds = runner.run(_continuation_factory, dummy_backtest_config)
 
     assert folds
     assert all(f["train_trades"] == 0 and f["val_trades"] == 0 for f in folds)
@@ -271,7 +284,7 @@ def test_robustness_diagnostics_present_and_reported_for_zero_trade_scenarios(
     """
     monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
     tester = RobustnessTester(dummy_candles, "EURUSD", Timeframe.H1)
-    metrics = tester.run(StrategyConfig(), dummy_backtest_config)
+    metrics = tester.run(_continuation_factory, dummy_backtest_config, StrategyConfig().pip_size)
 
     for key in ("baseline", "high_spread", "high_commission", "high_slippage"):
         assert "diagnostics" in metrics[key]
@@ -336,7 +349,7 @@ def test_monte_carlo_simulator() -> None:
 def test_robustness_tester(dummy_candles: list[Bar], dummy_backtest_config: BacktestConfig) -> None:
     """Tests the robustness cost stress-testing module."""
     tester = RobustnessTester(dummy_candles, "EURUSD", Timeframe.H1)
-    metrics = tester.run(StrategyConfig(), dummy_backtest_config)
+    metrics = tester.run(_continuation_factory, dummy_backtest_config, StrategyConfig().pip_size)
     assert "baseline" in metrics
     assert "high_spread" in metrics
     assert "high_commission" in metrics
@@ -462,7 +475,7 @@ def test_walk_forward_runner_produces_real_trades_on_realistic_data(
     runner = WalkForwardRunner(
         realistic_candles, "EURUSD", Timeframe.M15, train_size_pct=0.5, val_size_pct=0.3, step_size_pct=0.3
     )
-    folds = runner.run(StrategyConfig(), dummy_backtest_config)
+    folds = runner.run(_continuation_factory, dummy_backtest_config)
 
     assert folds
     total_trades = sum(f["train_trades"] + f["val_trades"] for f in folds)
@@ -487,7 +500,7 @@ def test_robustness_tester_produces_real_trades_on_realistic_data(
 ) -> None:
     monkeypatch.setenv("TRADEBOT_ARTIFACTS_DIR", str(tmp_path))
     tester = RobustnessTester(realistic_candles, "EURUSD", Timeframe.M15)
-    metrics = tester.run(StrategyConfig(), dummy_backtest_config)
+    metrics = tester.run(_continuation_factory, dummy_backtest_config, StrategyConfig().pip_size)
 
     assert metrics["baseline"]["total_trades"] > 0
 

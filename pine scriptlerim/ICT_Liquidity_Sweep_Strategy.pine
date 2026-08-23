@@ -1,0 +1,430 @@
+//@version=6
+// =============================================================================
+// ICT / Smart Money Liquidity Sweep Strategy
+// EUR/USD (OANDA) - Primary TF: 15m, HTF Trend Filter: 1H
+// =============================================================================
+// MODULES:
+//   1. HTF trend filter (EMA200 on H1)
+//   2. Liquidity detection (prev day H/L, swing H/L, equal highs/lows)
+//   3. Liquidity sweep (wick through level, close back on the other side)
+//   4. Market structure confirmation (BOS / CHoCH)
+//   5. Fair Value Gap detection + revisit-based entry
+//   6. Session filter (London / New York, configurable)
+//   7. Risk management (RR-based TP, sweep-extreme SL, one trade at a time)
+//   8. ATR volatility filter
+//   9. Visualization (liquidity lines, FVG boxes, entry arrows, SL/TP, labels)
+//  10. Alerts
+//
+// DESIGN NOTES / KNOWN SIMPLIFICATIONS (documented, not hidden):
+//   - HTF trend uses EMA200 on the higher timeframe (not full HTF market
+//     structure) for reliability and to avoid repaint from HTF swing
+//     detection. This is the simpler of the two options the spec allowed.
+//   - request.security() calls use lookahead=barmerge.lookahead_off, the
+//     standard non-repainting pattern (only confirmed HTF bars are used).
+//   - Swing highs/lows use ta.pivothigh/ta.pivotlow, which by construction
+//     confirm only after `swingLen` bars have closed on the right side of
+//     the pivot -- this means BOS/CHoCH/liquidity levels update with a
+//     `swingLen`-bar delay relative to the pivot itself. This is standard,
+//     non-repainting swing-detection behavior, not a bug.
+//   - FVGs are tracked in parallel arrays (not the newer box/line library
+//     objects) for portability across Pine v6 environments.
+//   - Equal highs/lows are detected via price-tolerance clustering across
+//     the last N confirmed swings, not a formal "liquidity pool" model.
+// =============================================================================
+
+strategy("ICT Liquidity Sweep Strategy - EURUSD 15m", shorttitle = "ICT-LIQ",
+     overlay = true, initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.percent_of_equity, default_qty_value = 1,
+     commission_type = strategy.commission.percent, commission_value = 0.0,
+     slippage = 0, max_bars_back = 5000, calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+
+// --- Trend Filter ---
+grpTrend        = "Trend Filter"
+i_emaLen        = input.int(200, "EMA Length (HTF Trend)", minval = 1, group = grpTrend)
+i_htfTF         = input.timeframe("60", "Higher Timeframe", group = grpTrend)
+
+// --- Liquidity / Swings ---
+grpLiq          = "Liquidity"
+i_swingLen      = input.int(5, "Swing Length", minval = 1, group = grpLiq)
+i_pipSize       = input.float(0.0001, "Pip Size (instrument-specific)", minval = 0.00001, step = 0.00001, group = grpLiq)
+i_eqTolPips     = input.float(3.0, "Equal High/Low Tolerance (pips)", minval = 0.1, group = grpLiq)
+i_maxSwings     = input.int(20, "Max Tracked Swings (each side)", minval = 5, maxval = 50, group = grpLiq)
+
+// --- Fair Value Gap ---
+grpFvg          = "Fair Value Gap"
+i_minFvgPips    = input.float(2.0, "Minimum FVG Size (pips)", minval = 0.0, group = grpFvg)
+i_fvgMaxBars    = input.int(50, "Maximum Bars Until FVG Expires", minval = 1, group = grpFvg)
+
+// --- Volatility Filter ---
+grpAtr          = "Volatility Filter"
+i_atrLen        = input.int(14, "ATR Length", minval = 1, group = grpAtr)
+i_atrSmaLen     = input.int(50, "ATR Baseline SMA Length", minval = 1, group = grpAtr)
+i_atrMinMult    = input.float(0.5, "Min ATR Multiple (of its own SMA)", minval = 0.0, step = 0.05, group = grpAtr)
+
+// --- Session Filter ---
+grpSess         = "Session Filter"
+i_useLondon     = input.bool(true, "Enable London Session", group = grpSess)
+i_londonSession = input.session("0700-1600", "London Session (Exchange TZ)", group = grpSess)
+i_useNY         = input.bool(true, "Enable New York Session", group = grpSess)
+i_nySession     = input.session("1300-2200", "New York Session (Exchange TZ)", group = grpSess)
+
+// --- Risk Management ---
+grpRisk         = "Risk Management"
+i_rr            = input.float(2.0, "Risk Reward Ratio", minval = 0.1, group = grpRisk)
+i_slBufferPips  = input.float(1.0, "Stop Loss Buffer (pips)", minval = 0.0, group = grpRisk)
+i_maxOpenTrades = input.int(1, "Maximum Open Trades", minval = 1, maxval = 1, group = grpRisk,
+                             tooltip = "Spec requires one trade at a time; kept at 1 by design.")
+
+// --- Visualization ---
+grpViz          = "Visualization"
+i_showLiquidity = input.bool(true, "Show Liquidity Lines", group = grpViz)
+i_showFvg       = input.bool(true, "Show FVG Boxes", group = grpViz)
+i_showStructure = input.bool(true, "Show BOS/CHoCH Labels", group = grpViz)
+i_showSweeps    = input.bool(true, "Show Liquidity Sweep Labels", group = grpViz)
+
+// =============================================================================
+// DERIVED VALUES
+// =============================================================================
+
+pip = i_pipSize
+atrVal    = ta.atr(i_atrLen)
+atrBase   = ta.sma(atrVal, i_atrSmaLen)
+atrOk     = atrVal >= atrBase * i_atrMinMult
+
+inLondon = i_useLondon and not na(time(timeframe.period, i_londonSession))
+inNY     = i_useNY and not na(time(timeframe.period, i_nySession))
+inSession = (i_useLondon or i_useNY) ? (inLondon or inNY) : true
+
+// =============================================================================
+// 1. HTF TREND FILTER
+// =============================================================================
+
+htfEma   = request.security(syminfo.tickerid, i_htfTF, ta.ema(close, i_emaLen), lookahead = barmerge.lookahead_off)
+htfClose = request.security(syminfo.tickerid, i_htfTF, close, lookahead = barmerge.lookahead_off)
+
+bullishTrend = htfClose > htfEma
+bearishTrend = htfClose < htfEma
+
+// =============================================================================
+// 2. LIQUIDITY DETECTION
+// =============================================================================
+
+// --- Previous Day High / Low ---
+pdHigh = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_off)
+pdLow  = request.security(syminfo.tickerid, "D", low[1], lookahead = barmerge.lookahead_off)
+
+// --- Swing High / Low (confirmed, non-repainting) ---
+swingHighPrice = ta.pivothigh(high, i_swingLen, i_swingLen)
+swingLowPrice  = ta.pivotlow(low, i_swingLen, i_swingLen)
+
+var array<float> swingHighPrices = array.new<float>()
+var array<int>   swingHighBars   = array.new<int>()
+var array<float> swingLowPrices  = array.new<float>()
+var array<int>   swingLowBars    = array.new<int>()
+
+var float lastSwingHigh    = na
+var float lastSwingLow     = na
+var int   lastSwingHighBar = na
+var int   lastSwingLowBar  = na
+
+// equalHighLevel / equalLowLevel hold the matched price when the newest
+// confirmed swing clusters with an earlier one within tolerance.
+var float equalHighLevel = na
+var float equalLowLevel  = na
+
+f_findMatch(arr, newPrice, tol) =>
+    float result = na
+    n = array.size(arr)
+    if n > 1
+        for i = n - 2 to 0
+            p = array.get(arr, i)
+            if math.abs(p - newPrice) <= tol
+                result := p
+                break
+    result
+
+if not na(swingHighPrice)
+    lastSwingHigh    := swingHighPrice
+    lastSwingHighBar := bar_index - i_swingLen
+    equalHighLevel    := f_findMatch(swingHighPrices, swingHighPrice, i_eqTolPips * pip)
+    array.push(swingHighPrices, swingHighPrice)
+    array.push(swingHighBars, lastSwingHighBar)
+    if array.size(swingHighPrices) > i_maxSwings
+        array.shift(swingHighPrices)
+        array.shift(swingHighBars)
+    if i_showLiquidity
+        line.new(lastSwingHighBar, swingHighPrice, bar_index + 20, swingHighPrice,
+             color = color.new(color.red, 40), style = line.style_dashed, extend = extend.none)
+
+if not na(swingLowPrice)
+    lastSwingLow    := swingLowPrice
+    lastSwingLowBar := bar_index - i_swingLen
+    equalLowLevel    := f_findMatch(swingLowPrices, swingLowPrice, i_eqTolPips * pip)
+    array.push(swingLowPrices, swingLowPrice)
+    array.push(swingLowBars, lastSwingLowBar)
+    if array.size(swingLowPrices) > i_maxSwings
+        array.shift(swingLowPrices)
+        array.shift(swingLowBars)
+    if i_showLiquidity
+        line.new(lastSwingLowBar, swingLowPrice, bar_index + 20, swingLowPrice,
+             color = color.new(color.lime, 40), style = line.style_dashed, extend = extend.none)
+
+// =============================================================================
+// 3. LIQUIDITY SWEEP DETECTION
+// =============================================================================
+// Sell-side liquidity = below price (swing lows, prev day low, equal lows).
+// Buy-side liquidity  = above price (swing highs, prev day high, equal highs).
+//
+// Bullish sweep: current bar's low pierces a sell-side level, close reclaims
+// back above it.
+// Bearish sweep: current bar's high pierces a buy-side level, close reclaims
+// back below it.
+
+f_sweptLevel(levelArr) =>
+    // Returns the nearest sell-side (or buy-side) level swept by this bar,
+    // or na if none. Caller passes the relevant array of candidate levels.
+    float result = na
+    for i = 0 to array.size(levelArr) - 1
+        lvl = array.get(levelArr, i)
+        if not na(lvl)
+            result := lvl
+    result
+
+var array<float> sellSideLevels = array.new<float>()
+var array<float> buySideLevels  = array.new<float>()
+
+array.clear(sellSideLevels)
+array.clear(buySideLevels)
+if not na(pdLow)
+    array.push(sellSideLevels, pdLow)
+if not na(lastSwingLow)
+    array.push(sellSideLevels, lastSwingLow)
+if not na(equalLowLevel)
+    array.push(sellSideLevels, equalLowLevel)
+if not na(pdHigh)
+    array.push(buySideLevels, pdHigh)
+if not na(lastSwingHigh)
+    array.push(buySideLevels, lastSwingHigh)
+if not na(equalHighLevel)
+    array.push(buySideLevels, equalHighLevel)
+
+f_bullishSweep() =>
+    bool swept = false
+    float sweptLvl = na
+    for i = 0 to array.size(sellSideLevels) - 1
+        lvl = array.get(sellSideLevels, i)
+        if not na(lvl) and low < lvl and close > lvl
+            swept := true
+            sweptLvl := lvl
+    [swept, sweptLvl]
+
+f_bearishSweep() =>
+    bool swept = false
+    float sweptLvl = na
+    for i = 0 to array.size(buySideLevels) - 1
+        lvl = array.get(buySideLevels, i)
+        if not na(lvl) and high > lvl and close < lvl
+            swept := true
+            sweptLvl := lvl
+    [swept, sweptLvl]
+
+[hasBullSweep, bullSweepLevel] = f_bullishSweep()
+[hasBearSweep, bearSweepLevel] = f_bearishSweep()
+
+if i_showSweeps and hasBullSweep
+    label.new(bar_index, low, "SSL Sweep", style = label.style_label_up,
+         color = color.new(color.green, 0), textcolor = color.white, size = size.tiny)
+if i_showSweeps and hasBearSweep
+    label.new(bar_index, high, "BSL Sweep", style = label.style_label_down,
+         color = color.new(color.red, 0), textcolor = color.white, size = size.tiny)
+
+// =============================================================================
+// 4. MARKET STRUCTURE CONFIRMATION (BOS / CHoCH)
+// =============================================================================
+// Simple state machine: track current structural bias from confirmed swings.
+// BOS  = a break of structure in the direction of the current bias.
+// CHoCH = a break of structure AGAINST the current bias (bias flips).
+
+var int structBias = 0 // 1 = bullish, -1 = bearish, 0 = undefined
+var bool bosUp   = false
+var bool bosDown = false
+var bool chochUp   = false
+var bool chochDown = false
+
+bosUp   := false
+bosDown := false
+chochUp   := false
+chochDown := false
+
+if not na(lastSwingHigh) and close > lastSwingHigh
+    if structBias == -1
+        chochUp := true
+        structBias := 1
+    else
+        bosUp := true
+        structBias := 1
+
+if not na(lastSwingLow) and close < lastSwingLow
+    if structBias == 1
+        chochDown := true
+        structBias := -1
+    else
+        bosDown := true
+        structBias := -1
+
+if i_showStructure and bosUp
+    label.new(bar_index, high, "BOS", style = label.style_label_down, color = color.new(color.blue, 0), textcolor = color.white, size = size.tiny)
+if i_showStructure and chochUp
+    label.new(bar_index, high, "CHoCH", style = label.style_label_down, color = color.new(color.orange, 0), textcolor = color.white, size = size.tiny)
+if i_showStructure and bosDown
+    label.new(bar_index, low, "BOS", style = label.style_label_up, color = color.new(color.blue, 0), textcolor = color.white, size = size.tiny)
+if i_showStructure and chochDown
+    label.new(bar_index, low, "CHoCH", style = label.style_label_up, color = color.new(color.orange, 0), textcolor = color.white, size = size.tiny)
+
+structureConfirmsBull = bosUp or chochUp
+structureConfirmsBear = bosDown or chochDown
+
+// =============================================================================
+// 5. FAIR VALUE GAP DETECTION
+// =============================================================================
+// Standard ICT 3-candle FVG:
+//   Bullish FVG: high[2] < low[0]   (gap between candle i-2 high and candle i low)
+//   Bearish FVG: low[2]  > high[0]  (gap between candle i-2 low and candle i high)
+
+bullFvg = high[2] < low
+bearFvg = low[2] > high
+
+var array<float> fvgTopArr    = array.new<float>()
+var array<float> fvgBotArr    = array.new<float>()
+var array<int>   fvgBarArr    = array.new<int>()
+var array<bool>  fvgIsBullArr = array.new<bool>()
+var array<bool>  fvgActiveArr = array.new<bool>()
+var array<box>   fvgBoxArr    = array.new<box>()
+
+fvgSize(top, bot) => math.abs(top - bot)
+
+if bullFvg and fvgSize(low, high[2]) >= i_minFvgPips * pip
+    array.push(fvgTopArr, low)
+    array.push(fvgBotArr, high[2])
+    array.push(fvgBarArr, bar_index)
+    array.push(fvgIsBullArr, true)
+    array.push(fvgActiveArr, true)
+    b = i_showFvg ? box.new(bar_index - 2, low, bar_index, high[2],
+         border_color = color.new(color.lime, 60), bgcolor = color.new(color.lime, 85)) : na
+    array.push(fvgBoxArr, b)
+
+if bearFvg and fvgSize(low[2], high) >= i_minFvgPips * pip
+    array.push(fvgTopArr, low[2])
+    array.push(fvgBotArr, high)
+    array.push(fvgBarArr, bar_index)
+    array.push(fvgIsBullArr, false)
+    array.push(fvgActiveArr, true)
+    b = i_showFvg ? box.new(bar_index - 2, low[2], bar_index, high,
+         border_color = color.new(color.red, 60), bgcolor = color.new(color.red, 85)) : na
+    array.push(fvgBoxArr, b)
+
+// Check current bar against all active FVGs: mark revisited / expire old ones.
+var bool bullFvgRevisit = false
+var bool bearFvgRevisit = false
+bullFvgRevisit := false
+bearFvgRevisit := false
+
+if array.size(fvgTopArr) > 0
+    for i = array.size(fvgTopArr) - 1 to 0
+        if array.get(fvgActiveArr, i)
+            top    = array.get(fvgTopArr, i)
+            bot    = array.get(fvgBotArr, i)
+            origin = array.get(fvgBarArr, i)
+            isBull = array.get(fvgIsBullArr, i)
+            age = bar_index - origin
+            if age > i_fvgMaxBars
+                array.set(fvgActiveArr, i, false)
+                bx = array.get(fvgBoxArr, i)
+                if not na(bx)
+                    box.delete(bx)
+            else if low <= top and high >= bot
+                // price has revisited this FVG's range
+                if isBull
+                    bullFvgRevisit := true
+                else
+                    bearFvgRevisit := true
+                array.set(fvgActiveArr, i, false)
+                bx = array.get(fvgBoxArr, i)
+                if not na(bx)
+                    box.set_bgcolor(bx, color.new(color.gray, 90))
+
+// =============================================================================
+// 6. SESSION FILTER (see inSession above)
+// =============================================================================
+
+// =============================================================================
+// 7-8. ENTRY CONDITIONS (sweep -> structure confirmation -> FVG revisit)
+// =============================================================================
+
+longSetup  = hasBullSweep and structureConfirmsBull and bullFvgRevisit and bullishTrend and inSession and atrOk
+shortSetup = hasBearSweep and structureConfirmsBear and bearFvgRevisit and bearishTrend and inSession and atrOk
+
+noOpenTrade = strategy.opentrades == 0
+
+var float pendingSweepLow  = na
+var float pendingSweepHigh = na
+
+if hasBullSweep
+    pendingSweepLow := low
+if hasBearSweep
+    pendingSweepHigh := high
+
+canLong  = longSetup and noOpenTrade
+canShort = shortSetup and noOpenTrade
+
+// =============================================================================
+// 9. RISK MANAGEMENT / ORDER EXECUTION
+// =============================================================================
+
+if canLong
+    slPrice = pendingSweepLow - i_slBufferPips * pip
+    riskDist = close - slPrice
+    if riskDist > 0
+        tpPrice = close + riskDist * i_rr
+        strategy.entry("Long", strategy.long)
+        strategy.exit("Long Exit", from_entry = "Long", stop = slPrice, limit = tpPrice)
+        label.new(bar_index, low, "BUY", style = label.style_label_up,
+             color = color.new(color.green, 0), textcolor = color.white, size = size.small)
+        alert("ICT-LIQ: BUY signal on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if canShort
+    slPrice = pendingSweepHigh + i_slBufferPips * pip
+    riskDist = slPrice - close
+    if riskDist > 0
+        tpPrice = close - riskDist * i_rr
+        strategy.entry("Short", strategy.short)
+        strategy.exit("Short Exit", from_entry = "Short", stop = slPrice, limit = tpPrice)
+        label.new(bar_index, high, "SELL", style = label.style_label_down,
+             color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+        alert("ICT-LIQ: SELL signal on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// =============================================================================
+// ALERT CONDITIONS
+// =============================================================================
+
+alertcondition(canLong, title = "BUY Signal", message = "ICT-LIQ: BUY signal")
+alertcondition(canShort, title = "SELL Signal", message = "ICT-LIQ: SELL signal")
+alertcondition(hasBullSweep, title = "Liquidity Sweep (Sell-Side)", message = "ICT-LIQ: Sell-side liquidity swept")
+alertcondition(hasBearSweep, title = "Liquidity Sweep (Buy-Side)", message = "ICT-LIQ: Buy-side liquidity swept")
+alertcondition(bullFvg or bearFvg, title = "FVG Created", message = "ICT-LIQ: New Fair Value Gap formed")
+alertcondition(canLong or canShort, title = "Trade Entry", message = "ICT-LIQ: Trade entry triggered")
+
+// =============================================================================
+// VISUALIZATION - TREND EMA (for visual context only)
+// =============================================================================
+
+plot(htfEma, title = "HTF EMA", color = bullishTrend ? color.new(color.lime, 0) : color.new(color.red, 0), linewidth = 2)
+
+// =============================================================================
+// END OF SCRIPT
+// =============================================================================

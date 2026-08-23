@@ -2,6 +2,7 @@
 
 import json
 import random
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -11,12 +12,8 @@ from backtest.engine import BacktestEngine
 from backtest.models import BacktestConfig, BacktestResult
 from backtest.report import BacktestReportGenerator
 from core.models import Bar, Timeframe
-from strategy.continuation import (
-    BearishContinuationStrategy,
-    BullishContinuationStrategy,
-    StrategyConfig,
-)
 from strategy.diagnostics import top_rejection_reasons
+from strategy.interfaces import TradeSetupStrategy
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
@@ -39,12 +36,31 @@ class RobustnessTester:
         self.symbol = symbol
         self.timeframe = timeframe
 
-    def run(self, strat_config: StrategyConfig, base_backtest_config: BacktestConfig) -> dict[str, Any]:
+    def run(
+        self,
+        strategy_factory: Callable[[], list[TradeSetupStrategy]],
+        base_backtest_config: BacktestConfig,
+        pip_size: float,
+    ) -> dict[str, Any]:
         """Runs the robustness test suite.
 
         Args:
-            strat_config: StrategyConfig parameters.
+            strategy_factory: Builds the list of TradeSetupStrategy instances
+                to register on a fresh StrategyEngine for each simulation
+                (called once per _simulate()/_raw_simulate_result() call, so
+                every stress scenario gets brand-new strategy instances with
+                no state carried over from a previous run -- the same DI
+                pattern StrategyEngine itself uses: it only ever depends on
+                the TradeSetupStrategy interface, never a concrete strategy
+                class). Any strategy-specific configuration (e.g.
+                StrategyConfig) is captured in the factory's closure by the
+                caller.
             base_backtest_config: BacktestConfig parameters.
+            pip_size: Price value of a single pip for the instrument under
+                test, used only for the slippage-stress scenario (3x
+                slippage + 1 pip). Orthogonal to which strategy is being
+                tested -- previously read off strat_config.pip_size, now
+                passed explicitly since strat_config no longer exists here.
 
         Returns:
             A dictionary containing robustness metrics.
@@ -52,7 +68,7 @@ class RobustnessTester:
         logger.info("Starting strategy robustness stress tests...")
 
         # 1. Baseline
-        base_res = self._simulate(strat_config, base_backtest_config)
+        base_res = self._simulate(strategy_factory, base_backtest_config)
 
         # 2. Spread Stress (3x spread)
         spread_stress_config = BacktestConfig(
@@ -64,7 +80,7 @@ class RobustnessTester:
             commission_per_lot=base_backtest_config.commission_per_lot,
             max_holding_bars=base_backtest_config.max_holding_bars,
         )
-        spread_res = self._simulate(strat_config, spread_stress_config)
+        spread_res = self._simulate(strategy_factory, spread_stress_config)
 
         # 3. Commission Stress (2x commission)
         comm_stress_config = BacktestConfig(
@@ -76,10 +92,9 @@ class RobustnessTester:
             commission_per_lot=base_backtest_config.commission_per_lot * 2.0 if base_backtest_config.commission_per_lot is not None else None,
             max_holding_bars=base_backtest_config.max_holding_bars,
         )
-        comm_res = self._simulate(strat_config, comm_stress_config)
+        comm_res = self._simulate(strategy_factory, comm_stress_config)
 
         # 4. Slippage Stress (3x slippage + 1 pip fixed)
-        pip_size = strat_config.pip_size
         slip_stress_config = BacktestConfig(
             initial_balance=base_backtest_config.initial_balance,
             risk_per_trade=base_backtest_config.risk_per_trade,
@@ -89,10 +104,10 @@ class RobustnessTester:
             commission_per_lot=base_backtest_config.commission_per_lot,
             max_holding_bars=base_backtest_config.max_holding_bars,
         )
-        slip_res = self._simulate(strat_config, slip_stress_config)
+        slip_res = self._simulate(strategy_factory, slip_stress_config)
 
         # 5. Skipped Trades Stress (10% and 25% post-processed skips over 100 runs)
-        base_engine_res = self._raw_simulate_result(strat_config, base_backtest_config)
+        base_engine_res = self._raw_simulate_result(strategy_factory, base_backtest_config)
         skip_10_profit, skip_10_dd = self._simulate_skips(base_engine_res, skip_prob=0.10)
         skip_25_profit, skip_25_dd = self._simulate_skips(base_engine_res, skip_prob=0.25)
 
@@ -108,15 +123,17 @@ class RobustnessTester:
         self._export_artifacts(metrics)
         return metrics
 
-    def _simulate(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> dict[str, Any]:
+    def _simulate(
+        self, strategy_factory: Callable[[], list[TradeSetupStrategy]], backtest_config: BacktestConfig
+    ) -> dict[str, Any]:
         """Runs the simulation and returns basic performance values."""
         if not self.candles:
             return {"net_profit": 0.0, "max_drawdown": 0.0, "total_trades": 0, "diagnostics": {}}
 
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
-        strategy_engine.register_strategy(BullishContinuationStrategy(config=strat_config))
-        strategy_engine.register_strategy(BearishContinuationStrategy(config=strat_config))
+        for strategy in strategy_factory():
+            strategy_engine.register_strategy(strategy)
 
         engine = BacktestEngine(config=backtest_config)
         result = engine.run(self.candles, strategy_engine, state_builder)
@@ -131,12 +148,14 @@ class RobustnessTester:
             "diagnostics": strategy_engine.get_diagnostics(),
         }
 
-    def _raw_simulate_result(self, strat_config: StrategyConfig, backtest_config: BacktestConfig) -> BacktestResult:
+    def _raw_simulate_result(
+        self, strategy_factory: Callable[[], list[TradeSetupStrategy]], backtest_config: BacktestConfig
+    ) -> BacktestResult:
         """Runs the simulation and returns raw BacktestResult."""
         state_builder = MarketStateBuilder(symbol=self.symbol, timeframe=self.timeframe)
         strategy_engine = StrategyEngine()
-        strategy_engine.register_strategy(BullishContinuationStrategy(config=strat_config))
-        strategy_engine.register_strategy(BearishContinuationStrategy(config=strat_config))
+        for strategy in strategy_factory():
+            strategy_engine.register_strategy(strategy)
 
         engine = BacktestEngine(config=backtest_config)
         return engine.run(self.candles, strategy_engine, state_builder)

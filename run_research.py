@@ -3,6 +3,7 @@
 
 import sys
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -28,11 +29,24 @@ from strategy.continuation import (
     BullishContinuationStrategy,
     StrategyConfig,
 )
+from strategy.interfaces import TradeSetupStrategy
 from strategy.strategy_engine import StrategyEngine
 from utils.logging import setup_logger
 from utils.paths import PROJECT_ROOT
 
 logger = setup_logger("run_research")
+
+
+def _continuation_strategy_factory(strat_config: StrategyConfig) -> list[TradeSetupStrategy]:
+    """Builds fresh Bullish/BearishContinuationStrategy instances for one simulation call.
+
+    Bug #48 fix -- see research/walk_forward.py, research/robustness.py: both now take
+    a strategy_factory instead of importing these strategies directly.
+    """
+    return [
+        BullishContinuationStrategy(config=strat_config),
+        BearishContinuationStrategy(config=strat_config),
+    ]
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -161,7 +175,7 @@ def main() -> None:
             step_size_pct=0.1,
             expanding=False,
         )
-        folds = wf_runner.run(strat_config, backtest_config)
+        folds = wf_runner.run(partial(_continuation_strategy_factory, strat_config), backtest_config)
         results["walk_forward"] = {
             "status": "SUCCESS",
             "data": folds,
@@ -220,7 +234,9 @@ def main() -> None:
     logger.info("\n--- [STAGE 4] Robustness Testing ---")
     try:
         robustness_tester = RobustnessTester(candles, symbol, timeframe_enum)
-        rob_metrics = robustness_tester.run(strat_config, backtest_config)
+        rob_metrics = robustness_tester.run(
+            partial(_continuation_strategy_factory, strat_config), backtest_config, strat_config.pip_size
+        )
         results["robustness"] = {
             "status": "SUCCESS",
             "data": rob_metrics,
