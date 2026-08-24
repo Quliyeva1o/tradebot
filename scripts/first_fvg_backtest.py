@@ -91,7 +91,7 @@ ENTRY_MODE = "touch"  # "touch" = fill at the FVG's near edge on first touch; "c
 PRICE_DECIMALS = 2
 USE_BIAS_FILTER = False  # set False to trade the first FVG regardless of daily PD-midline bias
 REQUIRE_DISPLACEMENT = False  # set True to require the FVG's middle candle to be a DisplacementDetector hit (ATR>=2x)
-FIXED_TP_R = 3.0  # stable 3R take-profit instead of the liquidity-hunt target; None = liquidity-based
+FIXED_TP_R = 2.5  # stable 2.5R take-profit instead of the liquidity-hunt target; None = liquidity-based
 ATR_MULTIPLIER = 2.0
 ATR_PERIOD = 14
 SWING_LOOKBACK_DAYS = 15
