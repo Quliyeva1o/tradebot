@@ -87,9 +87,11 @@ SESSIONS = [
 CASH_SESSION_START = time(9, 30)
 CASH_SESSION_END = time(16, 0)
 MIN_GAP_POINTS = 3.0
-SL_BUFFER_POINTS = 5.0
+ENTRY_MODE = "touch"  # "touch" = fill at the FVG's near edge on first touch; "confirmation" = wait for a candle to tag the zone AND close back outside it in the trade direction, fill at that close
 PRICE_DECIMALS = 2
-USE_BIAS_FILTER = True  # set False to trade the first FVG regardless of daily PD-midline bias
+USE_BIAS_FILTER = False  # set False to trade the first FVG regardless of daily PD-midline bias
+REQUIRE_DISPLACEMENT = False  # set True to require the FVG's middle candle to be a DisplacementDetector hit (ATR>=2x)
+FIXED_TP_R = 3.0  # stable 3R take-profit instead of the liquidity-hunt target; None = liquidity-based
 ATR_MULTIPLIER = 2.0
 ATR_PERIOD = 14
 SWING_LOOKBACK_DAYS = 15
@@ -198,7 +200,7 @@ def find_first_fvg(
         fvg
         for fvg in fvgs
         if window_start <= fvg.timestamp.time() < window_end
-        and fvg.timestamp in displaced
+        and (not REQUIRE_DISPLACEMENT or fvg.timestamp in displaced)
         and (wanted_fvg_direction is None or fvg.direction == wanted_fvg_direction)
     ]
     if not candidates:
@@ -264,52 +266,70 @@ def process_session(
     direction = "LONG" if fvg.direction == FVGDirection.BULLISH else "SHORT"
     upper, lower = fvg.upper_price, fvg.lower_price
     fvg_end_ts = context[fvg.end_index].ts
+    displacement_bar = context[fvg.start_index + 1]  # the middle candle that created the FVG
 
     rest_of_day = [b for b in day_bars if b.ts > fvg_end_ts]
     entry_bar = None
     entry_price = None
-    for b in rest_of_day:
-        if direction == "LONG" and b.low <= upper:
-            entry_bar, entry_price = b, upper
-            break
-        if direction == "SHORT" and b.high >= lower:
-            entry_bar, entry_price = b, lower
-            break
+    if ENTRY_MODE == "touch":
+        for b in rest_of_day:
+            if direction == "LONG" and b.low <= upper:
+                entry_bar, entry_price = b, upper
+                break
+            if direction == "SHORT" and b.high >= lower:
+                entry_bar, entry_price = b, lower
+                break
+    else:  # "confirmation": must tag the zone AND close back outside it in the trade direction
+        for b in rest_of_day:
+            if direction == "LONG" and b.low <= upper and b.close > upper:
+                entry_bar, entry_price = b, b.close
+                break
+            if direction == "SHORT" and b.high >= lower and b.close < lower:
+                entry_bar, entry_price = b, b.close
+                break
     if entry_bar is None:
         skip(f"{session_label}:fvg_never_retested")
         return None
 
+    # SL = the low (bullish) / high (bearish) of the CANDLE THAT CREATED the FVG
+    # (the middle/displacement candle), not the FVG zone's own boundary --
+    # these can differ since the displacement candle's wick may extend
+    # beyond the gap's own edge.
     if direction == "LONG":
-        stop = lower - SL_BUFFER_POINTS
+        stop = displacement_bar.low
     else:
-        stop = upper + SL_BUFFER_POINTS
+        stop = displacement_bar.high
     risk_dist = abs(entry_price - stop)
     if risk_dist <= 0:
         skip(f"{session_label}:non_positive_risk")
         return None
 
-    candidates: list[tuple[float, str]] = []
-    if direction == "SHORT":
-        if prev_cash and prev_cash[1] < entry_price:
-            candidates.append((prev_cash[1], "PDL"))
-        sw = nearest_unmitigated_swing(d, trading_days, swing_lows, swing_highs, daily_hl, "short", entry_price, SWING_LOOKBACK_DAYS)
-        if sw is not None:
-            candidates.append((sw, "swing_low"))
+    if FIXED_TP_R is not None:
+        target_price = entry_price - FIXED_TP_R * risk_dist if direction == "SHORT" else entry_price + FIXED_TP_R * risk_dist
+        target_type = f"FIXED_{FIXED_TP_R:g}R"
     else:
-        if prev_cash and prev_cash[0] > entry_price:
-            candidates.append((prev_cash[0], "PDH"))
-        sw = nearest_unmitigated_swing(d, trading_days, swing_lows, swing_highs, daily_hl, "long", entry_price, SWING_LOOKBACK_DAYS)
-        if sw is not None:
-            candidates.append((sw, "swing_high"))
+        candidates: list[tuple[float, str]] = []
+        if direction == "SHORT":
+            if prev_cash and prev_cash[1] < entry_price:
+                candidates.append((prev_cash[1], "PDL"))
+            sw = nearest_unmitigated_swing(d, trading_days, swing_lows, swing_highs, daily_hl, "short", entry_price, SWING_LOOKBACK_DAYS)
+            if sw is not None:
+                candidates.append((sw, "swing_low"))
+        else:
+            if prev_cash and prev_cash[0] > entry_price:
+                candidates.append((prev_cash[0], "PDH"))
+            sw = nearest_unmitigated_swing(d, trading_days, swing_lows, swing_highs, daily_hl, "long", entry_price, SWING_LOOKBACK_DAYS)
+            if sw is not None:
+                candidates.append((sw, "swing_high"))
 
-    if not candidates:
-        skip(f"{session_label}:no_liquidity_candidate")
-        return None
+        if not candidates:
+            skip(f"{session_label}:no_liquidity_candidate")
+            return None
 
-    if direction == "SHORT":
-        target_price, target_type = max(candidates, key=lambda c: c[0])
-    else:
-        target_price, target_type = min(candidates, key=lambda c: c[0])
+        if direction == "SHORT":
+            target_price, target_type = max(candidates, key=lambda c: c[0])
+        else:
+            target_price, target_type = min(candidates, key=lambda c: c[0])
 
     # Same-bar instant-stop check: the entry bar itself may have already
     # blown through the far edge before/as it touched the near edge.
