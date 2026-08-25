@@ -62,3 +62,58 @@
 - [x] **Bug #26**: `.env`-də yanlış `MT5_LOGIN` dəyəri bütün importları (MT5-ə aidiyyəti olmayanlar da daxil) çökdürürdü — `_parse_mt5_login()` ilə qorundu. Commit `1739f4f`. DÜZƏLDİLDİ.
 - [x] **Bug #27**: `TradeSetup.strategy_name` heç vaxt doldurulmurdu (həmişə `""`), per-trade atributsiyanı bərpaolunmaz edirdi — 5 strategiyanın hamısında təyin edildi. Commit `66d173e`. DÜZƏLDİLDİ.
 - [x] **Strategiya #4 (OrderBlockRetestStrategy)**: mövcud SMC pipeline OB-lərini yenidən istifadə edən 4-cü strategiya əlavə edildi, `is_mitigated`-dən müstəqil `_used_ob_ids` təkrar-istifadə qoruyucusu ilə. 9 yeni test. Commit `33c1d6c`. ƏLAVƏ EDİLDİ.
+
+## Midnight FVG canlı botu (MIDNIGHT_FVG_BOT_SPEC.md üzrə, bu sessiya)
+
+`MIDNIGHT_FVG_BOT_SPEC.md`-də təsvir olunan tapşırıq yerinə yetirildi:
+`strategy/midnight_fvg.py` (`MidnightFvgStrategy`) və `run_live_midnight_fvg.py`
+yaradıldı, `strategy/ny_open_accumulation_breakout.py` /
+`run_live_accumulation_breakout.py`-nin strukturu təkrarlanaraq (eyni
+`TradeSetupStrategy` interfeysi, eyni iki-qatlı demo-hesab təhlükəsizlik
+zolağı, eyni kill-switch/`--paper` state-izolyasiya pattern-i, öz ayrıca
+`risk/kill_switch_midnight_fvg_paper.flag` /
+`risk/daily_risk_state_midnight_fvg_paper.json` faylları ilə).
+
+**Doğrulama**: `scripts/replay_live_strategy_check_midnight_fvg.py` (yeni,
+`scripts/replay_live_strategy_check.py`-nin analoqu) canlı sinifi
+`data/history/USTEC_M1.csv`-in mövcud tam tarixçəsi (2026-05-12 →
+2026-08-21, ~3.3 ay) üzərindən şam-şam keçirdi və nəticəni
+`scripts/first_fvg_backtest.py`-in eyni pəncərədəki batch nəticəsi ilə
+tutuşdurdu: **65/65 trade, hər birinin giriş/SL/TP qiyməti və vaxtı tam eyni**
+(bax bu iş zamanı düzəldilən 2 bug aşağıda — düzəlişlərdən SONRA əldə edilən
+nəticə). `tests/test_midnight_fvg.py` (15 test) əlavə edildi.
+
+**Bu sessiyada tapılıb düzəldilən 2 bug (ilk qaralama versiyasında, commit
+edilməzdən əvvəl)**:
+1. Eyni-şam "özünə-toxunma" bug-ı: FVG-ni tamamlayan (3-cü/son) şamın öz
+   wick-i, tərifə görə, FVG-nin yaxın kənarına HƏMİŞƏ dəqiq bərabərdir —
+   ona görə retest yoxlaması səhvən HƏMİN ŞAM ÜZƏRİNDƏ də işə düşürdü (FVG
+   yarananda "ani" saxta giriş). Düzəliş: FVG-nin formalaşdığı elə həmin
+   tick-də retest yoxlanılmır (`scripts/first_fvg_backtest.py`-in `b.ts >
+   fvg_end_ts` — SƏRT `>` — şərtinə uyğun).
+2. Gecəyarısı-kəsişən "quyruq" bug-ı: əvvəlki günün son 1-2 şamını yeni günün
+   FVG-axtarış bufferinə "toxum" kimi əlavə etmə məntiqi (23:59→00:00→00:01
+   kimi 3-şamlıq FVG-ni tutmaq üçün) HANSI VAXTDA olursa-olsun son 2 şamı
+   götürürdü — data-da fasilə (gap) olduqda, həmin "quyruq" şamları
+   gecəyarıya yaxın olmaya bilər və onların vaxtı təsadüfən [00:00,00:30)
+   pəncərəsinə düşərsə, saxta FVG yarada bilərdi. Düzəliş:
+   `scripts/first_fvg_backtest.py`-in `context_before`-un `ts.time() >=
+   22:00` filtri kimi, "quyruq" yalnız 23:55-dən sonrakı şamlarla
+   məhdudlaşdırıldı.
+
+**Ayrıca tapılan, DÜZƏLDİLMƏMİŞ tapıntı (`run_live_accumulation_breakout.py`
+haqqında, bax `run_live_midnight_fvg.py`-nin modul docstring-i)**: bu skript
+`_evaluate_for_new_trade()`-də bütün lookback şamlarını əvvəlcə
+`market_state`-ə əlavə edib SONRA `strategy.evaluate()`-i BİR DƏFƏ çağırır —
+`scripts/replay_live_strategy_check.py`-in özünün istifadə etdiyi (və
+düzgün olan) şam-şam replay pattern-indən fərqli olaraq. `main()` hər
+invocation-da TƏZƏ strategiya obyekti yaratdığı üçün (proses davamlılığı
+yoxdur), bu, `NyOpenAccumulationBreakoutStrategy`-nin çox-şamlı
+akkumulyasiya pəncərəsinin (2-8 şam) HEÇ VAXT toplana bilməyəcəyi mənasına
+gəlir — bot, olduğu kimi, HEÇ VAXT siqnal verə bilməz. `run_live_midnight_fvg.py`
+bunu düzgün (şam-şam replay) yazıldı, amma `run_live_accumulation_breakout.py`
+özü TOXUNULMADI (bu sessiyanın əhatəsindən kənarda) — FAZA 7-dən əvvəl bu
+ayrıca araşdırılıb düzəldilməlidir.
+
+**Qalıb (bu botun özü üçün)**: hələ demo/paper hesabda işə salınmayıb (spesifikasiyanın
+təhlükəsizlik tələbinə uyğun, əvvəlcə `--paper` ilə uzun müddət sınanmalıdır).
