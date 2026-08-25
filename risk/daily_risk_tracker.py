@@ -39,13 +39,29 @@ class DailyRiskTracker:
         max_daily_loss_pct: Fraction of day-start equity that, if lost,
             triggers the kill-switch (e.g. 0.05 = 5%). Defaults to
             Settings.MAX_DAILY_LOSS_PCT when not given explicitly.
+        state_file: Override for which day-start-equity baseline file to
+            read/write. Defaults to the shared STATE_FILE. Pass a distinct
+            path for a tracker whose equity is not comparable to the real
+            account's -- e.g. a --paper trading run's virtual balance, which
+            would otherwise corrupt (or be corrupted by) the real account's
+            daily-loss baseline if both processes wrote to the same file.
+        kill_switch_flag_path: Override for which kill-switch flag this
+            tracker's own daily-loss trip reads/creates -- see
+            risk.kill_switch.is_trading_halted()/activate_kill_switch(). Kept
+            separate from state_file so a caller can isolate the baseline
+            without also isolating the halt (or vice versa), though the two
+            are set together in practice (see run_live_accumulation_breakout.py).
     """
 
     max_daily_loss_pct: float | None = None
+    state_file: Path | None = None
+    kill_switch_flag_path: Path | None = None
 
     def __post_init__(self) -> None:
         if self.max_daily_loss_pct is None:
             self.max_daily_loss_pct = Settings.load().MAX_DAILY_LOSS_PCT
+        if self.state_file is None:
+            self.state_file = STATE_FILE
 
     def check_and_update(self, current_equity: float) -> bool:
         """Compares current_equity against today's recorded day-start equity.
@@ -77,7 +93,7 @@ class DailyRiskTracker:
         if not isinstance(day_start_equity, int | float) or day_start_equity <= 0:
             logger.error(
                 "Invalid day_start_equity in %s (%r); resetting today's baseline to %.2f.",
-                STATE_FILE,
+                self.state_file,
                 day_start_equity,
                 current_equity,
             )
@@ -88,12 +104,12 @@ class DailyRiskTracker:
         if loss_pct < self.max_daily_loss_pct:
             return False
 
-        was_halted_before = is_trading_halted()
+        was_halted_before = is_trading_halted(self.kill_switch_flag_path)
         reason = (
             f"Daily equity loss {loss_pct:.2%} >= limit {self.max_daily_loss_pct:.2%} "
             f"(day-start equity {day_start_equity:.2f}, current {current_equity:.2f})"
         )
-        activate_kill_switch(reason)
+        activate_kill_switch(reason, self.kill_switch_flag_path)
         return not was_halted_before
 
     def _read_state(self) -> dict | None:
@@ -108,11 +124,11 @@ class DailyRiskTracker:
         continue) is the same "never crash the caller" direction.
         """
         try:
-            return json.loads(STATE_FILE.read_text())
+            return json.loads(self.state_file.read_text())
         except FileNotFoundError:
             return None
         except Exception as exc:  # noqa: BLE001 - see docstring: must never raise, but always logged
-            logger.error("Could not read/parse %s: %s. Resetting today's baseline.", STATE_FILE, type(exc).__name__)
+            logger.error("Could not read/parse %s: %s. Resetting today's baseline.", self.state_file, type(exc).__name__)
             return None
 
     def _write_state(self, date: str, day_start_equity: float) -> None:
@@ -124,7 +140,7 @@ class DailyRiskTracker:
         degrading tracking continuity rather than corrupting it silently.
         """
         try:
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            STATE_FILE.write_text(json.dumps({"date": date, "day_start_equity": day_start_equity}))
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self.state_file.write_text(json.dumps({"date": date, "day_start_equity": day_start_equity}))
         except Exception as exc:  # noqa: BLE001
-            logger.error("Could not persist daily risk state to %s: %s", STATE_FILE, type(exc).__name__)
+            logger.error("Could not persist daily risk state to %s: %s", self.state_file, type(exc).__name__)

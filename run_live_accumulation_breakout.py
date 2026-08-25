@@ -66,6 +66,15 @@ trade_events_logger = setup_structured_logger("trade_events")
 DEFAULT_LOOKBACK_DAYS = 35  # covers structure_lookback_days(20) + swing_lookback_days(15) + buffer
 DEFAULT_VOLUME = 0.1
 
+# Set once per process, at the top of main(), before anything else runs --
+# each invocation is a single short-lived one-shot (re-invoked by Task
+# Scheduler, no loop here), so a module global is safe: there is no
+# concurrent second "mode" within one process. Read by _log_trade_event()
+# so a shared trade_events.log can distinguish paper-mode entries from
+# real/live ones when both are scheduled in parallel against the same
+# strategy (see module docstring).
+_CURRENT_MODE = "live"
+
 
 class DemoAccountRequiredError(RuntimeError):
     """Raised when this script is not explicitly and verifiably pointed at a demo account."""
@@ -126,7 +135,7 @@ def _attach_to_open_position(trade_manager: TradeManager, broker: IBroker, posit
 
 
 def _log_trade_event(event: str, **fields: object) -> None:
-    trade_events_logger.info({"event_type": event, **fields})
+    trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
 
 
 def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, final_bar: Bar) -> None:
@@ -160,6 +169,7 @@ def _evaluate_for_new_trade(
     bars: list[Bar],
     symbol: str,
     timeframe: Timeframe,
+    kill_switch_flag_path: Path | None = None,
 ) -> None:
     market_state = MarketState(symbol=symbol, timeframe=timeframe)
     for b in bars:
@@ -184,7 +194,7 @@ def _evaluate_for_new_trade(
     logger.info("RESULT: SIGNAL %s %s @ %s", setup.symbol, setup.direction.name, setup.timestamp)
     _log_trade_event("signal_found", symbol=symbol, direction=setup.direction.name, setup_id=setup.setup_id)
 
-    if is_trading_halted():
+    if is_trading_halted(kill_switch_flag_path):
         logger.warning("Signal found for %s but kill-switch is active; refusing to open.", symbol)
         _log_trade_event("signal_blocked_kill_switch", symbol=symbol, setup_id=setup.setup_id)
         return
@@ -211,6 +221,7 @@ def run_once(
     timeframe: Timeframe,
     timeframe_str: str,
     lookback_days: int,
+    kill_switch_flag_path: Path | None = None,
 ) -> None:
     lookback_bars = lookback_days * 1440  # M1 bars/day upper bound; safe overestimate for weekends/gaps
     bars = connector.fetch_recent_bars(symbol, timeframe_str, lookback_bars)
@@ -225,12 +236,38 @@ def run_once(
         _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
         return
 
-    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe)
+    _evaluate_for_new_trade(
+        trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     timeframe = Timeframe[args.timeframe]
+
+    global _CURRENT_MODE
+    _CURRENT_MODE = "paper" if args.paper else "live"
+
+    # --paper's virtual balance is not comparable to the real (demo-account)
+    # equity, so its daily-loss baseline and kill-switch flag are kept in
+    # separate files -- otherwise running both modes in parallel (paper +
+    # real, on the same demo account, e.g. to validate this strategy live)
+    # would let one mode's equity swings corrupt the other's baseline, or
+    # spuriously halt the other's trading. Real/live mode is left on the
+    # module defaults (risk/daily_risk_state.json, risk/kill_switch.flag) --
+    # unchanged from before this parameter existed, and deliberately shared
+    # with run_live_demo.py/any other real-account script, since that is
+    # one real account with one real daily-loss limit.
+    risk_dir = Path(__file__).parent / "risk"
+    kill_switch_flag_path = risk_dir / "kill_switch_paper.flag" if args.paper else None
+    daily_risk_tracker = (
+        DailyRiskTracker(
+            state_file=risk_dir / "daily_risk_state_paper.json",
+            kill_switch_flag_path=kill_switch_flag_path,
+        )
+        if args.paper
+        else DailyRiskTracker()
+    )
 
     # PaperBroker never sends a real order regardless of which MT5 account
     # is connected (it only reads prices) -- the demo-account safety rail
@@ -245,7 +282,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"REFUSING TO START: {exc}")
             sys.exit(1)
 
-    if is_trading_halted():
+    if is_trading_halted(kill_switch_flag_path):
         logger.info("RESULT: TRADING HALTED (kill-switch active)")
         print("TRADING HALTED (kill-switch active)")
         return
@@ -274,7 +311,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("PAPER mode: balance=%.2f, equity=%.2f (no real orders will be placed).",
                         account_info.balance, account_info.equity)
 
-        DailyRiskTracker().check_and_update(account_info.equity)
+        daily_risk_tracker.check_and_update(account_info.equity)
 
         strategy = NyOpenAccumulationBreakoutStrategy(
             config=NyOpenAccumulationBreakoutConfig(max_rr_cap=args.max_rr_cap)
@@ -288,7 +325,7 @@ def main(argv: list[str] | None = None) -> None:
         run_once(
             connector=connector, broker=broker, trade_manager=trade_manager, strategy=strategy,
             symbol=args.symbol, timeframe=timeframe, timeframe_str=args.timeframe,
-            lookback_days=args.lookback_days,
+            lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
         )
     finally:
         connector.disconnect()

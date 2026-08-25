@@ -531,7 +531,7 @@ sınaq TƏLƏB EDİR. İndi təqib edilmir, yalnız qeydə alınır.
 
 ## Strategiya #2 (NASDAQ Midline Sweep) üçün simvol yoxlaması
 
-MT5 terminalı artıq quraşdırılıb və qoşulub (MetaQuotes-Demo hesabı, login `5052764320`).
+MT5 terminalı artıq quraşdırılıb və qoşulub (MetaQuotes-Demo hesabı, login `67660753`).
 `mt5.symbols_get()` ilə broker-in tam simvol siyahısı (12,698 simvol) axtarıldı:
 **`USTEC`** ("US Tech 100 Index") tapıldı — point=0.01, digits=2, tarixi M15 datası
 (`mt5.copy_rates_from_pos`) real qiymətlərlə (~29,500-29,600 səviyyəsi) mövcuddur.

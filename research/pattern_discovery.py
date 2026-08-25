@@ -761,7 +761,23 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="If set, only screen the first N generated candidates (for quick timing checks).",
     )
+    parser.add_argument(
+        "--max-zone-age-bars",
+        type=int,
+        default=3000,
+        help=(
+            "Prune MITIGATED (already-resolved) order blocks/FVGs from active tracking once "
+            "they are older than this many bars -- ACTIVE zones are never pruned regardless of "
+            "age (see smc/pipeline.py's max_zone_age_bars / tests/test_smc_pipeline.py), so this "
+            "cannot change which zones a strategy can trade against, only how much dead "
+            "bookkeeping the pipeline drags through the rest of a long backtest. Left unset, "
+            "this defaulted to None (no pruning), which is what made a 2-year/700k-bar "
+            "screening run practically un-runnable (Session 2026-08-24, ~O(n^2) blowup). Pass "
+            "0 or a negative number to restore the old unbounded-growth behavior."
+        ),
+    )
     args = parser.parse_args(argv)
+    max_zone_age_bars = args.max_zone_age_bars if args.max_zone_age_bars and args.max_zone_age_bars > 0 else None
 
     from data.csv_provider import CSVDataProvider
     from research.run_strategy_backtest import split_bars
@@ -779,6 +795,7 @@ def main(argv: list[str] | None = None) -> None:
         spread=args.spread,
         commission=0.0,
         slippage=0.0,
+        max_zone_age_bars=max_zone_age_bars,
     )
 
     candidates = generate_candidates()

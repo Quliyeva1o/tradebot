@@ -30,3 +30,9 @@ execution/paper_broker_state.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Paper-mode isolated runtime state (mirrors risk/daily_risk_state.json above)
+risk/daily_risk_state_paper.json
+
+# Claude Code local (machine-specific) permission overrides
+.claude/settings.local.json

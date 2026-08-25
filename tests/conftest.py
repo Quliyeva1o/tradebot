@@ -35,8 +35,10 @@ except ImportError:
     stub.symbol_info = lambda *args, **kwargs: None
     stub.symbol_info_tick = lambda *args, **kwargs: None
     stub.copy_rates_range = lambda *args, **kwargs: None
+    stub.copy_rates_from_pos = lambda *args, **kwargs: None
     stub.account_info = lambda *args, **kwargs: None
     stub.order_send = lambda *args, **kwargs: None
+    stub.order_check = lambda *args, **kwargs: None
     stub.positions_get = lambda *args, **kwargs: None
     stub.ORDER_TYPE_BUY = 0
     stub.ORDER_TYPE_SELL = 1
@@ -52,6 +54,17 @@ except ImportError:
     stub.TRADE_RETCODE_DONE = 10009
     stub.TRADE_RETCODE_DONE_PARTIAL = 10010
     stub.TRADE_RETCODE_PLACED = 10008
+    # ORDER_FILLING_*/ACCOUNT_TRADE_MODE_* -- added for execution/mt5_broker.py's
+    # _resolve_type_filling() and run_live_demo.py/run_live_accumulation_breakout.py's
+    # demo-account safety rail, both added after this stub was first written. Real
+    # MQL5-documented, stable numbering (matches the live values these call sites'
+    # own docstrings/comments already assume).
+    stub.ORDER_FILLING_FOK = 0
+    stub.ORDER_FILLING_IOC = 1
+    stub.ORDER_FILLING_RETURN = 2
+    stub.ACCOUNT_TRADE_MODE_DEMO = 0
+    stub.ACCOUNT_TRADE_MODE_CONTEST = 1
+    stub.ACCOUNT_TRADE_MODE_REAL = 2
     sys.modules["MetaTrader5"] = stub
 
 

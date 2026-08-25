@@ -9,7 +9,7 @@ from core.models import AccountInfo, Bar, SymbolConstraints
 from mt5.rates import TIMEFRAME_MAPPING, get_symbol_point, rates_to_bars
 from utils.logging import setup_logger
 
-logger = setup_logger("mt5_connector")
+logger = setup_logger("mt5_connector", log_to_file=True)
 
 
 class MT5Connector:

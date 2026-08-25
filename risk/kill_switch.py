@@ -25,16 +25,28 @@ logger = setup_logger("kill_switch")
 KILL_SWITCH_FLAG = Path(__file__).parent / "kill_switch.flag"
 
 
-def is_trading_halted() -> bool:
+def is_trading_halted(flag_path: Path | None = None) -> bool:
     """Whether the kill-switch is active.
 
+    Args:
+        flag_path: Override for which flag file to check. Defaults to the
+            shared KILL_SWITCH_FLAG. Pass a distinct path only for a run
+            whose halt must stay isolated from the shared/global one -- e.g.
+            a --paper trading run, whose virtual equity must never halt (or
+            be halted by) real-account trading. Every other caller (MT5Broker's
+            connect-retry exhaustion, a real/live run's own daily-loss trip)
+            should leave this at its default so they share the one global
+            flag -- that is the correct, conservative behavior for anything
+            touching the real account.
+
     Returns:
-        True if risk/kill_switch.flag exists, False otherwise.
+        True if the resolved flag file exists, False otherwise.
     """
-    return KILL_SWITCH_FLAG.exists()
+    path = flag_path if flag_path is not None else KILL_SWITCH_FLAG
+    return path.exists()
 
 
-def activate_kill_switch(reason: str) -> None:
+def activate_kill_switch(reason: str, flag_path: Path | None = None) -> None:
     """Creates the kill-switch flag and sends a Telegram alert, if not already active.
 
     Idempotent: a no-op if the flag already exists. DailyRiskTracker calls
@@ -47,16 +59,19 @@ def activate_kill_switch(reason: str) -> None:
         reason: Human-readable explanation, written into the flag file's
             contents (for a human who finds it later) and into the Telegram
             alert.
+        flag_path: Override for which flag file to create/check -- see
+            is_trading_halted().
     """
-    if is_trading_halted():
+    path = flag_path if flag_path is not None else KILL_SWITCH_FLAG
+    if is_trading_halted(path):
         return
 
     timestamp = datetime.now(UTC).isoformat()
     try:
-        KILL_SWITCH_FLAG.parent.mkdir(parents=True, exist_ok=True)
-        KILL_SWITCH_FLAG.write_text(f"{timestamp} {reason}\n")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{timestamp} {reason}\n")
     except Exception as exc:  # noqa: BLE001 - the flag write is the actual halt; must never silently vanish
-        logger.error("Could not write kill-switch flag %s: %s", KILL_SWITCH_FLAG, type(exc).__name__)
+        logger.error("Could not write kill-switch flag %s: %s", path, type(exc).__name__)
         return
 
     logger.error("KILL SWITCH ACTIVATED: %s", reason)

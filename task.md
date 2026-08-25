@@ -1,6 +1,6 @@
 # Tapşırıq İzləmə — fix/critical-state-bugs
 
-## Status: FAZA 5 BİTDİ. FAZA 6-ya keçməzdən əvvəl istifadəçi təsdiqi tələb olunur (canlı pulla bağlı).
+## Status: FAZA 6 BİTDİ (kod FAZA 5-dən sonra bu sənəddə izlənilmədən yazılıb; 2026-08-24 sessiyasında aşkar edilib doğrulandı). FAZA 7 (real hesaba keçid)-dən əvvəl istifadəçi təsdiqi tələb olunur (canlı pulla bağlı).
 
 ## Bitmiş fazalar (toxunulmayıb, commit olunub)
 - **FAZA 0 — Baseline**: 156 test (154 PASS + 2 FAIL) təsdiqləndi.
@@ -12,6 +12,7 @@
 - **FAZA 4 / Bug #9 — Stale-break gating**: `max_break_age_bars` (default=`None`), `broken_swing.index` proxy (istifadəçi seçimi), `MarketState.bar_count()` əlavəsi. Commit: `6646991`. 188 + 7 = 195 PASS.
 - **FAZA 4 / Bug #10 — Nearest/most-recent OB & FVG seçimi**: `_select_best_order_block`/`_select_best_fvg` helper-ləri, model dəyişikliyi yoxdur. Commit: `5de6f53`. 195 + 7 = **202 PASS, 0 FAIL** (hazırkı say).
 - **FAZA 4 / Duplicate + R:R gate yoxlaması**: Kod nəzərdən keçirildi, audit-in "correct" qeydini təsdiqlədim — `_proposed_keys` yoxlaması R:R gate-dən sonra, TradeSetup yaradılmazdan əvvəl işləyir, yan-keçid yoxdur. Əlavə dəyişiklik tələb olunmadı.
+- **FAZA 6 — Canlı Ticarətə Hazırlıq**: `IBroker`/`MT5Broker`/`PositionSizer`/kill-switch/`DailyRiskTracker` — task.md-də izlənilmədən yazılıb (commit `26b4f08`..`49de680`..`0c31662`), 2026-08-24 sessiyasında aşkar edilib doğrulandı. Ətraflı aşağıda.
 
 ## Qalan iş
 
@@ -31,9 +32,28 @@
 
 **Mühit qeydi (bloklayıcı deyil)**: `run_backtest.py` import edərkən `ModuleNotFoundError: No module named 'MetaTrader5'` aşkarlandı (Windows-only SDK, macOS-da mövcud deyil). Bizim dəyişikliklərimizlə əlaqəsi yoxdur (grep ilə təsdiqləndi). Bax `walkthrough.md`.
 
-### FAZA 6 — Canlı Ticarətə Hazırlıq (⚠️ CANLI PULLA BAĞLI — başlamazdan əvvəl istifadəçi təsdiqi tələb olunur)
-- [ ] MT5 connector → real `IExecutionProvider` (bu interfeys FAZA 5-də silindi, FAZA 6-da yenidən — bu dəfə faktiki `mt5/connector.py`-ə bağlı şəkildə — yazılacaq)
-- [ ] Margin/leverage-aware position sizing
+### FAZA 6 — Canlı Ticarətə Hazırlıq (BİTDİ — kod FAZA 5-dən sonra bu sənəddə izlənilmədən yazılıb, 2026-08-24 sessiyasında aşkar edilib doğrulandı)
+- [x] MT5 connector → real `IExecutionProvider`: `execution/interfaces.py`-də `IBroker` protokolu, `execution/mt5_broker.py`-də tam realizasiya (`place_order`/`cancel_order`/`close_position`/`get_open_positions`/`get_account_info`/`get_symbol_constraints`), connect-retry + exponential backoff + kill-switch ilə. Commit `26b4f08` (skelet) → `49de680` (final). `execution/paper_broker.py` — real order göndərməyən paralel realizasiya (`--paper` rejimi üçün).
+- [x] Margin/leverage-aware position sizing: `execution/position_sizer.py` — brokerin öz `contract_size`/`tick_size`/`tick_value`-una görə real lot ölçüsü hesablayır (risk % → real lot), `TradeManager.open_trade()`-ə inteqrasiya olunub. Commit `49de680`.
+- [x] Risk infrastruktur (orijinal FAZA 6 siyahısında yox idi, eyni məqsədə xidmət edir): fayl-əsaslı kill-switch (`risk/kill_switch.py`) + gündəlik zərər izləyicisi (`risk/daily_risk_tracker.py`, defolt `MAX_DAILY_LOSS_PCT=5%`), hər ikisi live loop-a bağlanıb. Commit `31c04a6`.
+- [x] İki qatlı demo-hesab təhlükəsizlik zolağı: `.env`-də `MT5_ACCOUNT_TYPE=demo` tələbi + MT5-in öz `account_info().trade_mode`-unun yoxlanması — `run_live_demo.py` (commit `db0f65e`) və `run_live_accumulation_breakout.py`-da (commit `0c31662`) eyni şəkildə.
+- [x] MT5 sifariş-göndərmə edge-case-ləri: comment uzunluq limiti (29 simvol, commit `7d9dc0b`) və filling-mode seçimi (`_resolve_type_filling`) real demo hesabda təsdiqlənib.
+
+**Mühit qeydi (bloklayıcı deyil, əvvəlki qeydin təkrarı)**: `MetaTrader5` paketi Windows-only olduğu üçün Linux/macOS-da import xətası verir; `tests/conftest.py` bunu stub modul ilə həll edir (bax aşağıda FAZA 6.5 — stub-un özündə bir boşluq tapılıb düzəldilib).
+
+### FAZA 6.5 — Doğrulama və test-mühiti düzəlişi (bu sessiya, 2026-08-24)
+- Bütün test dəsti (1074 test) təcrid olunmuş Python 3.12 mühitində işlədildi (bu maşında `MetaTrader5` Windows-only olduğu üçün birbaşa mümkün deyildi — real Windows mühitini simulyasiya etmək üçün ayrıca venv qurulub).
+- İlk nəticə: **1035 PASS, 38 FAIL, 1 XFAIL**. Bütün 38 uğursuzluq iki səbəbə endirildi (real kod xətası TAPILMADI):
+  1. `tests/conftest.py`-dəki `MetaTrader5` stub-u FAZA 6 zamanı əlavə olunan bəzi sabit/metodları daşımırdı: `ORDER_FILLING_FOK/IOC/RETURN`, `ACCOUNT_TRADE_MODE_DEMO/CONTEST/REAL`, `copy_rates_from_pos`, `order_check`.
+  2. `test_nasdaq_midline_sweep_regression.py` — sandbox-da `data/history/USTEC_M5.csv` olmadığı üçün (real maşında mövcuddur, orada bu test problemsiz keçməlidir).
+- (1)-i `tests/conftest.py`-ə 13 sətirlik, davranışa təsir etməyən əlavə ilə düzəltdim (yalnız test-stub, production kodu toxunulmayıb). **Bu dəyişiklik diskə yazılıb, hələ commit edilməyib** — nəzərdən keçirib commit etmək lazımdır.
+- Düzəlişdən sonra: **1072 PASS, 1 FAIL (yalnız yuxarıdakı (2) — sandbox-a xas, real maşında əhəmiyyətsiz), 1 XFAIL (Bug #29, artıq sənədləşdirilib və təxirə salınıb — market_state_builder.py-də swing-replacement/breaks_history bug-ı)**.
+- Nəticə: FAZA 6-nın hər iki orijinal maddəsi faktiki tamamlanıb və indi tam test-doğrulanıb.
+
+### FAZA 7 — Real Hesaba Keçid (⚠️ CANLI PULLA BAĞLI — başlamazdan əvvəl istifadəçi təsdiqi tələb olunur)
+- [ ] `run_live_accumulation_breakout.py`-in öz module docstring-i xəbərdarlıq edir: `NyOpenAccumulationBreakoutStrategy` yalnız 13-91 treyd aralığında (test pəncərəsindən asılı) və ay-ay yüksək dəyişkənliklə backtest edilib — bir neçə güclü ay ümumi mənfəətin çoxunu daşıyıb. Real vəsaitdən (hətta demo hesabın oyun pulundan) əvvəl `--paper` rejimində uzun müddət sınanmalıdır.
+- [ ] Uzun-müddətli paper-trading planı (müddət, minimum treyd sayı, uğur meyarları) istifadəçi ilə birlikdə müəyyənləşdirilməli.
+- [ ] Yalnız bundan sonra, istifadəçinin açıq təsdiqi ilə, real hesaba keçid müzakirə oluna bilər.
 
 ## Paralel iş — Strategiya Çərçivəsi (FAZA 0-6-dan ayrı roadmap, bax `walkthrough.md`)
 

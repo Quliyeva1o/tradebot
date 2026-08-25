@@ -142,6 +142,17 @@ class MarketStructureEngine:
         self.last_broken_high_id: str | None = None
         self.last_broken_low_id: str | None = None
 
+        # get_structure_state() cache: breaks_history is append-only (see update()/
+        # check_structural_break(), never mutated in place), so the list(...) copy it
+        # hands out only needs rebuilding when the length has actually grown since the
+        # last call -- get_structure_state() is called unconditionally on every bar by
+        # MarketStateBuilder, so without this cache a full O(len(breaks_history)) copy
+        # ran once per bar regardless of whether a new break occurred that bar, which is
+        # a major contributor to the ~O(n^2) wall-clock blowup measured on long (2-year)
+        # backtests (Session 2026-08-24 perf investigation).
+        self._breaks_history_cache: list[StructureBreak] = []
+        self._breaks_history_cache_len: int = 0
+
     def _validate_single(self, swing: Swing) -> None:
         """Validates incoming swing sequence chronologically and checks for duplicate IDs."""
         if swing.id in self.processed_ids:
@@ -462,12 +473,15 @@ class MarketStructureEngine:
             A StructureState domain object representing the current structural configuration.
         """
         confidence = self.history[-1].confidence if self.history else 0.0
+        if len(self.breaks_history) != self._breaks_history_cache_len:
+            self._breaks_history_cache = list(self.breaks_history)
+            self._breaks_history_cache_len = len(self.breaks_history)
         return StructureState(
             trend=self.current_trend,
             confidence=confidence,
             active_major_high=self.last_major_high,
             active_major_low=self.last_major_low,
-            breaks_history=list(self.breaks_history),
+            breaks_history=self._breaks_history_cache,
         )
 
     def handle_upgrade(self, swing: Swing) -> None:

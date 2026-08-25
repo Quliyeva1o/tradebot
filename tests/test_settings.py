@@ -57,11 +57,11 @@ def test_settings_load_with_malformed_mt5_login_does_not_raise(monkeypatch) -> N
 
 
 def test_settings_load_with_valid_mt5_login(monkeypatch) -> None:
-    monkeypatch.setenv("MT5_LOGIN", "5052764320")
+    monkeypatch.setenv("MT5_LOGIN", "67660753")
     try:
         reloaded = importlib.reload(settings_module)
         settings = reloaded.Settings.load()
-        assert settings.MT5_LOGIN == 5052764320
+        assert settings.MT5_LOGIN == 67660753
     finally:
         monkeypatch.delenv("MT5_LOGIN", raising=False)
         importlib.reload(settings_module)
