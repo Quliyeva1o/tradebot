@@ -21,6 +21,7 @@ from core.models import Bar, Timeframe
 from mt5.chunking import TIMEFRAME_DELTA as _TIMEFRAME_DELTA
 from mt5.chunking import iter_chunk_windows as _iter_chunk_windows
 from mt5.connector import MT5Connector
+from mt5.rates import BROKER_TZ
 from mt5.rates import TIMEFRAME_MAPPING as _MT5_TIMEFRAME_MAP
 from mt5.rates import get_symbol_point as _get_symbol_point
 from mt5.rates import rates_to_bars as _rows_to_bars
@@ -285,6 +286,14 @@ def validate_bars(bars: list[Bar], symbol: str, timeframe: str) -> tuple[list[Ba
 def write_bars_csv(bars: list[Bar], symbol: str, timeframe: str, output_dir: Path) -> Path:
     """Writes bars to data/history/{SYMBOL}_{TIMEFRAME}.csv in Bar-compatible format.
 
+    Bar.timestamp is genuine UTC (see mt5/rates.py's rates_to_bars()), but
+    every batch script's own load_bars() (e.g. scripts/first_fvg_backtest.py)
+    expects the CSV's naive "time" column to be BROKER-LOCAL (Europe/
+    Bucharest) wall-clock, matching what MT5 itself reports and what this
+    file format has always contained -- so bars are converted back to
+    Bucharest here before formatting, keeping that existing convention (and
+    every already-downloaded historical CSV) unchanged by the UTC fix.
+
     Args:
         bars: Validated bar list to persist.
         symbol: Trading instrument symbol, used in the filename.
@@ -303,7 +312,7 @@ def write_bars_csv(bars: list[Bar], symbol: str, timeframe: str, output_dir: Pat
         for bar in bars:
             writer.writerow(
                 [
-                    bar.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    bar.timestamp.astimezone(BROKER_TZ).strftime("%Y-%m-%d %H:%M:%S"),
                     bar.open,
                     bar.high,
                     bar.low,

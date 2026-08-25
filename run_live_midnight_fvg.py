@@ -52,6 +52,7 @@ Usage:
 
 import argparse
 import sys
+import time as time_module
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -89,6 +90,25 @@ NY = ZoneInfo("America/New_York")
 DEFAULT_LOOKBACK_DAYS = 4
 DEFAULT_VOLUME = 0.1
 
+# Fast-poll: this script is normally re-invoked on a fixed cadence (e.g. every
+# 2 minutes via Task Scheduler -- see run_live_midnight_fvg_demo.bat), which
+# means a retest that closes just after one invocation can sit undetected for
+# up to that whole interval. Since MT5Connector.fetch_recent_bars() only ever
+# returns fully CLOSED bars (by design -- see its docstring -- to avoid
+# signals off an incomplete candle), sub-minute polling can't see a NEWER bar
+# than the M1 close cadence already provides; what it buys is catching a
+# freshly-closed retest bar within seconds of it closing instead of within
+# the next scheduled invocation. So: when a pending (found, not yet retested)
+# FVG's near edge is within FAST_POLL_TRIGGER_POINTS of the latest close,
+# this process stays alive and re-checks every FAST_POLL_INTERVAL_SECONDS,
+# for up to FAST_POLL_MAX_SECONDS -- kept safely under the 2-minute scheduler
+# cadence so this invocation always finishes before the next one starts
+# (Task Scheduler's default MultipleInstances=IgnoreNew would otherwise skip
+# the next tick outright rather than queuing it).
+DEFAULT_FAST_POLL_TRIGGER_POINTS = 15.0
+DEFAULT_FAST_POLL_INTERVAL_SECONDS = 20
+DEFAULT_FAST_POLL_MAX_SECONDS = 90
+
 # Set once per process, at the top of main(), before anything else runs --
 # see run_live_accumulation_breakout.py's identical global for the
 # single-process-per-invocation rationale.
@@ -111,6 +131,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--risk-per-trade-pct", type=float, default=None)
     parser.add_argument("--fixed-tp-r", type=float, default=2.5)
     parser.add_argument("--min-gap-points", type=float, default=3.0)
+    parser.add_argument(
+        "--fast-poll-trigger-points",
+        type=float,
+        default=DEFAULT_FAST_POLL_TRIGGER_POINTS,
+        help="When a pending unretested FVG's near edge is within this many points of the "
+        "latest close, stay alive and re-check more often instead of waiting for the next "
+        "scheduled invocation. Set to 0 to disable fast-polling entirely.",
+    )
+    parser.add_argument("--fast-poll-interval-seconds", type=float, default=DEFAULT_FAST_POLL_INTERVAL_SECONDS)
+    parser.add_argument("--fast-poll-max-seconds", type=float, default=DEFAULT_FAST_POLL_MAX_SECONDS)
     parser.add_argument(
         "--paper",
         action="store_true",
@@ -182,6 +212,73 @@ def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: P
         _log_trade_event("closed", symbol=symbol, position_id=position.id, outcome=action.value)
 
 
+def _fast_poll_for_retest(
+    connector: MT5Connector,
+    strategy: MidnightFvgStrategy,
+    market_state: MarketState,
+    symbol: str,
+    timeframe_str: str,
+    trigger_points: float,
+    interval_seconds: float,
+    max_seconds: float,
+):
+    """Stays alive re-checking for a retest close to a pending FVG instead of
+    waiting for the next scheduled invocation -- see the fast-poll constants'
+    module-level docstring for why this only shortens the detection lag
+    (bar-close cadence is still ~1min) rather than adding tick-level
+    granularity. Returns the TradeSetup if one fires during the window, else
+    None (the pending FVG, if still valid, is picked up by the next scheduled
+    run as before).
+    """
+    if trigger_points <= 0:
+        return None
+    if not strategy._fvg_found or strategy._trade_taken:
+        return None
+
+    latest = market_state.get_latest_bar()
+    if latest is None:
+        return None
+    near_edge = strategy._fvg_upper if strategy._fvg_direction == SignalDirection.BUY else strategy._fvg_lower
+    distance = abs(latest.close - near_edge)
+    if distance > trigger_points:
+        return None
+
+    logger.info(
+        "Pending %s FVG near edge %.2f is %.1fpt from last close %.2f (<= %.1fpt trigger) -- "
+        "fast-polling every %.0fs for up to %.0fs.",
+        strategy._fvg_direction.name, near_edge, distance, latest.close, trigger_points,
+        interval_seconds, max_seconds,
+    )
+
+    elapsed = 0.0
+    while elapsed < max_seconds:
+        time_module.sleep(interval_seconds)
+        elapsed += interval_seconds
+
+        fresh_bars = connector.fetch_recent_bars(symbol, timeframe_str, 5)
+        new_bars = [b for b in fresh_bars if b.timestamp > latest.timestamp]
+        setup = None
+        for b in new_bars:
+            market_state.append_bar(b)
+            setup = strategy.evaluate(market_state)
+            latest = b
+        if new_bars:
+            logger.info("Fast-poll: %d new closed bar(s) up to %s.", len(new_bars), latest.timestamp)
+        if setup is not None:
+            logger.info("Fast-poll caught the retest %.0fs after it became this close.", elapsed)
+            return setup
+        if not strategy._fvg_found or strategy._trade_taken:
+            return None  # day rolled over, or another path already consumed the setup
+        near_edge = strategy._fvg_upper if strategy._fvg_direction == SignalDirection.BUY else strategy._fvg_lower
+        distance = abs(latest.close - near_edge)
+        if distance > trigger_points:
+            logger.info("Fast-poll: price moved back to %.1fpt away; falling back to normal cadence.", distance)
+            return None
+
+    logger.info("Fast-poll window elapsed with no retest; next scheduled invocation will pick it back up.")
+    return None
+
+
 def _evaluate_for_new_trade(
     trade_manager: TradeManager,
     broker: IBroker,
@@ -190,17 +287,29 @@ def _evaluate_for_new_trade(
     symbol: str,
     timeframe: Timeframe,
     kill_switch_flag_path: Path | None = None,
+    connector: MT5Connector | None = None,
+    timeframe_str: str | None = None,
+    fast_poll_trigger_points: float = 0.0,
+    fast_poll_interval_seconds: float = DEFAULT_FAST_POLL_INTERVAL_SECONDS,
+    fast_poll_max_seconds: float = DEFAULT_FAST_POLL_MAX_SECONDS,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (see module docstring for why this differs from
     run_live_accumulation_breakout.py's single evaluate() call), then acts
-    only on the setup -- if any -- returned for the FINAL (newest) bar.
+    only on the setup -- if any -- returned for the FINAL (newest) bar (or,
+    failing that, a setup caught by the fast-poll extension below).
     """
     market_state = MarketState(symbol=symbol, timeframe=timeframe)
     setup = None
     for b in bars:
         market_state.append_bar(b)
         setup = strategy.evaluate(market_state)  # only the FINAL call's result (bars[-1]) is acted on below
+
+    if setup is None and connector is not None and timeframe_str is not None:
+        setup = _fast_poll_for_retest(
+            connector, strategy, market_state, symbol, timeframe_str,
+            fast_poll_trigger_points, fast_poll_interval_seconds, fast_poll_max_seconds,
+        )
 
     if setup is None:
         reasons = top_rejection_reasons({"strategy": strategy.diagnostics.summary()})
@@ -240,6 +349,9 @@ def run_once(
     timeframe_str: str,
     lookback_days: int,
     kill_switch_flag_path: Path | None = None,
+    fast_poll_trigger_points: float = 0.0,
+    fast_poll_interval_seconds: float = DEFAULT_FAST_POLL_INTERVAL_SECONDS,
+    fast_poll_max_seconds: float = DEFAULT_FAST_POLL_MAX_SECONDS,
 ) -> None:
     lookback_bars = lookback_days * 1440  # M1 bars/day upper bound; safe overestimate for weekends/gaps
     bars = connector.fetch_recent_bars(symbol, timeframe_str, lookback_bars)
@@ -254,7 +366,13 @@ def run_once(
         _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
         return
 
-    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path)
+    _evaluate_for_new_trade(
+        trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path,
+        connector=connector, timeframe_str=timeframe_str,
+        fast_poll_trigger_points=fast_poll_trigger_points,
+        fast_poll_interval_seconds=fast_poll_interval_seconds,
+        fast_poll_max_seconds=fast_poll_max_seconds,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -337,6 +455,9 @@ def main(argv: list[str] | None = None) -> None:
             connector=connector, broker=broker, trade_manager=trade_manager, strategy=strategy,
             symbol=args.symbol, timeframe=timeframe, timeframe_str=args.timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
+            fast_poll_trigger_points=args.fast_poll_trigger_points,
+            fast_poll_interval_seconds=args.fast_poll_interval_seconds,
+            fast_poll_max_seconds=args.fast_poll_max_seconds,
         )
     finally:
         connector.disconnect()

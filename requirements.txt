@@ -5,6 +5,7 @@ python-dotenv>=1.0.0
 pyyaml>=6.0
 matplotlib>=3.8.0
 reportlab>=4.1.0
+tzdata>=2024.1  # Windows ships no IANA tz database; zoneinfo.ZoneInfo("America/New_York") needs this
 
 # Development Tools
 pytest>=8.0.0

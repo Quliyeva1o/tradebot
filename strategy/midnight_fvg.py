@@ -38,10 +38,22 @@ over (retest_window_candles=None, matching the ALREADY-VALIDATED batch
 script's actual behavior -- see the field's own docstring for an important
 discrepancy against MIDNIGHT_FVG_BOT_SPEC.md's prose).
 
-SL: the low (bullish) / high (bearish) of the CANDLE THAT CREATED the FVG
-(the middle/displacement candle) -- NOT the FVG zone's own boundary. See
-BACKTEST_FINDINGS.md step 4 for why this out-performed the FVG-edge+buffer
-SL rule used in an earlier iteration.
+SL: the low (bullish) / high (bearish) of the candle ONE BEFORE the candle
+that created the FVG (i.e. one candle earlier than the middle/displacement
+candle) -- NOT the FVG zone's own boundary, and NOT the displacement
+candle's own wick either (that was the original rule -- see
+BACKTEST_FINDINGS.md step 4 for why THAT out-performed an even earlier
+FVG-edge+buffer rule). This wider variant was adopted after a stop-hunt
+analysis showed 12.3% of TP trades came within >=80% of the (tighter)
+displacement-candle risk distance of SL before reversing, and 38.5% within
+>=50%; re-running the 5yr batch backtest with this wider SL improved total R
+from +50.5R to +85.5R (+69%) and PF from 1.13 to 1.22, with the wider stop
+mostly helping in autumn/winter months and occasionally hurting in summer
+(see scripts/first_fvg_backtest_wide_sl.py for the standalone comparison
+script). NOTE: this bot runs a FIXED lot size by default (see
+run_live_midnight_fvg.py's --volume), not risk-% sizing, so the ~32.5%
+wider average stop distance means a proportionally larger $ loss per losing
+trade, not just a different price level -- factor that in before sizing.
 
 TP: fixed R multiple (entry +/- fixed_tp_r * risk_dist, default 2.5R). No
 liquidity-hunt fallback -- this strategy doesn't compute PDH/PDL/swings at
@@ -205,7 +217,7 @@ class MidnightFvgStrategy(TradeSetupStrategy):
         self._fvg_direction: SignalDirection | None = None
         self._fvg_upper: float | None = None
         self._fvg_lower: float | None = None
-        self._fvg_middle_bar: Bar | None = None  # the displacement/middle candle -- its wick is the SL
+        self._fvg_sl_bar: Bar | None = None  # the candle BEFORE the displacement candle -- its wick is the SL
         self._bars_since_fvg = 0
         self._trade_taken = False
 
@@ -260,7 +272,7 @@ class MidnightFvgStrategy(TradeSetupStrategy):
         self._fvg_direction = SignalDirection.BUY if first.direction == FVGDirection.BULLISH else SignalDirection.SELL
         self._fvg_upper = first.upper_price
         self._fvg_lower = first.lower_price
-        self._fvg_middle_bar = bars[first.start_index + 1]
+        self._fvg_sl_bar = bars[first.start_index]  # one candle before the displacement candle (bars[start_index+1])
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
         """Evaluates the latest M1 bar against the day-scoped FVG-detect ->
@@ -332,10 +344,19 @@ class MidnightFvgStrategy(TradeSetupStrategy):
             if entry is None:
                 return self._reject(RejectionReason.NO_RETEST)
 
-            # --- STEP 3: SL = the creating (middle/displacement) candle's own wick ---
-            middle = self._fvg_middle_bar
-            assert middle is not None
-            sl = middle.low if direction == SignalDirection.BUY else middle.high
+            # --- STEP 3: SL = the wick of the candle BEFORE the displacement
+            # candle (one earlier) -- see BACKTEST_FINDINGS.md's wide-SL
+            # variant analysis: this survives more near-miss stop-hunts than
+            # the displacement candle's own (tighter) wick, at the cost of a
+            # larger price-distance stop (avg +32.5% wider in the 5yr
+            # backtest). NOTE: this bot runs with a FIXED lot size (not
+            # risk-% position sizing -- see run_live_midnight_fvg.py's
+            # --volume default), so the wider stop also means a
+            # proportionally larger $ loss on a losing trade, not just a
+            # different price level.
+            sl_bar = self._fvg_sl_bar
+            assert sl_bar is not None
+            sl = sl_bar.low if direction == SignalDirection.BUY else sl_bar.high
             risk_dist = abs(entry - sl)
             if risk_dist <= 0.0:
                 return self._reject(RejectionReason.NON_POSITIVE_RISK)
@@ -367,7 +388,7 @@ class MidnightFvgStrategy(TradeSetupStrategy):
                     f"{direction_label} FVG in {cfg.session_start}-{cfg.session_end} NY session "
                     f"(gap >= {cfg.min_gap_points:g}pt)",
                     f"Entry: {cfg.entry_mode} @ {entry:.2f}",
-                    f"SL: displacement candle wick @ {sl:.2f}",
+                    f"SL: pre-displacement candle wick @ {sl:.2f}",
                     f"TP: fixed {cfg.fixed_tp_r:g}R @ {tp:.2f}",
                 ],
                 trigger_reason=(

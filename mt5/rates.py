@@ -13,10 +13,28 @@ can be the shared home without creating a cycle.
 """
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5  # noqa: N813
 
 from core.models import Bar
+
+# MT5's copy_rates_*() `time` field is a Unix-epoch integer whose calendar
+# value equals the BROKER SERVER's wall clock (this account's server,
+# ForexTimeFXTM-Demo02, runs Europe/Bucharest), not true UTC -- e.g. when
+# real-world UTC is 07:23, MT5 reports an epoch that reads as 10:23 if you
+# (wrongly) label it UTC. Every live strategy that derives an NY/London/etc.
+# session window via `bar.timestamp.astimezone(<session_tz>)` (see
+# strategy/midnight_fvg.py, strategy/ny_open_accumulation_breakout.py,
+# strategy/manipulation_reversal.py, strategy/nasdaq_midline_sweep.py,
+# strategy/opening_range_breakout.py) silently depends on Bar.timestamp
+# actually BEING true UTC -- so rates_to_bars() must apply this correction
+# (interpret the raw epoch as Bucharest wall-clock, then convert to real
+# UTC) rather than passing the mislabeled epoch through. data/
+# download_history.py's write_bars_csv() converts back to Bucharest before
+# writing the naive CSV string specifically to keep this fix invisible to
+# the file format -- see that function's docstring.
+BROKER_TZ = ZoneInfo("Europe/Bucharest")
 
 TIMEFRAME_MAPPING = {
     "M1": mt5.TIMEFRAME_M1,
@@ -54,10 +72,17 @@ def rates_to_bars(rates: object, point: float) -> list[Bar]:
         rates: Raw MT5 rate rows.
         point: The symbol's point size, used to convert the raw integer
             `spread` (points) into a price-space value (points * point).
+
+    Returns:
+        Bars whose `timestamp` is genuine UTC -- see BROKER_TZ's module-level
+        comment for why this requires re-labeling MT5's raw epoch (broker/
+        Bucharest wall-clock) before converting, not just tagging it UTC.
     """
     return [
         Bar(
-            timestamp=datetime.fromtimestamp(int(row["time"]), tz=UTC),
+            timestamp=datetime.fromtimestamp(int(row["time"]), tz=UTC)
+            .replace(tzinfo=BROKER_TZ)
+            .astimezone(UTC),
             open=float(row["open"]),
             high=float(row["high"]),
             low=float(row["low"]),

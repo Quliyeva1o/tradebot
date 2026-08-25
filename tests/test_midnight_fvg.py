@@ -40,8 +40,8 @@ def _feed(state: MarketState, strategy: MidnightFvgStrategy, bar: Bar):
 
 # A same-day bullish FVG: bar0 (00:00), bar1/middle (00:01), bar2/end (00:02).
 # gap = bar2.low(103.6) - bar0.high(100.5) = 3.1 >= MIN_GAP_POINTS(3.0).
-BULL_BAR0 = _bar(6, 0, 0, 100.0, 100.5, 99.8, 100.2)
-BULL_BAR1_MIDDLE = _bar(6, 0, 1, 100.2, 101.0, 98.0, 99.0)  # low=98.0 -> the SL
+BULL_BAR0 = _bar(6, 0, 0, 100.0, 100.5, 99.8, 100.2)  # low=99.8 -> the SL (candle before the displacement candle)
+BULL_BAR1_MIDDLE = _bar(6, 0, 1, 100.2, 101.0, 98.0, 99.0)  # displacement candle (no longer the SL source)
 BULL_BAR2_END = _bar(6, 0, 2, 103.6, 104.0, 103.6, 103.9)  # low=103.6 -> the entry (upper edge)
 BULL_BAR3_NO_TOUCH = _bar(6, 0, 3, 104.0, 106.0, 103.8, 105.0)  # low=103.8, does NOT touch 103.6
 BULL_BAR4_TOUCH = _bar(6, 0, 4, 105.0, 105.5, 103.0, 103.5)  # low=103.0 <= 103.6 -> touch
@@ -73,7 +73,7 @@ class TestBullishFvgDetectAndEnter:
         assert strategy._fvg_direction == SignalDirection.BUY
         assert strategy._fvg_upper == pytest.approx(103.6)
         assert strategy._fvg_lower == pytest.approx(100.5)
-        assert strategy._fvg_middle_bar is BULL_BAR1_MIDDLE
+        assert strategy._fvg_sl_bar is BULL_BAR0
         assert strategy.diagnostics.rejections[RejectionReason.NO_RETEST] == 1
 
     def test_no_touch_bar_is_rejected_then_touch_bar_enters(self) -> None:
@@ -88,8 +88,8 @@ class TestBullishFvgDetectAndEnter:
         assert setup is not None
         assert setup.direction == SignalDirection.BUY
         assert setup.entry_zone == (103.6, 103.6)
-        assert setup.stop_zone == (98.0, 98.0)
-        risk = 103.6 - 98.0
+        assert setup.stop_zone == (99.8, 99.8)
+        risk = 103.6 - 99.8
         assert setup.target_zone == (pytest.approx(103.6 + 2.5 * risk), pytest.approx(103.6 + 2.5 * risk))
         assert setup.timestamp == BULL_BAR4_TOUCH.timestamp
         assert strategy._trade_taken is True
@@ -114,8 +114,8 @@ class TestBearishFvg:
     def test_bearish_gap_symmetric_rules(self) -> None:
         # bar0.low(100.5) - bar2.high(97.4) = 3.1 >= 3.0 -> BEARISH.
         # upper_price = bar0.low = 100.5 (irrelevant to entry), lower_price = bar2.high = 97.4 (entry).
-        bar0 = _bar(6, 0, 0, 100.0, 100.2, 100.5, 100.1)
-        bar1_middle = _bar(6, 0, 1, 99.8, 101.5, 99.0, 100.0)  # high=101.5 -> the SL
+        bar0 = _bar(6, 0, 0, 100.0, 100.2, 100.5, 100.1)  # high=100.2 -> the SL (candle before the displacement candle)
+        bar1_middle = _bar(6, 0, 1, 99.8, 101.5, 99.0, 100.0)  # displacement candle (no longer the SL source)
         bar2_end = _bar(6, 0, 2, 97.4, 97.4, 97.0, 97.2)  # high=97.4 -> the entry (near edge)
         no_touch = _bar(6, 0, 3, 97.0, 97.3, 96.5, 96.8)  # high=97.3, does not reach 97.4
         touch = _bar(6, 0, 4, 96.8, 97.6, 96.5, 97.5)  # high=97.6 >= 97.4 -> touch
@@ -132,8 +132,8 @@ class TestBearishFvg:
         assert setup is not None
         assert setup.direction == SignalDirection.SELL
         assert setup.entry_zone == (97.4, 97.4)
-        assert setup.stop_zone == (101.5, 101.5)
-        risk = 101.5 - 97.4
+        assert setup.stop_zone == (100.2, 100.2)
+        risk = 100.2 - 97.4
         assert setup.target_zone == (pytest.approx(97.4 - 2.5 * risk), pytest.approx(97.4 - 2.5 * risk))
 
 
@@ -196,8 +196,8 @@ class TestCrossMidnightTail:
         (00:00) needs the previous day's 23:59 bar as its first/bar0 --
         see strategy/midnight_fvg.py's "Cross-midnight FVG edge case".
         """
-        prev_day_tail = _bar(5, 23, 59, 100.0, 100.5, 99.8, 100.2)  # bar0
-        midnight_middle = _bar(6, 0, 0, 100.2, 101.0, 98.0, 99.0)  # bar1 (SL source, low=98.0)
+        prev_day_tail = _bar(5, 23, 59, 100.0, 100.5, 99.8, 100.2)  # bar0 (SL source, low=99.8)
+        midnight_middle = _bar(6, 0, 0, 100.2, 101.0, 98.0, 99.0)  # bar1 (displacement candle)
         next_minute_end = _bar(6, 0, 1, 103.6, 104.0, 103.6, 103.9)  # bar2 (entry source, low=103.6)
         touch = _bar(6, 0, 5, 105.0, 105.5, 103.0, 103.5)
 
@@ -210,12 +210,12 @@ class TestCrossMidnightTail:
         result = _feed(state, strategy, next_minute_end)  # 3rd bar completes the gap
         assert result is None  # same-tick self-touch guard, see TestBullishFvgDetectAndEnter
         assert strategy._fvg_found is True
-        assert strategy._fvg_middle_bar is midnight_middle
+        assert strategy._fvg_sl_bar is prev_day_tail
         assert strategy._fvg_upper == pytest.approx(103.6)
 
         setup = _feed(state, strategy, touch)
         assert setup is not None
-        assert setup.stop_zone == (98.0, 98.0)
+        assert setup.stop_zone == (99.8, 99.8)
 
     def test_stale_tail_bars_far_from_midnight_are_not_seeded(self) -> None:
         """Regression test: after a data gap, the last-seen bars might not be
