@@ -47,7 +47,7 @@ ever pointing --volume/--risk-per-trade-pct at anything real, even a demo
 account's play money -- see MIDNIGHT_FVG_BOT_SPEC.md section 5.
 
 Usage:
-    python run_live_midnight_fvg.py --symbol USTEC --timeframe M1 --volume 0.1 --paper
+    python run_live_midnight_fvg.py --symbol NAS100 --timeframe M1 --volume 0.1 --paper
 """
 
 import argparse
@@ -104,7 +104,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Live Midnight FVG (00:00-00:30 NY) loop against a DEMO MT5 "
         "account (places real demo orders -- see module docstring)."
     )
-    parser.add_argument("--symbol", default="USTEC")
+    parser.add_argument("--symbol", default="NAS100")
     parser.add_argument("--timeframe", default="M1")
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)

@@ -1,4 +1,4 @@
-"""Backtest of the "Ilk FVG Strategiyasi (New York acilisi)" on USTEC M1 data.
+"""Backtest of the "Ilk FVG Strategiyasi (New York acilisi)" on NAS100 M1 data.
 
 Rules (as specified by the user):
 0. Daily bias filter (added on request): same PD-midline bias as the
@@ -77,7 +77,7 @@ from core.models import Bar as CoreBar
 NY = ZoneInfo("America/New_York")
 BROKER_TZ = ZoneInfo("Europe/Bucharest")
 
-INPUT_CSV = "data/history/USTEC_M1.csv"
+INPUT_CSV = "data/history/NAS100_M1.csv"
 TRADES_OUT = "artifacts/first_fvg_trades.csv"
 
 # (label, bias_reference_time, window_start, window_end) -- all times NY (America/New_York)

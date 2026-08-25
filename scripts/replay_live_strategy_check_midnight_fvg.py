@@ -1,4 +1,4 @@
-"""Regression check: replays USTEC_M1.csv bar-by-bar through the LIVE
+"""Regression check: replays NAS100_M1.csv bar-by-bar through the LIVE
 MidnightFvgStrategy class (strategy/midnight_fvg.py) exactly as
 run_live_midnight_fvg.py's (corrected, bar-by-bar) _evaluate_for_new_trade()
 would, and compares the resulting trade count/direction/entry/SL/TP against
@@ -43,10 +43,10 @@ def load_bars(path: str) -> list[Bar]:
 
 
 def main() -> None:
-    all_bars = load_bars("data/history/USTEC_M1.csv")
+    all_bars = load_bars("data/history/NAS100_M1.csv")
     print(f"Loaded {len(all_bars)} bars: {all_bars[0].timestamp} -> {all_bars[-1].timestamp}")
 
-    market_state = MarketState(symbol="USTEC", timeframe=Timeframe.M1)
+    market_state = MarketState(symbol="NAS100", timeframe=Timeframe.M1)
     strategy = MidnightFvgStrategy(config=MidnightFvgConfig(fixed_tp_r=2.5, min_gap_points=3.0))
 
     setups = []
