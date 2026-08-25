@@ -12,6 +12,7 @@ from execution.event_log import log_fill
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, Position
 from mt5.connector import MT5Connector
+from mt5.rates import BROKER_TZ
 from risk.kill_switch import activate_kill_switch
 from utils.logging import setup_logger
 
@@ -510,7 +511,11 @@ class MT5Broker(IBroker):
                 stop_loss=pos.sl or None,
                 take_profit=pos.tp or None,
                 profit=pos.profit,
-                timestamp=datetime.fromtimestamp(int(pos.time), tz=UTC),
+                # pos.time is MT5's raw epoch -- broker-local (Bucharest) wall-clock
+                # mislabeled as UTC, same as copy_rates_*()'s `time` field (see
+                # mt5/rates.py's BROKER_TZ comment). Re-label to Bucharest then
+                # convert to genuine UTC, matching rates_to_bars()'s fix.
+                timestamp=datetime.fromtimestamp(int(pos.time), tz=UTC).replace(tzinfo=BROKER_TZ).astimezone(UTC),
             )
             for pos in positions
         ]
