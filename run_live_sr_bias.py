@@ -139,7 +139,15 @@ def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
 
 
-def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, final_bar: Bar) -> None:
+def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, bars: list[Bar]) -> None:
+    """Checks the open position's SL/TP against every bar closed SINCE it
+    opened, not just the newest one -- see run_live_midnight_fvg.py's
+    identical _manage_open_trade() docstring for the full rationale (the
+    2-minute poll interval can let more than one M15/M30 bar close between
+    invocations, and PaperBroker relies entirely on this bar-by-bar check
+    to simulate fills; live/demo mode's real MT5 SL/TP order is unaffected
+    either way).
+    """
     symbol = position.symbol
     if position.stop_loss is None or position.take_profit is None:
         logger.error("Open position %s for %s has no stop_loss/take_profit; cannot manage.", position.id, symbol)
@@ -147,7 +155,13 @@ def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: P
         return
 
     _attach_to_open_position(trade_manager, broker, position)
-    action = trade_manager.on_new_bar(final_bar)
+
+    relevant_bars = [b for b in bars if b.timestamp > position.timestamp] or bars[-1:]
+    action = TradeManagerAction.HELD
+    for b in relevant_bars:
+        action = trade_manager.on_new_bar(b)
+        if action is not TradeManagerAction.HELD:
+            break
 
     if action is TradeManagerAction.HELD:
         logger.info("Trade %s for %s held.", position.id, symbol)
@@ -252,7 +266,7 @@ def run_once(
         _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
         return
     if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
+        _manage_open_trade(trade_manager, broker, open_positions[0], bars)
         return
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, daily_bars, symbol, timeframe, kill_switch_flag_path)
@@ -265,15 +279,19 @@ def main(argv: list[str] | None = None) -> None:
     global _CURRENT_MODE
     _CURRENT_MODE = "paper" if args.paper else "live"
 
-    # Deliberately separate paper state/kill-switch files from every other
-    # bot's -- see run_live_midnight_fvg.py's identical rationale (isolating
-    # paper-mode virtual baselines across bots that might run in parallel
-    # against the same demo account).
+    # Deliberately separate paper state/kill-switch files per symbol (and from
+    # every other bot's) -- see run_live_midnight_fvg.py's identical rationale
+    # (isolating paper-mode virtual baselines across bots that might run in
+    # parallel against the same demo account). Without the symbol suffix,
+    # running this script for two symbols at once (e.g. XAUUSD 15m + NAS100
+    # 30m) would share one kill-switch flag and one daily-loss tracker,
+    # letting one symbol's daily loss limit halt the other's trading.
+    symbol_tag = args.symbol.lower()
     risk_dir = Path(__file__).parent / "risk"
-    kill_switch_flag_path = risk_dir / "kill_switch_sr_bias_paper.flag" if args.paper else None
+    kill_switch_flag_path = risk_dir / f"kill_switch_sr_bias_{symbol_tag}_paper.flag" if args.paper else None
     daily_risk_tracker = (
         DailyRiskTracker(
-            state_file=risk_dir / "daily_risk_state_sr_bias_paper.json",
+            state_file=risk_dir / f"daily_risk_state_sr_bias_{symbol_tag}_paper.json",
             kill_switch_flag_path=kill_switch_flag_path,
         )
         if args.paper

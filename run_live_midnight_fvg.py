@@ -190,7 +190,22 @@ def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
 
 
-def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, final_bar: Bar) -> None:
+def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, bars: list[Bar]) -> None:
+    """Checks the open position's SL/TP against every bar closed SINCE it
+    opened, not just the newest one.
+
+    on_new_bar() only evaluates a single bar per call, and this invocation
+    may be the first one to run after more than one new bar closed -- a
+    routine multi-bar gap for M1 bars vs. the 2-minute poll cadence, or a
+    much wider one after a Task Scheduler delay or PC sleep (see the
+    documented sleep-gap incident). Checking only bars[-1] would let an
+    SL/TP touch on an intermediate bar go completely undetected. This
+    matters most in PAPER mode: PaperBroker has no real broker-side SL/TP
+    order and relies entirely on this bar-by-bar check to simulate fills,
+    so a skipped intermediate bar means a wrong/late paper outcome. Live/demo
+    mode is unaffected either way -- MT5's own attached SL/TP order protects
+    the real position in real time, independent of what this check sees.
+    """
     symbol = position.symbol
     if position.stop_loss is None or position.take_profit is None:
         logger.error("Open position %s for %s has no stop_loss/take_profit; cannot manage.", position.id, symbol)
@@ -198,7 +213,13 @@ def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: P
         return
 
     _attach_to_open_position(trade_manager, broker, position)
-    action = trade_manager.on_new_bar(final_bar)
+
+    relevant_bars = [b for b in bars if b.timestamp > position.timestamp] or bars[-1:]
+    action = TradeManagerAction.HELD
+    for b in relevant_bars:
+        action = trade_manager.on_new_bar(b)
+        if action is not TradeManagerAction.HELD:
+            break
 
     if action is TradeManagerAction.HELD:
         logger.info("Trade %s for %s held.", position.id, symbol)
@@ -294,12 +315,19 @@ def _evaluate_for_new_trade(
     fast_poll_trigger_points: float = 0.0,
     fast_poll_interval_seconds: float = DEFAULT_FAST_POLL_INTERVAL_SECONDS,
     fast_poll_max_seconds: float = DEFAULT_FAST_POLL_MAX_SECONDS,
-) -> None:
+) -> bool:
     """Replays every fetched bar through the strategy in chronological order
     (see module docstring for why this differs from
     run_live_accumulation_breakout.py's single evaluate() call), then acts
     only on the setup -- if any -- returned for the FINAL (newest) bar (or,
     failing that, a setup caught by the fast-poll extension below).
+
+    Returns True only if an order was actually FILLED this call. This is
+    deliberately NOT the same as strategy._trade_taken, which is set as soon
+    as a setup is *proposed* -- a proposal can still be rejected by the
+    broker or blocked by the kill-switch, in which case no trade exists and
+    callers must not treat today as resolved (see run_once's daily-resolved
+    cache, which relies on this return value for exactly that reason).
     """
     market_state = MarketState(symbol=symbol, timeframe=timeframe)
     setup = None
@@ -318,7 +346,7 @@ def _evaluate_for_new_trade(
         reasons_str = ", ".join(f"{r} ({c})" for r, c in reasons) if reasons else "no diagnostics recorded"
         logger.info("RESULT: NO SIGNAL (top reason: %s)", reasons_str)
         _log_trade_event("no_signal", symbol=symbol)
-        return
+        return False
 
     logger.info("RESULT: SIGNAL %s %s @ %s", setup.symbol, setup.direction.name, setup.timestamp)
     _log_trade_event("signal_found", symbol=symbol, direction=setup.direction.name, setup_id=setup.setup_id)
@@ -326,19 +354,21 @@ def _evaluate_for_new_trade(
     if is_trading_halted(kill_switch_flag_path):
         logger.warning("Signal found for %s but kill-switch is active; refusing to open.", symbol)
         _log_trade_event("signal_blocked_kill_switch", symbol=symbol, setup_id=setup.setup_id)
-        return
+        return False
 
     order = trade_manager.open_trade(setup, broker)
     if order.status is OrderStatus.FILLED:
         assert order.fill_price is not None
         logger.info("Trade opened for %s: order_id=%s fill_price=%.5f", symbol, order.order_id, order.fill_price)
         _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id, fill_price=order.fill_price)
+        return True
     else:
         open_result = trade_manager.last_open_result
         reason = open_result.comment if open_result is not None else "unknown"
         retcode = open_result.retcode if open_result is not None else None
         logger.error("Trade open REJECTED for %s: reason=%s (retcode=%s)", symbol, reason, retcode)
         _log_trade_event("trade_open_rejected", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id, reason=reason, retcode=retcode)
+        return False
 
 
 def _read_daily_resolved_date(state_path: Path) -> date | None:
@@ -379,17 +409,29 @@ def run_once(
     daily_resolved_state_path: Path | None = None,
 ) -> None:
     # Cheap skip: once today's NY session is fully resolved (a trade was
-    # taken and (by definition, since there's no open position at that
-    # point) already closed, or the session window closed with no matching
-    # FVG at all), there is nothing left this invocation could find until
+    # actually FILLED, or the session window closed with no matching FVG at
+    # all), there is no new setup left this invocation could find until
     # tomorrow's session -- re-fetching and replaying ~4 days of M1 bars
     # through the strategy every 2 minutes for the rest of the day is pure
-    # waste. This only ever skips the FETCH+REPLAY, never the open-position
-    # check below (that stays authoritative and always runs fresh against
-    # the broker), so a position opened out-of-band would still be caught.
+    # waste. But the open-position check itself must NEVER be skipped: a
+    # filled trade still needs _manage_open_trade() called every invocation
+    # (trailing/close-retry logic), so on a cache hit we still make the
+    # cheap get_open_positions() + single-bar call instead of returning
+    # outright.
     if daily_resolved_state_path is not None:
         resolved_date = _read_daily_resolved_date(daily_resolved_state_path)
         if resolved_date == datetime.now(NY).date():
+            open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
+            if len(open_positions) > 1:
+                logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(open_positions))
+                _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+                return
+            if len(open_positions) == 1:
+                # 60 bars (~1h of M1) is still cheap and comfortably covers a
+                # routine multi-bar gap; see _manage_open_trade's docstring.
+                recent_bars = connector.fetch_recent_bars(symbol, timeframe_str, 60)
+                _manage_open_trade(trade_manager, broker, open_positions[0], recent_bars)
+                return
             logger.info("RESULT: NO SIGNAL (cached: %s already resolved, skipping bar fetch)", resolved_date)
             _log_trade_event("no_signal_cached", symbol=symbol)
             return
@@ -404,10 +446,10 @@ def run_once(
         _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
         return
     if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
+        _manage_open_trade(trade_manager, broker, open_positions[0], bars)
         return
 
-    _evaluate_for_new_trade(
+    filled = _evaluate_for_new_trade(
         trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path,
         connector=connector, timeframe_str=timeframe_str,
         fast_poll_trigger_points=fast_poll_trigger_points,
@@ -416,7 +458,12 @@ def run_once(
     )
 
     if daily_resolved_state_path is not None and strategy._current_date is not None:
-        today_done = strategy._trade_taken or (
+        # NOTE: deliberately NOT strategy._trade_taken -- that flag is set as
+        # soon as a setup is *proposed*, before the broker fill/kill-switch
+        # check, so it would wrongly mark a rejected/blocked day as "done"
+        # and starve it of further retries (see _evaluate_for_new_trade's
+        # docstring).
+        today_done = filled or (
             not strategy._fvg_found and datetime.now(NY).date() == strategy._current_date
             and datetime.now(NY).time() >= strategy.config.session_end
         )
