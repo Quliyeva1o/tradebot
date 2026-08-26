@@ -77,6 +77,19 @@ class RejectionReason(str, Enum):
     # above for its own bar-availability/sweep/risk gates.
     NO_PREV_BAR = "no_prev_bar"
 
+    # SrDailyBiasStrategy gates (Support/Resistance + Daily Bias, liquidity-TP
+    # variant -- pine scriptlerim/SR_Daily_Bias_Strategy.pine /
+    # scripts/sr_daily_bias_backtest_liquidity_tp.py). Reuses NO_LATEST_BAR,
+    # NON_POSITIVE_RISK above for its own bar-availability/risk gates.
+    NO_DAILY_BIAS_YET = "no_daily_bias_yet"
+    NEUTRAL_BIAS = "neutral_bias"
+    WARMUP = "warmup"
+    SR_TOO_CLOSE = "sr_too_close"
+    STRONG_TREND_BLOCKS_BOUNCE = "strong_trend_blocks_bounce"
+    NO_LIQUIDITY_TARGET = "no_liquidity_target"
+    REWARD_TOO_SMALL = "reward_too_small"
+    RISK_OUT_OF_BOUNDS = "risk_out_of_bounds"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

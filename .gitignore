@@ -36,6 +36,7 @@ risk/daily_risk_state_paper.json
 risk/daily_risk_state_midnight_fvg_paper.json
 risk/midnight_fvg_daily_resolved.json
 risk/midnight_fvg_daily_resolved_paper.json
+risk/daily_risk_state_sr_bias_paper.json
 
 # Claude Code local (machine-specific) permission overrides
 .claude/settings.local.json

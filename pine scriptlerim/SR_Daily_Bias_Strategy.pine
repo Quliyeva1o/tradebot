@@ -1,0 +1,326 @@
+//@version=6
+// =============================================================================
+// Support & Resistance + Daily Bias Strategy
+// Instrument/timeframe-agnostic (all distances are ATR-based, not fixed
+// pips/points) -- pick any symbol/TF in TradingView and it adapts.
+// =============================================================================
+// MODULES:
+//   1. Daily Bias filter (Daily close vs Daily EMA, with a neutral dead-zone)
+//   2. Swing High/Low detection -> Support/Resistance (confirmed, non-repainting)
+//   3. Entry A: Support/Resistance Bounce (rejection candle, bias-aligned)
+//   4. Entry B: Breakout (close+volume confirmed, N-bar close-through filter
+//      against fake breakouts)
+//   5. Entry C: Pullback/Retest of a broken level (bias-aligned rejection)
+//   6. Filters: volume confirmation, strong-trend override (ADX) on bounce
+//      entries, minimum Support/Resistance separation, minimum & maximum
+//      risk distance
+//   7. Risk management: SL behind the invalidating structural level, TP
+//      fixed at Risk*RR (RR floor enforced at the input, default/min 3.0),
+//      one open position at a time, SL/TP auto-attached on entry
+//   8. Visualization (S/R lines, broken-level markers, entry labels, bias
+//      background)
+//   9. Alerts
+//
+// DESIGN NOTES / DOCUMENTED SIMPLIFICATIONS (not hidden):
+//   - "Daily Bias" = Daily close vs Daily EMA(i_dailyBiasLen), with a
+//     percentage dead-zone around the EMA counting as NEUTRAL (no trades).
+//     This is the standard, simple, non-repainting way to derive an HTF
+//     directional bias without needing full HTF market-structure logic.
+//   - request.security() uses lookahead_off throughout -- only confirmed (or
+//     currently-forming-but-not-future) HTF data is used, no repaint.
+//   - Swing High/Low use ta.pivothigh/ta.pivotlow, confirmed i_swingLen bars
+//     after the pivot by construction (standard non-repainting swing
+//     detection) -- Support/Resistance therefore always lag the true pivot
+//     by i_swingLen bars, same tradeoff as any live swing-based S/R tool.
+//   - All distances (touch tolerance, SL buffer, breakout buffer, min/max
+//     risk, min S/R separation) are expressed as ATR multiples rather than
+//     fixed price units, so one script setting works across symbols/TFs
+//     without per-instrument tuning.
+//   - "Avoid trading against a strong trend" is applied to BOUNCE entries
+//     only (via ADX): a support/resistance bounce is inherently a
+//     mean-reversion bet, the entry type most likely to fail when the ADX
+//     shows a very strong prevailing trend. Breakout/Retest entries are
+//     already trend-following in nature, so the ADX filter does not gate
+//     them -- gating them too would just be the Daily Bias filter twice.
+//   - Fake-breakout filtering = close (not wick) beyond the level, by an
+//     ATR buffer, with volume confirmation AND (optional, default on)
+//     i_breakoutConfirmBars consecutive closes beyond the level before the
+//     breakout counts -- no single-wick or single-tick breakouts trigger.
+//   - A broken level is tracked as the new opposite-side level for
+//     i_retestMaxBars bars, then expires (a retest arriving after that is
+//     considered a fresh structure, not a "retest" of the old break).
+// =============================================================================
+
+strategy("S/R + Daily Bias Strategy", shorttitle = "SR-BIAS",
+     overlay = true, initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.percent_of_equity, default_qty_value = 1,
+     commission_type = strategy.commission.percent, commission_value = 0.0,
+     slippage = 0, max_bars_back = 5000, calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+
+// --- Daily Bias ---
+grpBias          = "Daily Bias"
+i_dailyBiasLen   = input.int(20, "Daily EMA Length", minval = 1, group = grpBias)
+i_biasNeutralPct = input.float(0.15, "Neutral Dead-Zone (% around EMA)", minval = 0.0, step = 0.05, group = grpBias,
+     tooltip = "Daily close within this % of the Daily EMA counts as NEUTRAL bias -- no trades that day.")
+
+// --- Swings / Support & Resistance ---
+grpSR            = "Support & Resistance"
+i_swingLen       = input.int(10, "Swing Length (L/R bars)", minval = 2, group = grpSR)
+i_minSRDistAtr   = input.float(1.5, "Min Support/Resistance Distance (x ATR)", minval = 0.1, step = 0.1, group = grpSR,
+     tooltip = "If Resistance-Support is narrower than this, no entries are taken -- levels judged too close together.")
+
+// --- Bounce Entry ---
+grpBounce        = "S/R Bounce Entry"
+i_touchToleranceAtr = input.float(0.25, "Touch Tolerance (x ATR)", minval = 0.0, step = 0.05, group = grpBounce)
+i_rejectionWickRatio = input.float(0.4, "Min Rejection Wick (fraction of bar range)", minval = 0.0, maxval = 1.0, step = 0.05, group = grpBounce)
+i_rejectionClosePos  = input.float(0.6, "Min Close Position in Bar Range", minval = 0.0, maxval = 1.0, step = 0.05, group = grpBounce,
+     tooltip = "0.6 = close must sit in the favorable (top 40% for bullish / bottom 40% for bearish) part of the bar.")
+i_requireVolOnBounce = input.bool(true, "Require Volume Confirmation on Bounce", group = grpBounce)
+
+// --- Breakout Entry ---
+grpBreak         = "Breakout Entry"
+i_breakoutBufferAtr = input.float(0.15, "Breakout Confirmation Buffer (x ATR)", minval = 0.0, step = 0.05, group = grpBreak)
+i_breakoutConfirmBars = input.int(1, "Consecutive Closes Beyond Level Required", minval = 1, maxval = 5, group = grpBreak,
+     tooltip = "Anti fake-breakout: this many consecutive bar CLOSES (not wicks) must clear the level.")
+
+// --- Pullback / Retest Entry ---
+grpRetest        = "Pullback / Retest Entry"
+i_retestMaxBars  = input.int(30, "Broken Level Valid For (bars)", minval = 1, group = grpRetest,
+     tooltip = "A broken level can be retested for this many bars afterward; older breaks expire (no forced retest trade).")
+
+// --- Volume ---
+grpVol           = "Volume"
+i_volLen         = input.int(20, "Volume SMA Length", minval = 1, group = grpVol)
+i_volMultiplier  = input.float(1.3, "Volume Confirmation Multiplier", minval = 0.1, step = 0.1, group = grpVol)
+
+// --- Strong Trend Filter (Bounce entries only) ---
+grpAdx           = "Strong-Trend Filter (Bounce only)"
+i_useAdxFilter   = input.bool(true, "Skip Bounce Entries in a Strong Trend", group = grpAdx)
+i_adxLen         = input.int(14, "ADX Length", minval = 1, group = grpAdx)
+i_adxThreshold   = input.float(35.0, "ADX 'Strong Trend' Threshold", minval = 1.0, group = grpAdx)
+
+// --- Risk Management ---
+grpRisk          = "Risk Management"
+i_atrLen         = input.int(14, "ATR Length", minval = 1, group = grpRisk)
+i_slBufferAtr    = input.float(0.2, "Stop-Loss Buffer Beyond Level (x ATR)", minval = 0.0, step = 0.05, group = grpRisk)
+i_minRiskAtr     = input.float(0.3, "Minimum Risk Distance (x ATR)", minval = 0.01, step = 0.05, group = grpRisk,
+     tooltip = "Reject the trade if entry-to-SL is smaller than this -- avoids meaninglessly tight stops.")
+i_maxRiskAtr     = input.float(6.0, "Maximum Risk Distance (x ATR)", minval = 0.1, step = 0.5, group = grpRisk,
+     tooltip = "Reject the trade if entry-to-SL is wider than this -- avoids oversized, low-quality stops.")
+i_rr             = input.float(3.0, "Risk:Reward Ratio (TP = Risk x this)", minval = 3.0, step = 0.5, group = grpRisk,
+     tooltip = "Spec requires a minimum 1:3 R:R; floor enforced here (cannot be set below 3.0).")
+
+// --- Visualization ---
+grpViz           = "Visualization"
+i_showSR         = input.bool(true, "Show Support/Resistance Lines", group = grpViz)
+i_showBrokenLvl  = input.bool(true, "Show Broken-Level (Retest) Markers", group = grpViz)
+i_showBiasBg     = input.bool(true, "Shade Background by Daily Bias", group = grpViz)
+
+// =============================================================================
+// 1. DAILY BIAS
+// =============================================================================
+
+dailyClose = request.security(syminfo.tickerid, "D", close, lookahead = barmerge.lookahead_off)
+dailyEma   = request.security(syminfo.tickerid, "D", ta.ema(close, i_dailyBiasLen), lookahead = barmerge.lookahead_off)
+
+upperBand = dailyEma * (1 + i_biasNeutralPct / 100)
+lowerBand = dailyEma * (1 - i_biasNeutralPct / 100)
+
+// 1 = bullish, -1 = bearish, 0 = neutral (no trades)
+dailyBias = dailyClose > upperBand ? 1 : dailyClose < lowerBand ? -1 : 0
+biasIsBullish = dailyBias == 1
+biasIsBearish = dailyBias == -1
+
+// =============================================================================
+// DERIVED: ATR / ADX / VOLUME
+// =============================================================================
+
+atrVal = ta.atr(i_atrLen)
+[_diplus, _diminus, adxVal] = ta.dmi(i_adxLen, i_adxLen)
+strongTrend = i_useAdxFilter and adxVal >= i_adxThreshold
+
+volSma = ta.sma(volume, i_volLen)
+volConfirmed = volume >= volSma * i_volMultiplier
+
+// =============================================================================
+// 2. SWING HIGH/LOW -> SUPPORT & RESISTANCE
+// =============================================================================
+
+pivotHighPrice = ta.pivothigh(high, i_swingLen, i_swingLen)
+pivotLowPrice  = ta.pivotlow(low, i_swingLen, i_swingLen)
+
+var float resistance = na
+var float support    = na
+
+if not na(pivotHighPrice)
+    resistance := pivotHighPrice
+    if i_showSR
+        line.new(bar_index - i_swingLen, pivotHighPrice, bar_index + 30, pivotHighPrice,
+             color = color.new(color.red, 30), style = line.style_dashed, extend = extend.none)
+
+if not na(pivotLowPrice)
+    support := pivotLowPrice
+    if i_showSR
+        line.new(bar_index - i_swingLen, pivotLowPrice, bar_index + 30, pivotLowPrice,
+             color = color.new(color.lime, 30), style = line.style_dashed, extend = extend.none)
+
+srDistanceOk = not na(support) and not na(resistance) and (resistance - support) >= i_minSRDistAtr * atrVal
+
+// =============================================================================
+// REJECTION-CANDLE HELPERS
+// =============================================================================
+
+f_bullishRejection() =>
+    range_ = high - low
+    lowerWick = math.min(open, close) - low
+    closePos = range_ > 0 ? (close - low) / range_ : 0.0
+    range_ > 0 and lowerWick >= i_rejectionWickRatio * range_ and closePos >= i_rejectionClosePos
+
+f_bearishRejection() =>
+    range_ = high - low
+    upperWick = high - math.max(open, close)
+    closePos = range_ > 0 ? (high - close) / range_ : 0.0
+    range_ > 0 and upperWick >= i_rejectionWickRatio * range_ and closePos >= i_rejectionClosePos
+
+// =============================================================================
+// 3. ENTRY A: SUPPORT / RESISTANCE BOUNCE
+// =============================================================================
+
+touchedSupport    = not na(support) and low <= support + i_touchToleranceAtr * atrVal
+touchedResistance = not na(resistance) and high >= resistance - i_touchToleranceAtr * atrVal
+
+bounceVolOk = not i_requireVolOnBounce or volConfirmed
+bounceTrendOk = not strongTrend
+
+longBounce  = biasIsBullish and srDistanceOk and touchedSupport and f_bullishRejection() and bounceVolOk and bounceTrendOk
+shortBounce = biasIsBearish and srDistanceOk and touchedResistance and f_bearishRejection() and bounceVolOk and bounceTrendOk
+
+// =============================================================================
+// 4. ENTRY B: BREAKOUT (with fake-breakout filtering)
+// =============================================================================
+
+closesAboveRes = not na(resistance) and ta.lowest(close, i_breakoutConfirmBars) > resistance + i_breakoutBufferAtr * atrVal
+closesBelowSup = not na(support) and ta.highest(close, i_breakoutConfirmBars) < support - i_breakoutBufferAtr * atrVal
+
+freshBreakUp   = closesAboveRes and not (close[1] > resistance + i_breakoutBufferAtr * atrVal)
+freshBreakDown = closesBelowSup and not (close[1] < support - i_breakoutBufferAtr * atrVal)
+
+bullishBreakout = biasIsBullish and srDistanceOk and freshBreakUp and volConfirmed
+bearishBreakout = biasIsBearish and srDistanceOk and freshBreakDown and volConfirmed
+
+// =============================================================================
+// 5. ENTRY C: PULLBACK / RETEST OF A BROKEN LEVEL
+// =============================================================================
+
+var float brokenResLevel = na   // former resistance, now acting as support
+var int   brokenResBar   = na
+var float brokenSupLevel = na   // former support, now acting as resistance
+var int   brokenSupBar   = na
+
+if bullishBreakout
+    brokenResLevel := resistance
+    brokenResBar   := bar_index
+    if i_showBrokenLvl
+        label.new(bar_index, resistance, "Broken Res -> Support", style = label.style_label_down,
+             color = color.new(color.blue, 20), textcolor = color.white, size = size.tiny)
+
+if bearishBreakout
+    brokenSupLevel := support
+    brokenSupBar   := bar_index
+    if i_showBrokenLvl
+        label.new(bar_index, support, "Broken Sup -> Resistance", style = label.style_label_up,
+             color = color.new(color.orange, 20), textcolor = color.white, size = size.tiny)
+
+if not na(brokenResBar) and (bar_index - brokenResBar) > i_retestMaxBars
+    brokenResLevel := na
+    brokenResBar := na
+
+if not na(brokenSupBar) and (bar_index - brokenSupBar) > i_retestMaxBars
+    brokenSupLevel := na
+    brokenSupBar := na
+
+retestingBrokenRes = not na(brokenResLevel) and low <= brokenResLevel + i_touchToleranceAtr * atrVal and low >= brokenResLevel - i_touchToleranceAtr * atrVal
+retestingBrokenSup = not na(brokenSupLevel) and high >= brokenSupLevel - i_touchToleranceAtr * atrVal and high <= brokenSupLevel + i_touchToleranceAtr * atrVal
+
+retestLong  = biasIsBullish and retestingBrokenRes and f_bullishRejection()
+retestShort = biasIsBearish and retestingBrokenSup and f_bearishRejection()
+
+// Consume the broken level once it produces a retest entry, so the same
+// break doesn't fire multiple retest signals.
+if retestLong
+    brokenResLevel := na
+    brokenResBar := na
+if retestShort
+    brokenSupLevel := na
+    brokenSupBar := na
+
+// =============================================================================
+// COMBINE SETUPS
+// =============================================================================
+
+longSetup  = longBounce or bullishBreakout or retestLong
+shortSetup = shortBounce or bearishBreakout or retestShort
+
+noOpenTrade = strategy.opentrades == 0
+
+// =============================================================================
+// 7. RISK MANAGEMENT / ORDER EXECUTION
+// =============================================================================
+
+if longSetup and noOpenTrade
+    slBase = longBounce ? support : bullishBreakout ? resistance : brokenResLevel
+    if not na(slBase)
+        slPrice = slBase - i_slBufferAtr * atrVal
+        riskDist = close - slPrice
+        riskOk = riskDist >= i_minRiskAtr * atrVal and riskDist <= i_maxRiskAtr * atrVal
+        if riskOk
+            tpPrice = close + riskDist * i_rr
+            entryTag = longBounce ? "Bounce" : bullishBreakout ? "Breakout" : "Retest"
+            strategy.entry("Long", strategy.long)
+            strategy.exit("Long Exit", from_entry = "Long", stop = slPrice, limit = tpPrice)
+            label.new(bar_index, low, "LONG (" + entryTag + ")", style = label.style_label_up,
+                 color = color.new(color.green, 0), textcolor = color.white, size = size.small)
+            alert("SR-BIAS: LONG (" + entryTag + ") on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+if shortSetup and noOpenTrade
+    slBase = shortBounce ? resistance : bearishBreakout ? support : brokenSupLevel
+    if not na(slBase)
+        slPrice = slBase + i_slBufferAtr * atrVal
+        riskDist = slPrice - close
+        riskOk = riskDist >= i_minRiskAtr * atrVal and riskDist <= i_maxRiskAtr * atrVal
+        if riskOk
+            tpPrice = close - riskDist * i_rr
+            entryTag = shortBounce ? "Bounce" : bearishBreakout ? "Breakout" : "Retest"
+            strategy.entry("Short", strategy.short)
+            strategy.exit("Short Exit", from_entry = "Short", stop = slPrice, limit = tpPrice)
+            label.new(bar_index, high, "SHORT (" + entryTag + ")", style = label.style_label_down,
+                 color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+            alert("SR-BIAS: SHORT (" + entryTag + ") on " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// =============================================================================
+// ALERT CONDITIONS
+// =============================================================================
+
+alertcondition(longSetup and noOpenTrade, title = "LONG Signal", message = "SR-BIAS: LONG signal")
+alertcondition(shortSetup and noOpenTrade, title = "SHORT Signal", message = "SR-BIAS: SHORT signal")
+alertcondition(bullishBreakout, title = "Bullish Breakout", message = "SR-BIAS: Resistance broken bullishly")
+alertcondition(bearishBreakout, title = "Bearish Breakout", message = "SR-BIAS: Support broken bearishly")
+
+// =============================================================================
+// 8. VISUALIZATION
+// =============================================================================
+
+plot(resistance, title = "Resistance", style = plot.style_stepline, color = color.new(color.red, 0), linewidth = 1)
+plot(support, title = "Support", style = plot.style_stepline, color = color.new(color.lime, 0), linewidth = 1)
+
+bgcolor(i_showBiasBg and biasIsBullish ? color.new(color.green, 92) : i_showBiasBg and biasIsBearish ? color.new(color.red, 92) : na,
+     title = "Daily Bias Background")
+
+// =============================================================================
+// END OF SCRIPT
+// =============================================================================
