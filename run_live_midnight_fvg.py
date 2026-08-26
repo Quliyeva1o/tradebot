@@ -51,8 +51,10 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import time as time_module
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -339,6 +341,28 @@ def _evaluate_for_new_trade(
         _log_trade_event("trade_open_rejected", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id, reason=reason, retcode=retcode)
 
 
+def _read_daily_resolved_date(state_path: Path) -> date | None:
+    """Returns the NY calendar date this state file last marked fully
+    resolved (no more signals possible today), or None if the file is
+    missing/unreadable/doesn't mark a resolved day.
+    """
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not data.get("resolved"):
+        return None
+    try:
+        return date.fromisoformat(data["ny_date"])
+    except (KeyError, ValueError):
+        return None
+
+
+def _write_daily_resolved_state(state_path: Path, ny_date: date, resolved: bool) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"ny_date": ny_date.isoformat(), "resolved": resolved}), encoding="utf-8")
+
+
 def run_once(
     connector: MT5Connector,
     broker: IBroker,
@@ -352,7 +376,24 @@ def run_once(
     fast_poll_trigger_points: float = 0.0,
     fast_poll_interval_seconds: float = DEFAULT_FAST_POLL_INTERVAL_SECONDS,
     fast_poll_max_seconds: float = DEFAULT_FAST_POLL_MAX_SECONDS,
+    daily_resolved_state_path: Path | None = None,
 ) -> None:
+    # Cheap skip: once today's NY session is fully resolved (a trade was
+    # taken and (by definition, since there's no open position at that
+    # point) already closed, or the session window closed with no matching
+    # FVG at all), there is nothing left this invocation could find until
+    # tomorrow's session -- re-fetching and replaying ~4 days of M1 bars
+    # through the strategy every 2 minutes for the rest of the day is pure
+    # waste. This only ever skips the FETCH+REPLAY, never the open-position
+    # check below (that stays authoritative and always runs fresh against
+    # the broker), so a position opened out-of-band would still be caught.
+    if daily_resolved_state_path is not None:
+        resolved_date = _read_daily_resolved_date(daily_resolved_state_path)
+        if resolved_date == datetime.now(NY).date():
+            logger.info("RESULT: NO SIGNAL (cached: %s already resolved, skipping bar fetch)", resolved_date)
+            _log_trade_event("no_signal_cached", symbol=symbol)
+            return
+
     lookback_bars = lookback_days * 1440  # M1 bars/day upper bound; safe overestimate for weekends/gaps
     bars = connector.fetch_recent_bars(symbol, timeframe_str, lookback_bars)
     logger.info("Fetched %d bar(s) for %s [%s]: %s -> %s", len(bars), symbol, timeframe_str, bars[0].timestamp, bars[-1].timestamp)
@@ -374,6 +415,13 @@ def run_once(
         fast_poll_max_seconds=fast_poll_max_seconds,
     )
 
+    if daily_resolved_state_path is not None and strategy._current_date is not None:
+        today_done = strategy._trade_taken or (
+            not strategy._fvg_found and datetime.now(NY).date() == strategy._current_date
+            and datetime.now(NY).time() >= strategy.config.session_end
+        )
+        _write_daily_resolved_state(daily_resolved_state_path, strategy._current_date, today_done)
+
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
@@ -391,6 +439,9 @@ def main(argv: list[str] | None = None) -> None:
     # account, don't corrupt or halt each other's virtual baseline either.
     risk_dir = Path(__file__).parent / "risk"
     kill_switch_flag_path = risk_dir / "kill_switch_midnight_fvg_paper.flag" if args.paper else None
+    daily_resolved_state_path = risk_dir / (
+        "midnight_fvg_daily_resolved_paper.json" if args.paper else "midnight_fvg_daily_resolved.json"
+    )
     daily_risk_tracker = (
         DailyRiskTracker(
             state_file=risk_dir / "daily_risk_state_midnight_fvg_paper.json",
@@ -458,6 +509,7 @@ def main(argv: list[str] | None = None) -> None:
             fast_poll_trigger_points=args.fast_poll_trigger_points,
             fast_poll_interval_seconds=args.fast_poll_interval_seconds,
             fast_poll_max_seconds=args.fast_poll_max_seconds,
+            daily_resolved_state_path=daily_resolved_state_path,
         )
     finally:
         connector.disconnect()
