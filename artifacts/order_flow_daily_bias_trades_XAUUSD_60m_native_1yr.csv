@@ -1,0 +1,2 @@
+entry_time,direction,daily_bias,sweep_kind,entry_price,sl,tp1,tp2,tp3,of_score,leg1_exit_time,leg1_exit_price,leg1_exit_reason,leg2_exit_time,leg2_exit_price,leg2_exit_reason,r_multiple,pnl_usd
+2025-12-18 09:00:00-05:00,LONG,Neutral,SessionLow,4328.57,4319.225693109552,4349.03,4349.635,4350.24,2,2025-12-18 11:00:00-05:00,4349.03,TP1,2025-12-18 11:00:00-05:00,4349.635,TP2,2.222,2221.94

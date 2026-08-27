@@ -1,0 +1,2 @@
+entry_time,direction,daily_bias,sweep_kind,entry_price,sl,tp1,tp2,tp3,of_score,leg1_exit_time,leg1_exit_price,leg1_exit_reason,leg2_exit_time,leg2_exit_price,leg2_exit_reason,r_multiple,pnl_usd
+2025-09-25 18:00:00-04:00,SHORT,Neutral,Trendline,24404.9,24467.615768876884,24219.9,24184.0,23993.3,2,2025-09-26 08:00:00-04:00,24467.615768876884,SL,2025-09-26 08:00:00-04:00,24467.615768876884,SL,-1.0,-1000.0
