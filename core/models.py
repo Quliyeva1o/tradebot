@@ -110,6 +110,12 @@ class AccountInfo:
     # demo-account safety rail -- see run_live_demo.py). None for sources that
     # don't expose it (e.g. PaperBroker.get_account_info()).
     trade_mode: int | None = None
+    # Account leverage (e.g. 100 for 1:100), used to price a prospective
+    # order's margin where the venue cannot compute it directly -- see
+    # PaperBroker.calculate_margin and TradeManager's margin ceiling. 0/None
+    # means "unknown", and callers must skip the margin check rather than
+    # divide by it.
+    leverage: int = 0
 
 
 @dataclass(frozen=True)

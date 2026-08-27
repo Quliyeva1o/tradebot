@@ -38,5 +38,11 @@ risk/midnight_fvg_daily_resolved.json
 risk/midnight_fvg_daily_resolved_paper.json
 risk/daily_risk_state_sr_bias_*_paper.json
 
+# Superseded backtest outputs, archived locally on 2026-08-27 (see
+# SESSION_HANDOFF.md). Kept out of git deliberately: they were produced
+# before the lookahead/same-bar fixes and are actively misleading. Their
+# original committed versions remain retrievable from git history.
+artifacts/old/
+
 # Claude Code local (machine-specific) permission overrides
 .claude/settings.local.json

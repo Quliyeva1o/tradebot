@@ -115,6 +115,7 @@ def _position_to_dict(position: Position) -> dict:
         "stop_loss": position.stop_loss,
         "take_profit": position.take_profit,
         "timestamp": position.timestamp.isoformat(),
+        "comment": position.comment,
     }
 
 
@@ -134,6 +135,9 @@ def _position_from_dict(data: dict) -> Position:
         stop_loss=data["stop_loss"],
         take_profit=data["take_profit"],
         timestamp=datetime.fromisoformat(data["timestamp"]),
+        # .get(): state files written before ownership tracking existed have
+        # no comment key -- those positions read back as "ownership unknown".
+        comment=data.get("comment", ""),
     )
 
 
@@ -219,6 +223,39 @@ class PaperBroker(IBroker):
         """
         return self._connector.fetch_symbol_info(symbol)
 
+    def calculate_margin(
+        self, symbol: str, order_type: OrderType, volume: float, price: float
+    ) -> float | None:
+        """Estimates required margin from real symbol metadata and leverage.
+
+        Paper mode must apply the SAME pre-trade margin ceiling as live (see
+        TradeManager.open_trade), otherwise paper results would include
+        entries the real account could never afford. Uses the venue's own
+        contract size with the account's leverage rather than
+        mt5.order_calc_margin(), keeping PaperBroker's rule of touching only
+        read-only MT5 metadata.
+
+        Args:
+            symbol: Trading instrument symbol.
+            order_type: The order type being sized (unused: initial margin is
+                symmetric for long and short on the instruments traded here).
+            volume: Lot size to price the margin for.
+            price: Price to compute the notional at.
+
+        Returns:
+            Estimated margin in account currency, or None if the leverage or
+            symbol metadata is unavailable.
+        """
+        try:
+            constraints = self._connector.fetch_symbol_info(symbol)
+            leverage = self._connector.fetch_account_info().leverage
+        except Exception as exc:  # metadata unavailable -> caller skips the check
+            logger.warning("calculate_margin: could not price margin for %s (%s).", symbol, type(exc).__name__)
+            return None
+        if not leverage:
+            return None
+        return volume * constraints.contract_size * price / leverage
+
     def place_order(self, order: OrderRequest) -> OrderResult:
         """Submits an order to the paper account.
 
@@ -269,6 +306,9 @@ class PaperBroker(IBroker):
             stop_loss=order.stop_loss,
             take_profit=order.take_profit,
             timestamp=internal_order.filled_at or datetime.now(UTC),
+            # Mirrors MT5Broker: the opening setup_id travels with the
+            # position so ownership stays resolvable in paper mode too.
+            comment=order.comment or "",
         )
         self._positions[order_id] = position
         self._save_state()

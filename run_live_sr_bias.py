@@ -139,6 +139,33 @@ def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
 
 
+# Every setup_id SrDailyBiasStrategy emits starts with this, and
+# TradeManager.open_trade sends the setup_id as the order comment, so it
+# travels back on the open Position. See run_live_midnight_fvg.py's
+# identical tag/partition pair for the full rationale.
+STRATEGY_TAG = "setup_sr_bias"
+
+
+def _partition_positions(
+    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
+) -> tuple[list[Position], list[Position]]:
+    """Splits this symbol's open positions into (ours, someone-else's).
+
+    This script runs twice concurrently (XAUUSD M15 and NAS100 M30) and
+    shares NAS100 with run_live_midnight_fvg.py, all against ONE account.
+    A position whose comment is empty or unrecognized is deliberately NOT
+    counted as ours -- ownership-unknown must never mean ownership-mine.
+
+    NOTE the two SR+Bias instances share this same tag, which is correct:
+    they are separated by SYMBOL (the caller passes its own), so each only
+    ever sees its own instrument's positions.
+    """
+    same_symbol = [p for p in positions if p.symbol == symbol]
+    mine = [p for p in same_symbol if p.comment.startswith(tag)]
+    foreign = [p for p in same_symbol if not p.comment.startswith(tag)]
+    return mine, foreign
+
+
 def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, bars: list[Bar]) -> None:
     """Checks the open position's SL/TP against every bar closed SINCE it
     opened, not just the newest one -- see run_live_midnight_fvg.py's
@@ -260,13 +287,19 @@ def run_once(
         len(bars), timeframe_str, symbol, bars[0].timestamp, bars[-1].timestamp, len(daily_bars),
     )
 
-    open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
-    if len(open_positions) > 1:
-        logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(open_positions))
-        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+    mine, foreign = _partition_positions(broker.get_open_positions(), symbol)
+    if len(mine) > 1:
+        logger.error("Ambiguous open positions for %s (%d owned by this strategy); skipping.", symbol, len(mine))
+        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
         return
-    if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars)
+    if len(mine) == 1:
+        _manage_open_trade(trade_manager, broker, mine[0], bars)
+        return
+    if foreign:
+        # Another bot (or a human) already holds this symbol -- see
+        # run_live_midnight_fvg.py for why stacking on top is refused.
+        logger.info("Skipping %s: %d position(s) held by another strategy.", symbol, len(foreign))
+        _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, daily_bars, symbol, timeframe, kill_switch_flag_path)

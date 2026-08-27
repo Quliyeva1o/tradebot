@@ -146,6 +146,8 @@ def main() -> None:
             "entry_time": setup.timestamp.isoformat(),
             "exit_time": exit_ts.isoformat(),
             "direction": setup.direction.name,
+            "entry_price": setup.entry_zone[0],
+            "stop": setup.stop_zone[0],
             "r_multiple": r,
             "win": r > 0,
         })
@@ -164,7 +166,7 @@ def main() -> None:
 
     Path("artifacts").mkdir(exist_ok=True)
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["entry_time", "exit_time", "direction", "r_multiple", "win"])
+        writer = csv.DictWriter(f, fieldnames=["entry_time", "exit_time", "direction", "entry_price", "stop", "r_multiple", "win"])
         writer.writeheader()
         writer.writerows(trades)
     print(f"Wrote {OUTPUT_CSV}")

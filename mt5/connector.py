@@ -148,6 +148,7 @@ class MT5Connector:
             margin_level=info.margin_level,
             currency=info.currency,
             trade_mode=info.trade_mode,
+            leverage=int(getattr(info, "leverage", 0) or 0),
         )
 
     def fetch_symbol_info(self, symbol: str) -> SymbolConstraints:

@@ -90,6 +90,14 @@ class RejectionReason(str, Enum):
     REWARD_TOO_SMALL = "reward_too_small"
     RISK_OUT_OF_BOUNDS = "risk_out_of_bounds"
 
+    # OrderFlowBiasStrategy gates (Daily Bias + Trendline + Liquidity +
+    # Order Flow proxy). Reuses NO_LATEST_BAR, NO_DAILY_BIAS_YET,
+    # NEUTRAL_BIAS, WARMUP, NO_DISPLACEMENT, NO_SWEEP, NO_RETEST,
+    # NON_POSITIVE_RISK, RR_GATE_FAILED above for its own gates.
+    NO_TRENDLINE = "no_trendline"
+    WRONG_SIDE_OF_TRENDLINE = "wrong_side_of_trendline"
+    NO_ORDER_FLOW_CONFIRMATION = "no_order_flow_confirmation"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

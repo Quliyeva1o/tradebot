@@ -1,0 +1,283 @@
+# Session Handoff — 2026-08-27
+
+Continuation notes for picking this project up on another machine. Covers
+what changed, what is trustworthy, what is not, and what to do next.
+
+---
+
+## 1. Current live state
+
+Three bots run in parallel on ONE MT5 demo account (`ForexTimeFXTM-Demo02`,
+login 67660753, $100k virtual), driven by Windows Task Scheduler every 2
+minutes:
+
+| Task | Script | Symbol / TF | Risk |
+|---|---|---|---|
+| `MidnightFVG_*` | `run_live_midnight_fvg.py` | NAS100 M1 | 0.05% |
+| `SRBias_XAUUSD_*` | `run_live_sr_bias.py` | XAUUSD M15 | 0.20% |
+| `SRBias_NAS100_*` | `run_live_sr_bias.py` | NAS100 M30 | 0.25% |
+
+Each has a `_Demo` (real demo orders) and `_Paper` (PaperBroker, no orders)
+variant. Both are gated by the two-layer demo-account rail
+(`.env` `MT5_ACCOUNT_TYPE=demo` **and** MT5's own `trade_mode`).
+
+> **Naming note:** the "Midnight FVG" strategy is referred to as **First
+> FVG** in conversation. Same thing; the filenames still say `midnight_fvg`.
+
+---
+
+## 2. Bugs found and FIXED this session
+
+All five were verified against real data, and every fix has a regression
+test whose teeth were checked by deliberately reverting the fix and
+confirming the test fails.
+
+### 2.1 Lookahead in the HTF Daily Bias — CRITICAL
+**Files:** `scripts/order_flow_bias_backtest.py`, `scripts/po3_backtest.py`
+
+`resample(label="left", closed="left")` labels the 1H bar covering
+`[09:00, 10:00)` as `09:00`, but its high/low/close are only known at 09:59.
+Forward-filling the bias from that label let a **09:05 execution bar trade on
+09:59 information**. 24.2% of 5m bars carried a wrong bias.
+
+Measured impact — the strategy's *entire* apparent edge was the leak:
+
+| | With lookahead | Without (honest) |
+|---|---|---|
+| Order Flow XAUUSD 5m | PF 1.63, +76.6R | **PF 0.99, −1.4R** |
+| Order Flow NAS100 15m | PF 1.70, +42.7R | **PF 0.94, −5.1R** |
+
+**Fix:** `bias_1h.shift(1, freq="1h")` before reindexing, so only CLOSED 1H
+bars are ever used. **Never remove this shift.**
+**Test:** `tests/test_backtest_lookahead.py` (perturbs the future, asserts no
+past bias value moves). Note: two earlier formulations of this test were
+*vacuous* and are documented in that file so they are not retried.
+
+### 2.2 Same-bar SL missed in the First FVG backtest — CRITICAL
+**File:** `scripts/backtest_midnight_fvg_live_class.py`
+
+Entry is a mid-bar touch at the FVG edge, but SL/TP scanning started at the
+NEXT bar — so a stop-out inside the entry bar itself was missed. Caught by
+the user manually checking 2026-08-25 (recorded +2.5R; actually −1.0R, the
+entry bar's low 29100.1 was already below the 29102.3 stop).
+**Fix:** `simulate_entry_bar_then_outcome()` checks the entry bar first.
+Impact: 613 trades, PF 1.21 (was overstated as 1.22 / higher net R).
+
+### 2.3 Daily-resolved cache poisoned by rejected orders — CRITICAL
+**File:** `run_live_midnight_fvg.py`
+
+The cache was written from `strategy._trade_taken`, which is set when a setup
+is *proposed*, before the broker fill / kill-switch gate. A rejected order or
+kill-switch block therefore marked the day "resolved", and the cache-hit path
+returned *before* the open-position check — starving the rest of the NY
+session of both retries and position management.
+**Fix:** `_evaluate_for_new_trade()` now returns True only on an actual FILL;
+the cache keys off that, and the cache-hit branch still checks positions.
+**Test:** `tests/test_run_live_midnight_fvg.py`.
+
+### 2.4 Multi-bar gaps skipped SL/TP checks — HIGH
+**Files:** `run_live_midnight_fvg.py`, `run_live_sr_bias.py`
+
+`_manage_open_trade()` only checked `bars[-1]`. With a 2-minute poll and M1
+bars — or after a Task Scheduler delay / PC sleep — several bars close
+between invocations, so an SL/TP touch on an intermediate bar was never seen.
+Harmless live (MT5 enforces the real SL/TP), **but PaperBroker has no
+broker-side SL/TP and relies entirely on this check**.
+**Fix:** iterate every bar closed since `position.timestamp`.
+
+### 2.5 Position ownership between bots — CRITICAL
+**Files:** `execution/models.py`, `execution/mt5_broker.py`,
+`execution/paper_broker.py`, both `run_live_*.py`
+
+Two bots trade NAS100 (First FVG M1, SR+Bias M30) on one account, but both
+filtered positions by `p.symbol` only and `get_open_positions()` never read
+MT5's `pos.comment` — so ownership was unknowable. Consequences: mutual
+blocking; each bot could close the other's position; and if both opened in
+the same window, BOTH bailed out as "ambiguous", leaving **neither** managed.
+**Fix:** `Position.comment` added (both brokers populate it with the opening
+`setup_id`); each runner matches its own `STRATEGY_TAG` prefix. A position
+with an empty/unknown comment is **never** treated as ours (so a hand-opened
+trade can't be closed by a bot). Verified to survive MT5's 29-char comment
+truncation.
+**Test:** `tests/test_prod_safety_guards.py`.
+
+### 2.6 No margin ceiling in the live order path — CRITICAL
+**File:** `execution/trade_manager.py`
+
+`BacktestEngine` has always had `_margin_ok()`; the live path had none. Risk
+sizing divides by stop distance, so a tight stop yields a huge lot size.
+
+Measured with the broker's own `order_calc_margin()` and REAL contract sizes:
+
+| Strategy | Worst margin | Trades over a 20% ceiling |
+|---|---|---|
+| SR+Bias XAUUSD 15m | $90,522 (**90.5%** of $100k) | **876 / 1896 (46%)** |
+| SR+Bias NAS100 30m | $10,389 (10.4%) | 0 |
+| First FVG NAS100 M1 | $3,182 (3.2%) | 0 |
+
+The problem is entirely XAUUSD (1 lot = 100 oz → 9 lots ≈ $4.1M notional,
+41x leverage on $100k). This is gap risk, not just margin risk: a 1% adverse
+gap through a 2-point stop loses far more than "0.2% risk" implies.
+
+**Fix:** `DEFAULT_MAX_MARGIN_PCT = 0.20` in `TradeManager`. The entry is
+**scaled down, not blocked** — blocking would delete 46% of XAUUSD trades and
+make live diverge wildly from backtest. Only if the venue minimum lot still
+breaches the ceiling is the trade refused. Added `IBroker.calculate_margin()`
+(MT5 uses `order_calc_margin`; PaperBroker uses contract size × leverage —
+verified to return identical values: both $41,292 for 9 lots XAUUSD).
+
+> **Consequence to remember:** SR+Bias XAUUSD live returns will now be LOWER
+> than its backtest, because ~46% of entries get size-capped. That strategy
+> needs re-backtesting *with* the cap to know its true expectancy.
+
+### 2.7 Correction to my own audit
+I first reported "SR+Bias NAS100: 208% margin, 11 trades exceed the account."
+**That was wrong** — I assumed `contract_size=20` for NAS100; it is actually
+`1`. Corrected numbers are in the table above. NAS100 has no margin problem.
+
+---
+
+## 3. OPEN issues (not yet fixed)
+
+### 3.1 Spread is not in the strategy math — CRITICAL, still open
+No backtest deducts transaction cost. Using the broker's live spreads
+(NAS100 **3.0**, XAUUSD **0.39**, EURUSD **0.00014**), charged once per trade:
+
+| Strategy | Median stop | Cost | PF before → after |
+|---|---|---|---|
+| First FVG NAS100 M1 | 7.70 pts | 0.39R | 1.21 → **0.73** (+87R → **−156R**) |
+| SR+Bias XAUUSD 15m | 2.22 | 0.18R | 1.11 → **0.85** (+154R → **−251R**) |
+| SR+Bias NAS100 30m | 30.0 | 0.03R | 1.22 → **1.06** |
+
+First FVG's median stop is only 7.7 points against a 3.0 spread — ~39% of
+each trade's risk is spent at entry. **Both First FVG and SR+Bias XAUUSD are
+net-negative once real costs are applied.** Fix direction: subtract expected
+spread inside the min-RR gate, and/or widen stops, and/or retire First FVG.
+
+### 3.2 PC sleep outage
+The machine slept 2026-08-26 14:59 UTC → 2026-08-27 06:27 UTC (15.5h) and a
+real First FVG signal was missed (BUY @ 29494.8, 00:21 NY). `WakeToRun` is
+enabled on the tasks but `powercfg` shows wake timers are **disabled on
+battery** (AC only). Fix: keep the PC on AC, or as admin:
+```
+powercfg /setdcvalueindex SCHEME_CURRENT SUB_SLEEP RTCWAKE 1
+powercfg /setactive SCHEME_CURRENT
+```
+
+### 3.3 Lower-severity, documented
+- **Aggregate risk:** 3 bots size independently against one account →
+  simultaneous exposure can reach ~3x intended. `DailyRiskTracker` is shared
+  in real mode but its file writes are non-atomic, and it resets on the UTC
+  day (mid-session for NY strategies).
+- **PO3 enters mid-bar** at the FVG edge, so it has the §2.2 same-bar class
+  of gap. Checked: 0 occurrences in the current trade set, latent only.
+- **`volume_min` clamp** in `position_sizer.py:76` rounds UP, which would
+  over-risk on a small account. Not triggered at $100k (measured 1.0x exact).
+- **Test hygiene:** `tests/test_research*.py` / `test_walk_forward.py` write
+  `artifacts/parameter_stability.csv`, `optimization_results.csv`,
+  `walk_forward_summary.csv`, `parameter_heatmap.csv` into the real repo dir
+  on every pytest run. All-zero dummy output, unrelated to our strategies.
+
+---
+
+## 4. Verified CORRECT (measured, no action needed)
+
+- Position sizing math: actual risk = **1.0x** intended, against real broker
+  constraints, for all three live configs.
+- SR+Bias daily bias uses only the previous fully-closed day — **no
+  lookahead** (the §2.1 bug does not affect it, confirmed by re-running:
+  identical results before and after the fix).
+- First FVG uses no HTF context at all — no lookahead.
+- Broker `stops_level = 0`; zero SL-distance violations across 3,499 trades.
+- Parameter sensitivity is smooth (no overfitting signature):
+  First FVG `min_gap` 2.4/3.0/3.6 → PF 1.13/1.21/1.23;
+  SR+Bias `swing_len` 8/10/12 → PF 1.06/1.11/1.09.
+- Cross-strategy monthly-return correlation: **−0.21 … +0.26** (effectively
+  uncorrelated — the diversification claim is real).
+- `.env` is not tracked and never was committed.
+
+---
+
+## 5. Trustworthy results (regenerated 2026-08-27 with all fixes)
+
+Data: full M1 history refreshed from MT5, 2020 → 2026-08-26.
+NAS100 1,903,718 bars · XAUUSD 2,273,116 bars · EURUSD 2,425,968 bars.
+**All R-multiples below EXCLUDE spread (see §3.1).**
+
+### Live strategies
+| Strategy | Trades | WR | PF | Net R |
+|---|---|---|---|---|
+| First FVG NAS100 M1 | 613 | 32.6% | 1.21 | +87.0R |
+| SR+Bias XAUUSD 15m | 1896 | 25.9% | 1.11 | +154.3R |
+| SR+Bias NAS100 30m | 811 | 31.3% | 1.22 | +123.9R |
+
+### PO3 (new this session) — NOT actionable
+12 combos, **92 trades total across 6 years** (3–18 per combo). Headline PFs
+look great (EURUSD 30m 9.22, NAS100 60m 8.50) but rest on 3–6 trades each —
+statistically meaningless, and ~0.5–3 trades/year is unusable in practice.
+This is the spec working as written (sweep + displacement + MSS + FVG-retest
+must all coincide), not a bug. To evaluate it seriously, relax one of the
+four hard gates. Full table: `artifacts/po3_trades_*.csv`.
+
+### Order Flow — edge did not survive the lookahead fix
+XAUUSD 5m PF 0.99, NAS100 15m PF 0.94. A full 12-combo re-sweep was running
+when this session ended; check `artifacts/order_flow_bias_trades_*.csv`
+timestamps (anything from 2026-08-27 18:55 or later is post-fix).
+**All pre-fix Order Flow conclusions — rankings, "improving trend", monthly
+tables — are void.**
+
+### Archived
+76 superseded CSVs were moved to `artifacts/old/` (gitignored; the committed
+versions remain in git history). They predate the fixes and are misleading.
+
+---
+
+## 6. Key commands
+
+```bash
+# Backtests
+./.venv/Scripts/python.exe -m scripts.backtest_midnight_fvg_live_class
+./.venv/Scripts/python.exe scripts/sr_daily_bias_backtest_liquidity_tp.py --symbol XAUUSD --tf 15
+./.venv/Scripts/python.exe -m scripts.po3_sweep
+./.venv/Scripts/python.exe -m scripts.order_flow_bias_sweep
+
+# Analysis helpers
+./.venv/Scripts/python.exe -m scripts.summarize_trade_log --input <csv> --label <name>
+./.venv/Scripts/python.exe -m scripts.daily_breakdown --input <csv> --label <name> --days 30
+./.venv/Scripts/python.exe -m scripts.robustness_analysis   # recency split, bootstrap, cost stress
+
+# Live (paper is always safe)
+./.venv/Scripts/python.exe run_live_sr_bias.py --symbol XAUUSD --timeframe M15 --paper
+
+# Data refresh — NOTE: --start must cover full history or the CSV is truncated
+./.venv/Scripts/python.exe -m data.download_history --symbols NAS100,XAUUSD,EURUSD \
+    --timeframe M1 --start 2020-01-01 --output-dir data/history
+```
+
+Tests: `./.venv/Scripts/python.exe -m pytest -q`
+(`tests/test_swing_detector.py` and `tests/test_liquidity.py` contain
+timing-sensitive performance assertions that fail under CPU load; one known
+`XFAIL` for Bug #29 in `walkthrough.md`.)
+
+---
+
+## 7. Suggested next steps
+
+1. **Spread into the RR gate** (§3.1) — the last open critical item, and it
+   decides whether First FVG survives at all.
+2. **Re-backtest SR+Bias XAUUSD with the margin cap** (§2.6) to get its true
+   post-cap expectancy.
+3. **Finish / review the Order Flow re-sweep** and decide whether to retire
+   the strategy.
+4. **Decide on PO3** — relax a gate, or drop it.
+5. **Fix the power policy** (§3.2) before trusting uptime.
+
+### Methodology rules this project now follows
+- Never trust a backtest number without checking for lookahead — the
+  future-perturbation test in `tests/test_backtest_lookahead.py` is the
+  pattern to copy for any new HTF input.
+- Always verify a regression test's teeth by reverting the fix.
+- Prefer identical code in backtest and live; where they must differ,
+  document the divergence explicitly (see `strategy/sr_daily_bias.py`'s
+  "KNOWN FIDELITY GAP" note).
+- Report R-multiples both with and without transaction cost.
