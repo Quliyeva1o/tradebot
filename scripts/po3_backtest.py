@@ -23,14 +23,19 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 
-NY = ZoneInfo("America/New_York")
-BROKER_TZ = ZoneInfo("Europe/Bucharest")
+from scripts.backtest_common import (
+    NY,
+    compute_atr,
+    compute_pivots,
+    htf_bias_to_index,
+    load_m1,
+    resample,
+)
 
 STARTING_BALANCE = 100_000.0
 RISK_PCT = 0.01
@@ -61,50 +66,6 @@ class Trade:
     exit_reason: str
     r_multiple: float
     pnl_usd: float
-
-
-def load_m1(path: str) -> pd.DataFrame:
-    rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            naive = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S")
-            broker_local = naive.replace(tzinfo=BROKER_TZ)
-            ny_ts = broker_local.astimezone(NY)
-            rows.append((ny_ts, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]), float(row["volume"])))
-    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
-    return df.set_index("ts").sort_index()
-
-
-def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
-    rule = f"{minutes}min"
-    out = df.resample(rule, label="left", closed="left").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    )
-    return out.dropna(subset=["open"])
-
-
-def wilder_smooth(series: pd.Series, period: int) -> pd.Series:
-    return series.ewm(alpha=1 / period, adjust=False).mean()
-
-
-def compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
-    prev_close = df["close"].shift(1)
-    tr = pd.concat([df["high"] - df["low"], (df["high"] - prev_close).abs(), (df["low"] - prev_close).abs()], axis=1).max(axis=1)
-    return wilder_smooth(tr, period)
-
-
-def compute_pivots(df: pd.DataFrame, half_window: int) -> tuple[np.ndarray, np.ndarray]:
-    n = len(df)
-    highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
-    ph, pl = np.full(n, np.nan), np.full(n, np.nan)
-    for i in range(half_window, n - half_window):
-        wh = highs[i - half_window : i + half_window + 1]
-        if highs[i] == wh.max():
-            ph[i + half_window] = highs[i]
-        wl = lows[i - half_window : i + half_window + 1]
-        if lows[i] == wl.min():
-            pl[i + half_window] = lows[i]
-    return ph, pl
 
 
 def session_high_low(m1: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> tuple[float | None, float | None]:
@@ -171,13 +132,11 @@ def compute_daily_bias(m1: pd.DataFrame, levels: dict) -> pd.Series:
     total = vote_structure.to_numpy() + vote_zone.to_numpy()
     bias_1h = pd.Series(np.where(total >= 2, 1, np.where(total <= -2, -1, 0)), index=h1.index)
 
-    # CRITICAL (lookahead fix) -- see the identical comment in
-    # scripts/order_flow_bias_backtest.py::compute_daily_bias. The 1H bar
-    # labelled 09:00 is only complete at 09:59, so its bias may not be
-    # forward-filled from the 09:00 label; shift it a full hour so only
-    # CLOSED 1H bars are ever used. Measured impact on the sibling
-    # strategy: PF 1.63 -> 0.99. Never remove this shift.
-    return bias_1h.shift(1, freq="1h").reindex(m1.index, method="ffill").fillna(0)
+    # CRITICAL (lookahead fix) -- bias_1h is labelled by 1H bar START, so it
+    # must be re-stamped to each bar's CLOSE before any execution bar reads
+    # it. htf_bias_to_index does that; its docstring carries the measured
+    # impact and the reason this must never be "optimized" away.
+    return htf_bias_to_index(bias_1h, 60, m1.index)
 
 
 def run_backtest(tf_minutes: int, input_csv: str) -> tuple[list[Trade], dict]:

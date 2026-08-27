@@ -46,15 +46,19 @@ from __future__ import annotations
 import csv
 import itertools
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-NY = ZoneInfo("America/New_York")
-BROKER_TZ = ZoneInfo("Europe/Bucharest")
+from scripts.backtest_common import (
+    bias_lookup,
+    compute_atr,
+    compute_pivots_series,
+    htf_bias_known_from,
+    load_m1,
+    resample,
+)
 
 SYMBOL_FILES = {
     "XAUUSD": "data/history/XAUUSD_M1.csv",
@@ -132,63 +136,6 @@ class Trade:
 # Data loading
 # --------------------------------------------------------------------------
 
-def load_m1(path: str) -> pd.DataFrame:
-    rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            naive = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S")
-            broker_local = naive.replace(tzinfo=BROKER_TZ)
-            ny_ts = broker_local.astimezone(NY)
-            rows.append(
-                (ny_ts, float(row["open"]), float(row["high"]), float(row["low"]),
-                 float(row["close"]), float(row["volume"]))
-            )
-    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
-    return df.set_index("ts").sort_index()
-
-
-def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
-    rule = f"{minutes}min"
-    out = df.resample(rule, label="left", closed="left").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    )
-    return out.dropna(subset=["open"])
-
-
-# --------------------------------------------------------------------------
-# Indicators
-# --------------------------------------------------------------------------
-
-def wilder_smooth(series: pd.Series, period: int) -> pd.Series:
-    return series.ewm(alpha=1 / period, adjust=False).mean()
-
-
-def compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [df["high"] - df["low"], (df["high"] - prev_close).abs(), (df["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    return wilder_smooth(tr, period)
-
-
-def compute_pivots(df: pd.DataFrame, left: int, right: int) -> tuple[pd.Series, pd.Series]:
-    """Confirmed pivot high/low, value placed at the confirmation bar (pivot+right)."""
-    n = len(df)
-    highs = df["high"].to_numpy()
-    lows = df["low"].to_numpy()
-    ph = np.full(n, np.nan)
-    pl = np.full(n, np.nan)
-    for i in range(left, n - right):
-        window_h = highs[i - left: i + right + 1]
-        if highs[i] == window_h.max():
-            ph[i + right] = highs[i]
-        window_l = lows[i - left: i + right + 1]
-        if lows[i] == window_l.min():
-            pl[i + right] = lows[i]
-    return pd.Series(ph, index=df.index), pd.Series(pl, index=df.index)
-
-
 def compute_session_vwap(df: pd.DataFrame) -> pd.Series:
     """Typical-price VWAP, reset every NY calendar day. Causal (row-wise cumsum)."""
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
@@ -219,7 +166,7 @@ def compute_daily_bias_from_h1(h1: pd.DataFrame, daily: pd.DataFrame, cfg: Confi
         prev_h, prev_l = row["high"], row["low"]
 
     vwap = compute_session_vwap(h1)
-    ph, pl = compute_pivots(h1, cfg.swing_len_1h, cfg.swing_len_1h)
+    ph, pl = compute_pivots_series(h1, cfg.swing_len_1h)
 
     close = h1["close"].to_numpy()
     ph_arr, pl_arr = ph.to_numpy(), pl.to_numpy()
@@ -261,15 +208,12 @@ def compute_daily_bias_from_h1(h1: pd.DataFrame, daily: pd.DataFrame, cfg: Confi
         total = structure_score + pdmid_score + vwap_score
         bias_vals[i] = 1 if total >= 2 else (-1 if total <= -2 else 0)
 
-    known_from = idx + pd.Timedelta(hours=1)
-    return pd.Series(bias_vals, index=known_from)
-
-
-def bias_lookup(bias_series: pd.Series, ts: pd.Timestamp) -> int | None:
-    pos = bias_series.index.searchsorted(ts, side="right") - 1
-    if pos < 0:
-        return None
-    return int(bias_series.iloc[pos])
+    # CRITICAL (lookahead fix) -- bias_vals[i] is computed from the 1H bar
+    # LABELLED idx[i], which does not close until idx[i] + 1h. Re-stamping to
+    # the close time is what stops an execution bar reading a bias it could
+    # not yet have known; see htf_bias_known_from's docstring for the
+    # measured impact. Read it back with bias_lookup, never by label.
+    return htf_bias_known_from(pd.Series(bias_vals, index=idx), 60)
 
 
 BIAS_NAME = {1: "Bullish", -1: "Bearish", 0: "Neutral"}
@@ -354,7 +298,7 @@ def _run_backtest_core(
     clv = np.where(range_ > 0, (2 * bars["close"] - bars["high"] - bars["low"]) / range_, 0.0)
     bars["clv"] = clv
     bars["delta"] = bars["volume"] * clv
-    ph, pl = compute_pivots(bars, cfg.swing_len, cfg.swing_len)
+    ph, pl = compute_pivots_series(bars, cfg.swing_len)
     bars["pivot_high"] = ph
     bars["pivot_low"] = pl
 
