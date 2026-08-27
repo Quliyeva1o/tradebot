@@ -190,6 +190,37 @@ def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
 
 
+# Every setup_id this script's strategy emits starts with this (see
+# MidnightFvgStrategy.evaluate), and TradeManager.open_trade sends the
+# setup_id as the order comment, so it travels back on the open Position.
+# MT5Broker truncates long comments but preserves the first 20 characters
+# (see _mt5_comment), which is more than this tag needs.
+STRATEGY_TAG = "setup_midnight_fvg"
+
+
+def _partition_positions(
+    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
+) -> tuple[list[Position], list[Position]]:
+    """Splits this symbol's open positions into (ours, someone-else's).
+
+    Several bots run against ONE account in this setup, and more than one of
+    them trades NAS100 (this script on M1, run_live_sr_bias.py on M30).
+    Filtering by symbol alone made them indistinguishable, which meant each
+    bot would "manage" -- and could close -- a position the other opened,
+    and two simultaneous positions made BOTH bots bail out with "ambiguous
+    positions", leaving neither one managed (in paper mode that means SL/TP
+    is never simulated at all).
+
+    A position whose comment is empty or unrecognized is deliberately NOT
+    counted as ours: ownership-unknown must never be treated as
+    ownership-mine, or a hand-opened position would be closed by a bot.
+    """
+    same_symbol = [p for p in positions if p.symbol == symbol]
+    mine = [p for p in same_symbol if p.comment.startswith(tag)]
+    foreign = [p for p in same_symbol if not p.comment.startswith(tag)]
+    return mine, foreign
+
+
 def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: Position, bars: list[Bar]) -> None:
     """Checks the open position's SL/TP against every bar closed SINCE it
     opened, not just the newest one.
@@ -421,16 +452,16 @@ def run_once(
     if daily_resolved_state_path is not None:
         resolved_date = _read_daily_resolved_date(daily_resolved_state_path)
         if resolved_date == datetime.now(NY).date():
-            open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
-            if len(open_positions) > 1:
-                logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(open_positions))
-                _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+            mine, _foreign = _partition_positions(broker.get_open_positions(), symbol)
+            if len(mine) > 1:
+                logger.error("Ambiguous open positions for %s (%d owned by this strategy); skipping.", symbol, len(mine))
+                _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
                 return
-            if len(open_positions) == 1:
+            if len(mine) == 1:
                 # 60 bars (~1h of M1) is still cheap and comfortably covers a
                 # routine multi-bar gap; see _manage_open_trade's docstring.
                 recent_bars = connector.fetch_recent_bars(symbol, timeframe_str, 60)
-                _manage_open_trade(trade_manager, broker, open_positions[0], recent_bars)
+                _manage_open_trade(trade_manager, broker, mine[0], recent_bars)
                 return
             logger.info("RESULT: NO SIGNAL (cached: %s already resolved, skipping bar fetch)", resolved_date)
             _log_trade_event("no_signal_cached", symbol=symbol)
@@ -440,13 +471,22 @@ def run_once(
     bars = connector.fetch_recent_bars(symbol, timeframe_str, lookback_bars)
     logger.info("Fetched %d bar(s) for %s [%s]: %s -> %s", len(bars), symbol, timeframe_str, bars[0].timestamp, bars[-1].timestamp)
 
-    open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
-    if len(open_positions) > 1:
-        logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(open_positions))
-        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+    mine, foreign = _partition_positions(broker.get_open_positions(), symbol)
+    if len(mine) > 1:
+        logger.error("Ambiguous open positions for %s (%d owned by this strategy); skipping.", symbol, len(mine))
+        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
         return
-    if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars)
+    if len(mine) == 1:
+        _manage_open_trade(trade_manager, broker, mine[0], bars)
+        return
+    if foreign:
+        # Another bot (or a human) already has exposure on this symbol.
+        # Deliberately conservative: adding our own position on top would
+        # stack correlated risk AND margin on one account -- see the audit's
+        # margin finding, where a single wide position can already consume
+        # most of the account's free margin.
+        logger.info("Skipping %s: %d position(s) held by another strategy.", symbol, len(foreign))
+        _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
     filled = _evaluate_for_new_trade(

@@ -107,6 +107,14 @@ class Position:
     take_profit: float | None = None
     profit: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
+    comment: str = ""
+    """The venue's order comment, which this codebase always populates with
+    the opening TradeSetup's setup_id (see TradeManager.open_trade) -- so it
+    is the ONLY way to tell which strategy owns a position when several bots
+    trade the same symbol on one account. Empty when the venue does not
+    report one; callers must treat "" as "ownership unknown", never as
+    "mine" (see run_live_*.py's _own_positions()).
+    """
 
     def __post_init__(self) -> None:
         """Validates parameter ranges.

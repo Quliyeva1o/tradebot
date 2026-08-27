@@ -15,7 +15,9 @@ Inversion, the same role StrategyEngine plays for TradeSetupStrategy
 implementations).
 """
 
-from core.models import Bar, OrderType, SignalDirection
+import math
+
+from core.models import AccountInfo, Bar, OrderType, SignalDirection
 from core.validation import require_positive
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, TradeManagerAction
@@ -29,11 +31,25 @@ from utils.logging import setup_logger
 
 logger = setup_logger("trade_manager", log_to_file=True)
 
+# Ceiling on the share of account equity a SINGLE entry's margin may consume.
+# Risk-based sizing divides the risk budget by the stop distance, so a very
+# tight stop yields a very large lot size: on real history, SR+Bias NAS100
+# 30m produced 11 entries whose margin alone exceeded 100% of a $100k account
+# (worst: 66 lots needing 208%), and one XAUUSD entry needed 89%. Several
+# bots also share one account here, so an unbounded entry starves the others
+# of free margin even when the venue accepts it.
+DEFAULT_MAX_MARGIN_PCT = 0.20
+
 
 class TradeManager:
     """Owns a single open trade's lifecycle: entry, bar-by-bar SL/TP tracking, exit."""
 
-    def __init__(self, volume: float = 0.1, position_sizer: PositionSizer | None = None) -> None:
+    def __init__(
+        self,
+        volume: float = 0.1,
+        position_sizer: PositionSizer | None = None,
+        max_margin_pct: float | None = DEFAULT_MAX_MARGIN_PCT,
+    ) -> None:
         """Initializes the TradeManager with no open trade.
 
         Args:
@@ -46,13 +62,27 @@ class TradeManager:
                 broker's account balance and the symbol's real contract-size/
                 tick-value constraints (see execution/position_sizer.py)
                 instead of using the fixed `volume`.
+            max_margin_pct: Hard ceiling on the fraction of account EQUITY a
+                single entry's margin may consume (default 20%). Risk-based
+                sizing divides by the stop distance, so an unusually tight
+                stop produces an enormous lot size: measured on real history,
+                SR+Bias NAS100 30m produced 11 entries whose margin alone
+                exceeded 100% of a $100k account (worst: 66 lots / 208%).
+                BacktestEngine has always had this guard (_margin_ok); the
+                live path did not, so those orders would have been rejected
+                by the venue at best, or left the account with no free margin
+                at worst. Pass None to disable (not recommended live).
 
         Raises:
-            ValueError: If volume is not strictly positive.
+            ValueError: If volume is not strictly positive, or max_margin_pct
+                is given but not strictly positive.
         """
         require_positive(volume, "volume")
+        if max_margin_pct is not None:
+            require_positive(max_margin_pct, "max_margin_pct")
         self._volume = volume
         self._position_sizer = position_sizer
+        self._max_margin_pct = max_margin_pct
         self._broker: IBroker | None = None
         self._position_id: str | None = None
         self._direction: SignalDirection | None = None
@@ -124,15 +154,22 @@ class TradeManager:
             OrderType.BUY_MARKET if setup.direction == SignalDirection.BUY else OrderType.SELL_MARKET
         )
 
+        entry_price = resolve_entry_price(setup)
         if self._position_sizer is not None:
             account_info = broker.get_account_info()
             constraints = broker.get_symbol_constraints(setup.symbol)
-            entry_price = resolve_entry_price(setup)
             volume = self._position_sizer.calculate_size(
                 account_info.balance, entry_price, stop_loss, constraints
             )
         else:
+            account_info = None
             volume = self._volume
+
+        volume, rejected = self._apply_margin_ceiling(
+            broker, setup, order_type, volume, entry_price, account_info
+        )
+        if rejected is not None:
+            return rejected
 
         request = OrderRequest(
             symbol=setup.symbol,
@@ -169,6 +206,100 @@ class TradeManager:
             take_profit,
         )
         return order
+
+    def _apply_margin_ceiling(
+        self,
+        broker: IBroker,
+        setup: TradeSetup,
+        order_type: OrderType,
+        volume: float,
+        entry_price: float,
+        account_info: AccountInfo | None,
+    ) -> tuple[float, Order | None]:
+        """Caps `volume` so its margin stays within max_margin_pct of equity.
+
+        Returns (volume_to_use, rejected_order). When the second element is
+        not None the caller must return it immediately: even the venue's
+        minimum lot would breach the ceiling, so there is no tradeable size.
+
+        SCALING, not blocking, is deliberate. Measured on real history at
+        this account's actual contract sizes, 46% of SR+Bias XAUUSD entries
+        exceed a 20% ceiling (worst: 47 lots needing 90.5% of a $100k
+        account) -- refusing all of those would delete half the strategy and
+        make live behaviour diverge wildly from its backtest. Scaling keeps
+        every trade, just smaller, so only the SIZE of the outlier entries
+        changes. The other two live configs are unaffected either way
+        (worst case 3.2% and 10.4% of equity).
+
+        The ceiling also guards gap risk, not just margin calls: 9 lots of
+        XAUUSD is ~$4.1M notional on a $100k account, where a 1% adverse gap
+        through a 2-point stop loses far more than the "0.2% risk" implies.
+
+        Fails OPEN (returns `volume` untouched) when the venue cannot price
+        the margin or report equity -- blocking every trade on a missing
+        metadata call is a worse failure mode than the risk it guards.
+        """
+        if self._max_margin_pct is None:
+            return volume, None
+
+        try:
+            margin = broker.calculate_margin(setup.symbol, order_type, volume, entry_price)
+        except Exception as exc:  # never let a metadata call break order flow
+            logger.warning("Margin check unavailable for %s (%s); proceeding.", setup.symbol, type(exc).__name__)
+            return volume, None
+        if not isinstance(margin, int | float) or isinstance(margin, bool) or margin <= 0:
+            return volume, None
+
+        info = account_info if account_info is not None else broker.get_account_info()
+        equity = getattr(info, "equity", None)
+        if not isinstance(equity, int | float) or isinstance(equity, bool) or equity <= 0:
+            return volume, None
+
+        ceiling = equity * self._max_margin_pct
+        if margin <= ceiling:
+            return volume, None
+
+        try:
+            constraints = broker.get_symbol_constraints(setup.symbol)
+            step = constraints.volume_step
+            floor_volume = constraints.volume_min
+        except Exception:
+            step, floor_volume = 0.01, 0.01
+        if not isinstance(step, int | float) or step <= 0:
+            step, floor_volume = 0.01, 0.01
+
+        scaled = volume * (ceiling / margin)
+        capped = math.floor(scaled / step) * step
+        capped = round(capped, 8)
+
+        if capped < floor_volume:
+            request = OrderRequest(
+                symbol=setup.symbol, order_type=order_type,
+                volume=volume, comment=setup.setup_id,
+            )
+            order = Order(order_id="", request=request)
+            order.reject()
+            self.current_order = order
+            self.last_open_result = OrderResult(
+                success=False,
+                retcode=0,
+                comment=(
+                    f"blocked locally: even the minimum {floor_volume} lots exceeds the "
+                    f"{self._max_margin_pct:.0%} margin ceiling ({ceiling:.2f}) on equity {equity:.2f}"
+                ),
+            )
+            logger.error(
+                "Refusing entry for %s: minimum %.2f lots still breaches the %.0f%% margin ceiling.",
+                setup.symbol, floor_volume, self._max_margin_pct * 100,
+            )
+            return volume, order
+
+        logger.warning(
+            "Capping %s entry from %.2f to %.2f lots: %.2f margin exceeded the %.0f%% "
+            "ceiling (%.2f) on equity %.2f. Realised risk on this trade is proportionally smaller.",
+            setup.symbol, volume, capped, margin, self._max_margin_pct * 100, ceiling, equity,
+        )
+        return capped, None
 
     def on_new_bar(self, bar: Bar) -> TradeManagerAction:
         """Checks the tracked open trade against its SL/TP levels for this bar.

@@ -516,6 +516,42 @@ class MT5Broker(IBroker):
                 # mt5/rates.py's BROKER_TZ comment). Re-label to Bucharest then
                 # convert to genuine UTC, matching rates_to_bars()'s fix.
                 timestamp=datetime.fromtimestamp(int(pos.time), tz=UTC).replace(tzinfo=BROKER_TZ).astimezone(UTC),
+                # Carries the opening setup_id, so a caller can tell WHICH
+                # strategy owns this position -- essential when two bots
+                # trade the same symbol on one account (see Position.comment).
+                comment=getattr(pos, "comment", "") or "",
             )
             for pos in positions
         ]
+
+    def calculate_margin(
+        self, symbol: str, order_type: OrderType, volume: float, price: float
+    ) -> float | None:
+        """READ-ONLY: asks MT5 for the margin this order would require.
+
+        Uses mt5.order_calc_margin(), i.e. the venue's own number rather than
+        a leverage approximation, so the pre-trade ceiling in
+        TradeManager.open_trade matches what the broker actually enforces.
+        Never places or modifies anything.
+
+        Args:
+            symbol: Trading instrument symbol.
+            order_type: The order type being sized.
+            volume: Lot size to price the margin for.
+            price: Price to compute the margin at (e.g. current ask/bid).
+
+        Returns:
+            Required margin in account currency, or None if MT5 declines to
+            compute it (unknown symbol, terminal not ready, ...).
+        """
+        mt5_type = _ORDER_TYPE_MAP.get(order_type)
+        if mt5_type is None:
+            return None
+        if not mt5.symbol_select(symbol, True):
+            logger.warning("calculate_margin: could not select symbol %s.", symbol)
+            return None
+        margin = mt5.order_calc_margin(mt5_type, symbol, volume, price)
+        if margin is None:
+            logger.warning("calculate_margin: MT5 returned None for %s (%s).", symbol, mt5.last_error())
+            return None
+        return float(margin)

@@ -101,11 +101,15 @@ class _FakeStrategy:
         return None
 
 
-def _open_position(opened_at: datetime | None = None) -> Position:
+def _open_position(opened_at: datetime | None = None, comment: str | None = None) -> Position:
+    """Defaults to a position this strategy OWNS (its comment carries the
+    setup_id prefix run_once() matches on -- see _partition_positions).
+    """
     return Position(
         id="pos1", symbol="NAS100", order_type=OrderType.BUY_MARKET, volume=0.1,
         open_price=100.0, current_price=101.0, stop_loss=95.0, take_profit=112.5,
         timestamp=opened_at or datetime(2026, 1, 10, 0, 0, tzinfo=NY),
+        comment=comment if comment is not None else f"{run_live_midnight_fvg.STRATEGY_TAG}_NAS100_M1_BUY",
     )
 
 

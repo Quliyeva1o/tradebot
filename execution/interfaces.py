@@ -2,7 +2,7 @@
 
 from typing import Protocol, runtime_checkable
 
-from core.models import AccountInfo, SymbolConstraints
+from core.models import AccountInfo, OrderType, SymbolConstraints
 from execution.models import OrderRequest, OrderResult, Position
 
 
@@ -87,5 +87,21 @@ class IBroker(Protocol):
 
         Returns:
             A SymbolConstraints snapshot of the symbol's trading constraints.
+        """
+        ...
+
+    def calculate_margin(
+        self, symbol: str, order_type: OrderType, volume: float, price: float
+    ) -> float | None:
+        """Margin the venue would require to open `volume` lots of `symbol`.
+
+        Used by TradeManager.open_trade's pre-trade margin ceiling: risk-based
+        sizing divides by the stop distance, so a very tight stop can produce
+        a lot size whose margin exceeds the whole account.
+
+        Returns:
+            The required margin in account currency, or None if this venue
+            cannot compute it (callers must then skip the check rather than
+            block the trade on a guess).
         """
         ...
