@@ -352,6 +352,30 @@ timing-sensitive performance assertions that fail under CPU load; one known
    for a few months," not "validated." See
    [PO3_SPREAD_REPORT.md](PO3_SPREAD_REPORT.md) section 4.
 5. **Fix the power policy** (§3.2) before trusting uptime.
+6. ~~Bootstrap/Monte Carlo CI on the two live configs~~ **DONE 2026-08-28**
+   -- see [ROBUSTNESS_VALIDATION_REPORT.md](ROBUSTNESS_VALIDATION_REPORT.md).
+   Important asymmetry found: SR+Bias's 5y PF has an 82.5% bootstrap
+   probability of being a real positive edge; **First FVG's does not** --
+   only 54.0% (90% CI [0.90, 1.12] straddles 1.0, essentially a coin flip).
+   Both are still the best surviving configs of their families, but treat
+   First FVG's edge as unconfirmed, not just smaller, when sizing risk.
+   Walk-forward split is still outstanding (largely superseded by the
+   recency split already run here -- neither strategy's parameters were
+   fit via a search/optimization loop, so there's no in-sample fit to
+   guard against).
+7. ~~SR's live-vs-backtest fidelity check~~ **DONE 2026-08-28** -- see
+   [ROBUSTNESS_VALIDATION_REPORT.md](ROBUSTNESS_VALIDATION_REPORT.md)'s new
+   section. Ran the ACTUAL `SrDailyBiasStrategy` bar-by-bar over the full
+   6y NAS100 M30 history (`scripts/backtest_sr_daily_bias_live_class.py`)
+   and diffed against the batch script. The docstring's "KNOWN FIDELITY
+   GAP" is real but small: live class finds 838 trades vs batch's 811
+   (+3.3%), PF (net of spread) 1.024 vs 1.057 -- within the bootstrap CI's
+   noise band, not a material divergence. (Caught and fixed a bug in the
+   verification script itself along the way: a boolean `in_position` flag
+   that got cleared via a same-iteration forward-search, which silently
+   disabled the one-trade-at-a-time gate and inflated the count to 1017
+   before the fix -- see that script's own comment for why `open_until_idx`
+   is the correct pattern, matching backtest_midnight_fvg_live_class.py.)
 
 ### Methodology rules this project now follows
 - Never trust a backtest number without checking for lookahead — the
