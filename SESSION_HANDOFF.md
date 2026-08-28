@@ -154,6 +154,35 @@ each trade's risk is spent at entry. **Both First FVG and SR+Bias XAUUSD are
 net-negative once real costs are applied.** Fix direction: subtract expected
 spread inside the min-RR gate, and/or widen stops, and/or retire First FVG.
 
+**Update 2026-08-28:** this row is the OLD M1/liquidity-TP First FVG
+(`scripts/first_fvg_backtest.py`) and is still unresolved as described above.
+A SEPARATE, newer First FVG variant (`scripts/nas100_first_fvg_15m_backtest.py`,
+session-anchored at 00:00/09:30, 5m/15m, fixed 2R/3R target, median stop
+22-39pt) has since been fully spread-tested across both session anchors,
+both timeframes, and 2R/3R — see
+[FIRST_FVG_15M_SPREAD_REPORT.md](FIRST_FVG_15M_SPREAD_REPORT.md). Verdict for
+that variant: 09:30 + 15m + 2R is net-positive on spread (PF 1.01 5y / 1.16
+1y); every other combination of that variant is not.
+
+**Update 2026-08-28 (2):** SR+Bias has now been re-run with fresh MT5 data
+(2020-01-01 onward) across ALL 5 symbols this repo has ever tested it
+against (NAS100/XAUUSD/EURUSD/GBPUSD/USDJPY), all 4 timeframes (5/15/30/60m),
+and both TP variants (fixed-3R / liquidity) -- 40 combinations total, with
+spread applied throughout (real per-bar historical spread for XAUUSD/EURUSD/
+GBPUSD/USDJPY -- confirmed non-zero and realistic across the full 2020-2026
+history, unlike NAS100's; fixed 3.0pt for NAS100). Full ranking, methodology,
+and a code-correctness review of both backtest scripts: see
+[SR_DAILY_BIAS_SPREAD_REPORT.md](SR_DAILY_BIAS_SPREAD_REPORT.md).
+
+Result: only 2/40 combinations clear PF ≥ 1.0 on BOTH the 5y and 1y window --
+**NAS100 30m liquidity-TP** (PF 1.12 5y / 1.55 1y, n=695/111) is the clear
+winner and matches this account's current live NAS100 M30 config. **This
+row's XAUUSD 15m finding is now CONFIRMED and EXTENDED: none of XAUUSD's 4
+timeframes clear PF 1.0 on the 5y window** (best is 60m fixed3r at 0.939) --
+the currently-live `SRBias_XAUUSD_*` task should be reconsidered. EURUSD and
+GBPUSD lose money in every single one of their 20 combinations (PF 0.39-0.78)
+and should not be traded with this strategy at all.
+
 ### 3.2 PC sleep outage
 The machine slept 2026-08-26 14:59 UTC → 2026-08-27 06:27 UTC (15.5h) and a
 real First FVG signal was missed (BUY @ 29494.8, 00:21 NY). `WakeToRun` is
@@ -219,12 +248,38 @@ This is the spec working as written (sweep + displacement + MSS + FVG-retest
 must all coincide), not a bug. To evaluate it seriously, relax one of the
 four hard gates. Full table: `artifacts/po3_trades_*.csv`.
 
+**Update 2026-08-28:** re-run extended to 5 symbols (added GBPUSD/USDJPY)
+with spread applied — see [PO3_SPREAD_REPORT.md](PO3_SPREAD_REPORT.md). Also
+found and FIXED a real bug while re-reviewing: entry is a mid-bar FVG-zone
+touch, but SL/TP scanning only started the FOLLOWING bar, so a same-bar
+stop-out on the entry bar itself was never checked -- the exact §2.2 class
+of gap this doc already flagged as "latent" here. Fixed in
+`scripts/po3_spread_sweep.py` (not yet backported to the original
+`scripts/po3_backtest.py`). Net verdict unchanged and now worse: 20
+combinations, **144 trades total**, 1-22 per combination (one cell is a
+single trade). No amount of spread modeling matters when the sample is this
+small -- do not rank or trust any PF in this set. Recommendation stands:
+relax a hard gate and re-test, or drop the strategy.
+
 ### Order Flow — edge did not survive the lookahead fix
 XAUUSD 5m PF 0.99, NAS100 15m PF 0.94. A full 12-combo re-sweep was running
 when this session ended; check `artifacts/order_flow_bias_trades_*.csv`
 timestamps (anything from 2026-08-27 18:55 or later is post-fix).
 **All pre-fix Order Flow conclusions — rankings, "improving trend", monthly
 tables — are void.**
+
+**Update 2026-08-28:** the re-sweep is now finished, extended from 3 to 5
+symbols (added GBPUSD/USDJPY), and spread has been applied for the first
+time -- see [ORDER_FLOW_SPREAD_REPORT.md](ORDER_FLOW_SPREAD_REPORT.md). Code
+re-reviewed, no new correctness issues found (the §2.1 fix holds). Verdict:
+**do not take this strategy live.** 4/20 combinations clear PF >= 1.0 on
+both 5y/1y, but every single one rests on 5-51 trades over 5 years (2-16 in
+the 1y window) -- an order of magnitude fewer than First FVG (n=1000+) or
+SR (n=400-3000) -- so the ranking is not statistically trustworthy (same
+"too few trades to mean anything" regime already flagged for PO3 in this
+doc). Half-year breakdowns for the top 2 candidates swing from PF 0.00 to
+PF 9.29 between six-month windows on 2-9 trades each, which is noise, not
+edge.
 
 ### Archived
 76 superseded CSVs were moved to `artifacts/old/` (gitignored; the committed
@@ -263,13 +318,39 @@ timing-sensitive performance assertions that fail under CPU load; one known
 
 ## 7. Suggested next steps
 
-1. **Spread into the RR gate** (§3.1) — the last open critical item, and it
-   decides whether First FVG survives at all.
+1. ~~Spread into the RR gate~~ **DONE 2026-08-28** for First FVG (09:30+15m+2R
+   survives, see [FIRST_FVG_15M_SPREAD_REPORT.md](FIRST_FVG_15M_SPREAD_REPORT.md)),
+   SR+Bias (NAS100 30m liquidity survives, XAUUSD does not, see
+   [SR_DAILY_BIAS_SPREAD_REPORT.md](SR_DAILY_BIAS_SPREAD_REPORT.md)), and
+   Order Flow (nothing survives with a trustworthy sample size, see
+   [ORDER_FLOW_SPREAD_REPORT.md](ORDER_FLOW_SPREAD_REPORT.md)). Still
+   outstanding: the OLD M1/liquidity-TP First FVG variant
+   (`scripts/first_fvg_backtest.py`, §3.1's original row) and PO3.
 2. **Re-backtest SR+Bias XAUUSD with the margin cap** (§2.6) to get its true
    post-cap expectancy.
-3. **Finish / review the Order Flow re-sweep** and decide whether to retire
-   the strategy.
-4. **Decide on PO3** — relax a gate, or drop it.
+3. ~~Finish / review the Order Flow re-sweep~~ **DONE 2026-08-28**, including
+   the gate relaxation this item asked for: `OF_MIN_CONFIRMATIONS` 3→2
+   (`--min-confirmations` on `scripts.order_flow_bias_spread_sweep`) took the
+   sample from 144→2348 trades across 20 combos, but PF got WORSE on most
+   combos, not better. Verdict unchanged: do not take it live. USDJPY 15m
+   (n=72/5y, n=17/1y, PF 1.26/1.02) is the one combo worth a second look; see
+   [ORDER_FLOW_SPREAD_REPORT.md](ORDER_FLOW_SPREAD_REPORT.md) section 6.
+4. ~~Decide on PO3~~ **DONE 2026-08-28** — extended re-sweep (5 symbols,
+   spread, same-bar-stop bug fixed) first confirmed the original verdict,
+   worse (144 trades/20 combos). Gate relaxation found the REAL bottleneck
+   was never the 4 documented hard gates: a skip-funnel diagnostic on
+   NAS100 60m showed `neutral_bias` rejecting 83% of all bars, 5x every
+   other gate combined -- MSS_LOOKBACK_BARS 10->20 changed nothing (13->13
+   trades), MIN_RR 2.0->1.5 barely moved it (13->15), but
+   `DAILY_BIAS_VOTE_THRESHOLD` 2->1 (trade on either of the 2 daily-bias
+   votes agreeing, not requiring both) took it to 25 (2x) with PF staying
+   high (8.50->6.15). Full 5-symbol re-sweep at threshold=1: 549 trades
+   across 20 combos (3.8x), **12/20 now clear PF>=1.0 on both 5y/1y**
+   (0/20 before). Best: USDJPY 5m (n=62/11) and NAS100 60m (n=25/6). Still
+   nowhere near First FVG/SR's sample sizes and PFs (1.09-8.66) are
+   suspiciously high for the small windows -- read as "worth paper-testing
+   for a few months," not "validated." See
+   [PO3_SPREAD_REPORT.md](PO3_SPREAD_REPORT.md) section 4.
 5. **Fix the power policy** (§3.2) before trusting uptime.
 
 ### Methodology rules this project now follows

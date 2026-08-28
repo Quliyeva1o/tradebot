@@ -1,0 +1,319 @@
+<title>Order Flow Bias Sweep</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f5f4ef; --surface: #ffffff; --surface-2: #edece5; --border: #ddd9cc;
+    --text: #1d2126; --text-dim: #6c6a60; --accent: #21519c; --accent-soft: #e3ebf7;
+    --pos: #1e7a52; --pos-soft: #e2f2e9; --neg: #b13d2c; --neg-soft: #fbe8e4;
+    --warn: #96521c; --warn-soft: #f7e4d2;
+    --shadow: 0 1px 2px rgba(30,28,20,0.05), 0 6px 20px -8px rgba(30,28,20,0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a; --surface: #1b1f23; --surface-2: #21262b; --border: #2c3138;
+      --text: #e8e7e1; --text-dim: #93938a; --accent: #7fa6e8; --accent-soft: #202b3d;
+      --pos: #57c894; --pos-soft: #17281f; --neg: #f08172; --neg-soft: #2e1c19;
+      --warn: #e0a566; --warn-soft: #2e2216;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -8px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a; --surface: #1b1f23; --surface-2: #21262b; --border: #2c3138;
+    --text: #e8e7e1; --text-dim: #93938a; --accent: #7fa6e8; --accent-soft: #202b3d;
+    --pos: #57c894; --pos-soft: #17281f; --neg: #f08172; --neg-soft: #2e1c19;
+    --warn: #e0a566; --warn-soft: #2e2216;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -8px rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; text-wrap: balance; margin: 0; color: var(--text); }
+  header.top { display: flex; flex-direction: column; gap: 0.6rem; padding-bottom: 1.75rem; border-bottom: 1px solid var(--border); }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 2.1rem; font-weight: 600; }
+  .subtitle { color: var(--text-dim); font-size: 0.98rem; max-width: 68ch; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; color: var(--text-dim); margin-top: 0.3rem; }
+  .meta-row b { color: var(--text); font-weight: 500; }
+
+  .note { margin-top: 1.6rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem; font-size: 0.86rem; color: var(--text-dim); }
+  .note strong { color: var(--text); }
+  .note ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+  .note li + li { margin-top: 0.35rem; }
+
+  section { margin-top: 2.75rem; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .section-head h2 { font-size: 1.35rem; font-weight: 600; }
+  .section-head .hint { font-size: 0.8rem; color: var(--text-dim); font-family: "IBM Plex Mono", monospace; }
+
+  .verdict-banner {
+    background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 12px;
+    padding: 1.1rem 1.3rem; box-shadow: var(--shadow);
+  }
+  .verdict-banner .tag { font-family: "IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--warn); font-weight: 600; }
+  .verdict-banner .name { font-family: "Fraunces", serif; font-size: 1.25rem; font-weight: 600; margin-top: 0.2rem; }
+  .verdict-banner .body { color: var(--text-dim); font-size: 0.88rem; margin-top: 0.4rem; max-width: 70ch; }
+
+  .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .chip { font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; padding: 0.35rem 0.85rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); cursor: pointer; transition: all 0.15s; }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chip:not(.active):hover { color: var(--text); border-color: var(--text-dim); }
+
+  .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1.4rem; }
+  .table-card .card-title { padding: 0.85rem 1.1rem 0.7rem; font-size: 0.95rem; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.4rem; }
+  .card-title .cnt { font-family: "IBM Plex Mono", monospace; font-size: 0.75rem; font-weight: 400; color: var(--text-dim); }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  thead th { text-align: right; font-family: "IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); font-weight: 500; padding: 0.5rem 0.8rem; background: var(--surface-2); white-space: nowrap; cursor: pointer; user-select: none; }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--accent); }
+  thead th:first-child, thead th:nth-child(2), tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
+  tbody td { padding: 0.45rem 0.8rem; text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; border-top: 1px solid var(--border); }
+  tbody tr:hover td { background: var(--surface-2); }
+  tbody tr.flagged td { background: var(--warn-soft); }
+  .pf-null { color: var(--text-dim); }
+  .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; }
+  .pill.pos { background: var(--pos-soft); color: var(--pos); }
+  .pill.neg { background: var(--neg-soft); color: var(--neg); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+  .sort-arrow { font-size: 0.65rem; margin-left: 0.2rem; }
+  .small-n { color: var(--text-dim); font-size: 0.72em; }
+
+  .cand-tabs { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem; gap: 0.2rem; margin-bottom: 1.5rem; }
+  .cand-tab { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; padding: 0.45rem 1.1rem; border-radius: 999px; cursor: pointer; border: none; background: transparent; color: var(--text-dim); transition: background 0.15s, color 0.15s; }
+  .cand-tab.active { background: var(--accent); color: #fff; }
+  .cand-tab:not(.active):hover { color: var(--text); }
+  .cand-panel { display: none; }
+  .cand-panel.active { display: block; }
+
+  footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--border); font-family: "IBM Plex Mono", monospace; font-size: 0.76rem; color: var(--text-dim); }
+
+  @media (max-width: 720px) { h1 { font-size: 1.7rem; } }
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="eyebrow">NAS100 / XAUUSD / EURUSD / GBPUSD / USDJPY &middot; Strategy Sweep</div>
+    <h1>Order Flow + Daily Bias, Full Spread Sweep</h1>
+    <p class="subtitle">Order Flow + Daily Bias + Trendline strategy, backtested with real historical spread across 5 symbols &times; 4 timeframes (20 combinations) &mdash; completing the 12-combo re-sweep left unfinished after the HTF-bias lookahead fix, now extended and spread-aware.</p>
+    <div class="meta-row">
+      <span><b>Data</b> Fresh MT5 M1, 2020-01-01&ndash;2026-08-28</span>
+      <span><b>Spread</b> Real per-bar (FX/XAU) or fixed 3.0pt (NAS100)</span>
+      <span><b>Risk</b> 1% / trade on $100k</span>
+    </div>
+  </header>
+
+  <div class="note">
+    <strong>Pass criterion:</strong> profit factor &ge; 1.0 on BOTH the 5-year AND 1-year window.
+    <ul>
+      <li>Code re-reviewed before running: the HTF-bias lookahead fix (the strategy's entire apparent edge before it) holds, order-flow delta/CVD features use only same-bar M1 sub-data, no same-bar-as-entry stop-out gap.</li>
+      <li>Trade counts here are far lower than First FVG (1000+) or SR (400-3000) &mdash; 16 to 196 over 5 years, 2 to 26 over 1 year. Read the pass/fail column with real skepticism; see the banner below.</li>
+      <li>Full detail: <a href="ORDER_FLOW_SPREAD_REPORT.md">ORDER_FLOW_SPREAD_REPORT.md</a>.</li>
+    </ul>
+  </div>
+
+  <section>
+    <div class="verdict-banner">
+      <div class="tag">Verdict</div>
+      <div class="name">No configuration clears the bar &mdash; don't take this live</div>
+      <div class="body">4 of 20 combinations show PF &ge; 1.0 on both windows, but every one rests on 5&ndash;51 trades over 5 years (2&ndash;16 in the 1-year window). Half-year P&amp;L for the top two swings from PF 0.00 to PF 9.29 on 2&ndash;9 trades per period &mdash; that's noise, not an edge. Best of the 20 for reference: NAS100 60m and USDJPY 15m below.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>All 20 combinations</h2>
+      <span class="hint">click a column to sort</span>
+    </div>
+    <div class="filters" id="filters"></div>
+    <div class="table-card">
+      <div class="card-title"><span>Ranked by pass status, then 5y PF</span><span class="cnt" id="row-count"></span></div>
+      <div class="table-scroll"><table>
+        <thead><tr id="thead-row"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Top-2 detail &mdash; why the numbers aren't trustworthy</h2>
+    </div>
+    <div class="cand-tabs" id="cand-tabs">
+      <button class="cand-tab active" data-cand="NAS100_60m">NAS100 60m</button>
+      <button class="cand-tab" data-cand="USDJPY_15m">USDJPY 15m</button>
+    </div>
+    <div id="cand-panels"></div>
+  </section>
+
+  <footer>
+    Generated from artifacts/order_flow_bias_spread_sweep.json &middot; strategy source: scripts/order_flow_bias_spread_sweep.py
+  </footer>
+
+</div>
+
+<script>
+const DATA = {"rows": [{"symbol": "NAS100", "tf": 5, "w5y": {"trades": 111, "win_rate": 19.8, "profit_factor": 0.602, "net_pnl": -45684.73}, "w1y": {"trades": 26, "win_rate": 26.9, "profit_factor": 0.814, "net_pnl": -4105.05}, "w3mo": {"trades": 9, "win_rate": 11.1, "profit_factor": 0.294, "net_pnl": -6129.57}, "w1mo": {"trades": 4, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -4412.52}}, {"symbol": "NAS100", "tf": 15, "w5y": {"trades": 93, "win_rate": 22.6, "profit_factor": 0.864, "net_pnl": -11033.81}, "w1y": {"trades": 12, "win_rate": 25.0, "profit_factor": 0.677, "net_pnl": -3057.06}, "w3mo": {"trades": 6, "win_rate": 16.7, "profit_factor": 0.421, "net_pnl": -3026.35}, "w1mo": {"trades": 4, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -4163.94}}, {"symbol": "NAS100", "tf": 30, "w5y": {"trades": 61, "win_rate": 11.5, "profit_factor": 0.375, "net_pnl": -36349.49}, "w1y": {"trades": 9, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -9523.33}, "w3mo": {"trades": 3, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -3078.84}, "w1mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2048.16}}, {"symbol": "NAS100", "tf": 60, "w5y": {"trades": 44, "win_rate": 25.0, "profit_factor": 1.415, "net_pnl": 14511.86}, "w1y": {"trades": 9, "win_rate": 22.2, "profit_factor": 1.185, "net_pnl": 1386.35}, "w3mo": {"trades": 3, "win_rate": 33.3, "profit_factor": 1.174, "net_pnl": 353.72}, "w1mo": {"trades": 1, "win_rate": 100.0, "profit_factor": null, "net_pnl": 2390.62}}, {"symbol": "XAUUSD", "tf": 5, "w5y": {"trades": 114, "win_rate": 24.6, "profit_factor": 0.702, "net_pnl": -32564.31}, "w1y": {"trades": 17, "win_rate": 35.3, "profit_factor": 1.27, "net_pnl": 3291.52}, "w3mo": {"trades": 3, "win_rate": 66.7, "profit_factor": 3.672, "net_pnl": 2863.36}, "w1mo": {"trades": 2, "win_rate": 50.0, "profit_factor": 1.82, "net_pnl": 879.05}}, {"symbol": "XAUUSD", "tf": 15, "w5y": {"trades": 70, "win_rate": 24.3, "profit_factor": 0.956, "net_pnl": -2655.06}, "w1y": {"trades": 12, "win_rate": 25.0, "profit_factor": 1.35, "net_pnl": 3398.6}, "w3mo": {"trades": 4, "win_rate": 25.0, "profit_factor": 1.243, "net_pnl": 750.24}, "w1mo": {"trades": 2, "win_rate": 50.0, "profit_factor": 3.628, "net_pnl": 2780.27}}, {"symbol": "XAUUSD", "tf": 30, "w5y": {"trades": 46, "win_rate": 15.2, "profit_factor": 0.643, "net_pnl": -15338.56}, "w1y": {"trades": 9, "win_rate": 11.1, "profit_factor": 0.235, "net_pnl": -6406.92}, "w3mo": {"trades": 4, "win_rate": 25.0, "profit_factor": 0.619, "net_pnl": -1212.12}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1061.59}}, {"symbol": "XAUUSD", "tf": 60, "w5y": {"trades": 25, "win_rate": 16.0, "profit_factor": 0.556, "net_pnl": -10235.55}, "w1y": {"trades": 7, "win_rate": 14.3, "profit_factor": 0.32, "net_pnl": -4408.15}, "w3mo": {"trades": 3, "win_rate": 33.3, "profit_factor": 0.973, "net_pnl": -56.66}, "w1mo": {"trades": 3, "win_rate": 33.3, "profit_factor": 0.973, "net_pnl": -56.66}}, {"symbol": "EURUSD", "tf": 5, "w5y": {"trades": 113, "win_rate": 19.5, "profit_factor": 0.431, "net_pnl": -86006.32}, "w1y": {"trades": 24, "win_rate": 12.5, "profit_factor": 0.301, "net_pnl": -23574.88}, "w3mo": {"trades": 5, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -8436.02}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1372.18}}, {"symbol": "EURUSD", "tf": 15, "w5y": {"trades": 73, "win_rate": 16.4, "profit_factor": 0.522, "net_pnl": -37578.9}, "w1y": {"trades": 9, "win_rate": 11.1, "profit_factor": 0.696, "net_pnl": -3066.17}, "w3mo": {"trades": 4, "win_rate": 25.0, "profit_factor": 1.886, "net_pnl": 3296.78}, "w1mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2571.19}}, {"symbol": "EURUSD", "tf": 30, "w5y": {"trades": 43, "win_rate": 27.9, "profit_factor": 0.703, "net_pnl": -11194.91}, "w1y": {"trades": 11, "win_rate": 18.2, "profit_factor": 0.318, "net_pnl": -7728.05}, "w3mo": {"trades": 3, "win_rate": 33.3, "profit_factor": 0.837, "net_pnl": -428.48}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1281.31}}, {"symbol": "EURUSD", "tf": 60, "w5y": {"trades": 22, "win_rate": 31.8, "profit_factor": 1.386, "net_pnl": 7029.45}, "w1y": {"trades": 6, "win_rate": 50.0, "profit_factor": 3.343, "net_pnl": 8568.27}, "w3mo": {"trades": 2, "win_rate": 100.0, "profit_factor": null, "net_pnl": 5311.61}, "w1mo": {"trades": 1, "win_rate": 100.0, "profit_factor": null, "net_pnl": 2175.61}}, {"symbol": "GBPUSD", "tf": 5, "w5y": {"trades": 115, "win_rate": 22.6, "profit_factor": 0.56, "net_pnl": -61137.76}, "w1y": {"trades": 19, "win_rate": 31.6, "profit_factor": 0.678, "net_pnl": -6574.42}, "w3mo": {"trades": 5, "win_rate": 40.0, "profit_factor": 0.975, "net_pnl": -141.75}, "w1mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -4014.25}}, {"symbol": "GBPUSD", "tf": 15, "w5y": {"trades": 69, "win_rate": 18.8, "profit_factor": 0.666, "net_pnl": -23147.18}, "w1y": {"trades": 8, "win_rate": 12.5, "profit_factor": 0.485, "net_pnl": -4406.28}, "w3mo": {"trades": 5, "win_rate": 20.0, "profit_factor": 0.836, "net_pnl": -813.76}, "w1mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2565.91}}, {"symbol": "GBPUSD", "tf": 30, "w5y": {"trades": 54, "win_rate": 25.9, "profit_factor": 1.131, "net_pnl": 6031.11}, "w1y": {"trades": 7, "win_rate": 14.3, "profit_factor": 0.385, "net_pnl": -4385.7}, "w3mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2363.88}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1226.5}}, {"symbol": "GBPUSD", "tf": 60, "w5y": {"trades": 16, "win_rate": 25.0, "profit_factor": 0.868, "net_pnl": -1743.34}, "w1y": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2183.32}, "w3mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1107.14}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1107.14}}, {"symbol": "USDJPY", "tf": 5, "w5y": {"trades": 143, "win_rate": 17.5, "profit_factor": 0.442, "net_pnl": -96593.99}, "w1y": {"trades": 22, "win_rate": 36.4, "profit_factor": 1.199, "net_pnl": 4073.85}, "w3mo": {"trades": 5, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -6856.55}, "w1mo": {"trades": 3, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -4280.89}}, {"symbol": "USDJPY", "tf": 15, "w5y": {"trades": 51, "win_rate": 31.4, "profit_factor": 1.352, "net_pnl": 14757.61}, "w1y": {"trades": 16, "win_rate": 31.2, "profit_factor": 1.029, "net_pnl": 390.32}, "w3mo": {"trades": 4, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -5474.15}, "w1mo": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2741.59}}, {"symbol": "USDJPY", "tf": 30, "w5y": {"trades": 31, "win_rate": 32.3, "profit_factor": 1.132, "net_pnl": 3344.44}, "w1y": {"trades": 5, "win_rate": 40.0, "profit_factor": 1.129, "net_pnl": 472.84}, "w3mo": {"trades": 2, "win_rate": 50.0, "profit_factor": 1.655, "net_pnl": 829.79}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1266.5}}, {"symbol": "USDJPY", "tf": 60, "w5y": {"trades": 23, "win_rate": 13.0, "profit_factor": 0.356, "net_pnl": -14406.37}, "w1y": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2226.7}, "w3mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1128.69}, "w1mo": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1128.69}}], "top2": {"USDJPY_15m": {"half_year": {"2021-07-05..2022-01-05": {"trades": 4, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -4999.71}, "2022-01-05..2022-07-05": {"trades": 2, "win_rate": 50.0, "profit_factor": 1.656, "net_pnl": 703.1}, "2022-07-05..2023-01-05": {"trades": 2, "win_rate": 50.0, "profit_factor": 9.291, "net_pnl": 8880.95}, "2023-01-05..2023-07-05": {"trades": 6, "win_rate": 66.7, "profit_factor": 5.42, "net_pnl": 10532.69}, "2023-07-05..2024-01-05": {"trades": 6, "win_rate": 33.3, "profit_factor": 1.416, "net_pnl": 1897.62}, "2024-01-05..2024-07-05": {"trades": 4, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -5187.17}, "2024-07-05..2025-01-05": {"trades": 8, "win_rate": 37.5, "profit_factor": 2.088, "net_pnl": 6017.0}, "2025-01-05..2025-07-05": {"trades": 3, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -3477.19}, "2025-07-05..2026-01-05": {"trades": 9, "win_rate": 33.3, "profit_factor": 1.222, "net_pnl": 1539.57}, "2026-01-05..2026-07-05": {"trades": 6, "win_rate": 33.3, "profit_factor": 1.02, "net_pnl": 108.65}}, "monthly": {"2025-07": {"trades": 3, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -3342.4}, "2025-08": {"trades": 2, "win_rate": 50.0, "profit_factor": 1.856, "net_pnl": 988.65}, "2025-09": {"trades": 1, "win_rate": 100.0, "profit_factor": null, "net_pnl": 3693.17}, "2025-12": {"trades": 3, "win_rate": 33.3, "profit_factor": 1.082, "net_pnl": 200.15}, "2026-01": {"trades": 2, "win_rate": 100.0, "profit_factor": null, "net_pnl": 5591.1}, "2026-03": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1266.2}, "2026-05": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2732.56}, "2026-06": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1483.69}, "2026-07": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1257.9}}}, "NAS100_60m": {"half_year": {"2021-05-07..2021-11-07": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2129.59}, "2021-11-07..2022-05-07": {"trades": 6, "win_rate": 16.7, "profit_factor": 0.701, "net_pnl": -1565.97}, "2022-05-07..2022-11-07": {"trades": 6, "win_rate": 16.7, "profit_factor": 1.01, "net_pnl": 50.69}, "2022-11-07..2023-05-07": {"trades": 3, "win_rate": 33.3, "profit_factor": 4.777, "net_pnl": 8231.42}, "2023-05-07..2023-11-07": {"trades": 5, "win_rate": 20.0, "profit_factor": 0.714, "net_pnl": -1210.57}, "2023-11-07..2024-05-07": {"trades": 3, "win_rate": 100.0, "profit_factor": null, "net_pnl": 9628.72}, "2024-05-07..2024-11-07": {"trades": 5, "win_rate": 20.0, "profit_factor": 1.418, "net_pnl": 1747.15}, "2024-11-07..2025-05-07": {"trades": 5, "win_rate": 20.0, "profit_factor": 0.613, "net_pnl": -1626.34}, "2025-05-07..2025-11-07": {"trades": 3, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -3313.4}, "2025-11-07..2026-05-07": {"trades": 5, "win_rate": 20.0, "profit_factor": 1.551, "net_pnl": 2309.13}}, "monthly": {"2025-06": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2123.31}, "2025-07": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1190.09}, "2025-12": {"trades": 2, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -2153.92}, "2026-01": {"trades": 1, "win_rate": 100.0, "profit_factor": null, "net_pnl": 6499.95}, "2026-02": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1020.27}, "2026-03": {"trades": 1, "win_rate": 0.0, "profit_factor": 0.0, "net_pnl": -1016.63}, "2026-05": {"trades": 1, "win_rate": 100.0, "profit_factor": null, "net_pnl": 2390.62}}}}};
+
+function fmtMoney(v) {
+  const sign = v < 0 ? "-" : "+";
+  return sign + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+function pnlPill(v) {
+  const cls = v >= 0 ? "pos" : "neg";
+  return `<span class="pill ${cls}">${fmtMoney(v)}</span>`;
+}
+function fmtPF(pf) {
+  if (pf === null || pf === undefined) return '<span class="pf-null">&mdash;</span>';
+  if (pf === Infinity || pf > 999) return "&infin;";
+  return pf.toFixed(2);
+}
+function fmtWR(wr) {
+  if (wr === null || wr === undefined) return '<span class="pf-null">&mdash;</span>';
+  return wr.toFixed(1) + "%";
+}
+const MONTH_FMT = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short" });
+function monthLabel(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  return MONTH_FMT.format(new Date(Date.UTC(y, m - 1, 1)));
+}
+
+// ---- main sweep table ----
+const COLUMNS = [
+  { key: "symbol", label: "Symbol" },
+  { key: "tf", label: "TF" },
+  { key: "n5", label: "5y n" },
+  { key: "wr5", label: "5y WR" },
+  { key: "pf5", label: "5y PF" },
+  { key: "net5", label: "5y Net" },
+  { key: "n1", label: "1y n" },
+  { key: "wr1", label: "1y WR" },
+  { key: "pf1", label: "1y PF" },
+  { key: "net1", label: "1y Net" },
+  { key: "pass", label: "Pass" },
+];
+
+const rows = DATA.rows.map(r => ({
+  symbol: r.symbol, tf: r.tf + "m",
+  n5: r.w5y.trades, wr5: r.w5y.win_rate, pf5: r.w5y.profit_factor ?? 0, net5: r.w5y.net_pnl,
+  n1: r.w1y.trades, wr1: r.w1y.win_rate, pf1: r.w1y.profit_factor ?? 0, net1: r.w1y.net_pnl,
+  pass: (r.w5y.profit_factor || 0) >= 1.0 && (r.w1y.profit_factor || 0) >= 1.0,
+  isTop: (r.symbol === "NAS100" && r.tf === 60) || (r.symbol === "USDJPY" && r.tf === 15),
+}));
+
+let sortKey = "pf5", sortDir = -1;
+let activeSymbol = "ALL";
+
+function sortRows(list) {
+  return [...list].sort((a, b) => {
+    if (sortKey === "pass") return sortDir * ((a.pass === b.pass) ? 0 : (a.pass ? -1 : 1));
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === "string") return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+}
+
+function renderFilters() {
+  const symbols = ["ALL", ...new Set(rows.map(r => r.symbol))];
+  document.getElementById("filters").innerHTML = symbols.map(s => `<button class="chip ${s === activeSymbol ? "active" : ""}" data-symbol="${s}">${s}</button>`).join("");
+}
+
+function renderTable() {
+  let filtered = activeSymbol === "ALL" ? rows : rows.filter(r => r.symbol === activeSymbol);
+  filtered = sortRows(filtered);
+
+  const thead = document.getElementById("thead-row");
+  thead.innerHTML = COLUMNS.map(c => {
+    const sorted = c.key === sortKey ? "sorted" : "";
+    const arrow = c.key === sortKey ? (sortDir === 1 ? "&uarr;" : "&darr;") : "";
+    return `<th class="${sorted}" data-key="${c.key}">${c.label}<span class="sort-arrow">${arrow}</span></th>`;
+  }).join("");
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = filtered.map(r => `
+    <tr class="${r.isTop ? "flagged" : ""}">
+      <td>${r.symbol}</td>
+      <td>${r.tf}</td>
+      <td class="small-n">${r.n5}</td>
+      <td>${fmtWR(r.wr5)}</td>
+      <td>${fmtPF(r.pf5)}</td>
+      <td>${pnlPill(r.net5)}</td>
+      <td class="small-n">${r.n1}</td>
+      <td>${fmtWR(r.wr1)}</td>
+      <td>${fmtPF(r.pf1)}</td>
+      <td>${pnlPill(r.net1)}</td>
+      <td>${r.pass ? '<span class="pill warn">PASS*</span>' : ""}</td>
+    </tr>
+  `).join("");
+
+  document.getElementById("row-count").textContent = `${filtered.length} of ${rows.length} combinations`;
+}
+
+document.getElementById("filters").addEventListener("click", (e) => {
+  const btn = e.target.closest(".chip");
+  if (!btn) return;
+  activeSymbol = btn.dataset.symbol;
+  renderFilters();
+  renderTable();
+});
+
+document.getElementById("thead-row").addEventListener("click", (e) => {
+  const th = e.target.closest("th");
+  if (!th) return;
+  const key = th.dataset.key;
+  if (key === sortKey) { sortDir *= -1; } else { sortKey = key; sortDir = -1; }
+  renderTable();
+});
+
+renderFilters();
+renderTable();
+
+// ---- top-2 drill-down ----
+function buildHalfYearTable(cand) {
+  const rows = Object.entries(DATA.top2[cand].half_year).map(([period, s]) => {
+    const [start, end] = period.split("..");
+    return `<tr><td>${start} &rarr; ${end}</td><td class="small-n">${s.trades}</td><td>${fmtWR(s.win_rate)}</td><td>${fmtPF(s.profit_factor)}</td><td>${pnlPill(s.net_pnl)}</td></tr>`;
+  }).join("");
+  return `<div class="table-card">
+    <div class="card-title"><span>Half-year by half-year &mdash; last 5 years</span><span class="cnt">2&ndash;9 trades per period</span></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Period</th><th>Trades</th><th>Win rate</th><th>PF</th><th>Net P&amp;L</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+function buildMonthlyTable(cand) {
+  const rows = Object.entries(DATA.top2[cand].monthly).map(([ym, s]) => {
+    return `<tr><td>${monthLabel(ym)}</td><td class="small-n">${s.trades}</td><td>${fmtWR(s.win_rate)}</td><td>${fmtPF(s.profit_factor)}</td><td>${pnlPill(s.net_pnl)}</td></tr>`;
+  }).join("");
+  return `<div class="table-card">
+    <div class="card-title"><span>Month by month &mdash; last 1 year</span><span class="cnt">${Object.keys(DATA.top2[cand].monthly).length} months</span></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Month</th><th>Trades</th><th>Win rate</th><th>PF</th><th>Net P&amp;L</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderCandPanels() {
+  const root = document.getElementById("cand-panels");
+  root.innerHTML = "";
+  ["NAS100_60m", "USDJPY_15m"].forEach(cand => {
+    const panel = document.createElement("div");
+    panel.className = "cand-panel" + (cand === "NAS100_60m" ? " active" : "");
+    panel.dataset.cand = cand;
+    panel.innerHTML = buildHalfYearTable(cand) + buildMonthlyTable(cand);
+    root.appendChild(panel);
+  });
+}
+renderCandPanels();
+
+document.getElementById("cand-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".cand-tab");
+  if (!btn) return;
+  document.querySelectorAll(".cand-tab").forEach(t => t.classList.toggle("active", t === btn));
+  const cand = btn.dataset.cand;
+  document.querySelectorAll(".cand-panel").forEach(p => p.classList.toggle("active", p.dataset.cand === cand));
+});
+</script>

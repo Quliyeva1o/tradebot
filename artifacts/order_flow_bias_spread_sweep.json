@@ -1,0 +1,154 @@
+{
+  "NAS100_60m": {
+    "symbol": "NAS100",
+    "timeframe": 60,
+    "total_trades": 55,
+    "windows": {
+      "5y": {
+        "trades": 48,
+        "win_rate": 22.9,
+        "profit_factor": 1.254,
+        "net_pnl": 10008.63
+      },
+      "1y": {
+        "trades": 9,
+        "win_rate": 22.2,
+        "profit_factor": 1.185,
+        "net_pnl": 1386.35
+      },
+      "3mo": {
+        "trades": 3,
+        "win_rate": 33.3,
+        "profit_factor": 1.174,
+        "net_pnl": 353.72
+      },
+      "1mo": {
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": null,
+        "net_pnl": 2390.62
+      }
+    },
+    "monthly_last_1y": {
+      "2025-06": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2123.31
+      },
+      "2025-07": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1190.09
+      },
+      "2025-12": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2153.92
+      },
+      "2026-01": {
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": null,
+        "net_pnl": 6499.95
+      },
+      "2026-02": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1020.27
+      },
+      "2026-03": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1016.63
+      },
+      "2026-05": {
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": null,
+        "net_pnl": 2390.62
+      }
+    },
+    "daily_last_1mo": {
+      "2026-05-07": {
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": null,
+        "net_pnl": 2390.62
+      }
+    },
+    "half_year_last_5y": {
+      "2021-05-07..2021-11-07": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2129.59
+      },
+      "2021-11-07..2022-05-07": {
+        "trades": 6,
+        "win_rate": 16.7,
+        "profit_factor": 0.701,
+        "net_pnl": -1565.97
+      },
+      "2022-05-07..2022-11-07": {
+        "trades": 6,
+        "win_rate": 16.7,
+        "profit_factor": 1.01,
+        "net_pnl": 50.69
+      },
+      "2022-11-07..2023-05-07": {
+        "trades": 3,
+        "win_rate": 33.3,
+        "profit_factor": 4.777,
+        "net_pnl": 8231.42
+      },
+      "2023-05-07..2023-11-07": {
+        "trades": 5,
+        "win_rate": 20.0,
+        "profit_factor": 0.717,
+        "net_pnl": -1192.98
+      },
+      "2023-11-07..2024-05-07": {
+        "trades": 4,
+        "win_rate": 75.0,
+        "profit_factor": 7.652,
+        "net_pnl": 8370.28
+      },
+      "2024-05-07..2024-11-07": {
+        "trades": 7,
+        "win_rate": 14.3,
+        "profit_factor": 0.925,
+        "net_pnl": -484.14
+      },
+      "2024-11-07..2025-05-07": {
+        "trades": 6,
+        "win_rate": 16.7,
+        "profit_factor": 0.492,
+        "net_pnl": -2657.43
+      },
+      "2025-05-07..2025-11-07": {
+        "trades": 3,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -3313.4
+      },
+      "2025-11-07..2026-05-07": {
+        "trades": 5,
+        "win_rate": 20.0,
+        "profit_factor": 1.551,
+        "net_pnl": 2309.13
+      }
+    },
+    "window_starts": {
+      "5y": "2021-05-07",
+      "1y": "2025-05-07",
+      "3mo": "2026-02-07",
+      "1mo": "2026-04-07"
+    },
+    "end_date": "2026-05-07"
+  }
+}
