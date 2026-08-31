@@ -1,0 +1,221 @@
+{
+  "NAS100_30m_liquidity": {
+    "symbol": "NAS100",
+    "timeframe": 30,
+    "variant": "liquidity",
+    "total_trades": 813,
+    "windows": {
+      "5y": {
+        "trades": 697,
+        "win_rate": 31.9,
+        "profit_factor": 1.115,
+        "net_pnl": 61026.38
+      },
+      "1y": {
+        "trades": 113,
+        "win_rate": 34.5,
+        "profit_factor": 1.538,
+        "net_pnl": 42530.27
+      },
+      "3mo": {
+        "trades": 18,
+        "win_rate": 27.8,
+        "profit_factor": 1.048,
+        "net_pnl": 646.7
+      },
+      "1mo": {
+        "trades": 9,
+        "win_rate": 11.1,
+        "profit_factor": 0.072,
+        "net_pnl": -7769.71
+      }
+    },
+    "monthly_last_1y": {
+      "2025-08": {
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": null,
+        "net_pnl": 1109.15
+      },
+      "2025-09": {
+        "trades": 10,
+        "win_rate": 20.0,
+        "profit_factor": 0.384,
+        "net_pnl": -5581.68
+      },
+      "2025-10": {
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 3.017,
+        "net_pnl": 4307.83
+      },
+      "2025-11": {
+        "trades": 11,
+        "win_rate": 45.5,
+        "profit_factor": 4.908,
+        "net_pnl": 24508.7
+      },
+      "2025-12": {
+        "trades": 12,
+        "win_rate": 41.7,
+        "profit_factor": 2.106,
+        "net_pnl": 8237.82
+      },
+      "2026-01": {
+        "trades": 12,
+        "win_rate": 33.3,
+        "profit_factor": 1.272,
+        "net_pnl": 2373.46
+      },
+      "2026-02": {
+        "trades": 13,
+        "win_rate": 23.1,
+        "profit_factor": 0.368,
+        "net_pnl": -6687.78
+      },
+      "2026-03": {
+        "trades": 13,
+        "win_rate": 23.1,
+        "profit_factor": 0.324,
+        "net_pnl": -7104.84
+      },
+      "2026-04": {
+        "trades": 13,
+        "win_rate": 38.5,
+        "profit_factor": 2.463,
+        "net_pnl": 12505.57
+      },
+      "2026-05": {
+        "trades": 7,
+        "win_rate": 71.4,
+        "profit_factor": 6.592,
+        "net_pnl": 11983.32
+      },
+      "2026-06": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2055.43
+      },
+      "2026-07": {
+        "trades": 8,
+        "win_rate": 25.0,
+        "profit_factor": 1.579,
+        "net_pnl": 3598.82
+      },
+      "2026-08": {
+        "trades": 6,
+        "win_rate": 16.7,
+        "profit_factor": 0.114,
+        "net_pnl": -4664.67
+      }
+    },
+    "daily_last_1mo": {
+      "2026-07-29": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2076.96
+      },
+      "2026-07-30": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1028.08
+      },
+      "2026-08-05": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1041.98
+      },
+      "2026-08-12": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -1103.01
+      },
+      "2026-08-24": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "net_pnl": -2091.33
+      },
+      "2026-08-28": {
+        "trades": 2,
+        "win_rate": 50.0,
+        "profit_factor": 0.584,
+        "net_pnl": -428.35
+      }
+    },
+    "half_year_last_5y": {
+      "2021-08-28..2022-02-28": {
+        "trades": 57,
+        "win_rate": 35.1,
+        "profit_factor": 2.218,
+        "net_pnl": 51655.97
+      },
+      "2022-02-28..2022-08-28": {
+        "trades": 66,
+        "win_rate": 22.7,
+        "profit_factor": 0.465,
+        "net_pnl": -29762.92
+      },
+      "2022-08-28..2023-02-28": {
+        "trades": 78,
+        "win_rate": 32.1,
+        "profit_factor": 1.135,
+        "net_pnl": 7887.99
+      },
+      "2023-02-28..2023-08-28": {
+        "trades": 84,
+        "win_rate": 27.4,
+        "profit_factor": 1.034,
+        "net_pnl": 2394.52
+      },
+      "2023-08-28..2024-02-28": {
+        "trades": 76,
+        "win_rate": 38.2,
+        "profit_factor": 1.313,
+        "net_pnl": 17174.41
+      },
+      "2024-02-28..2024-08-28": {
+        "trades": 89,
+        "win_rate": 29.2,
+        "profit_factor": 0.762,
+        "net_pnl": -16947.78
+      },
+      "2024-08-28..2025-02-28": {
+        "trades": 69,
+        "win_rate": 33.3,
+        "profit_factor": 0.774,
+        "net_pnl": -11288.29
+      },
+      "2025-02-28..2025-08-28": {
+        "trades": 65,
+        "win_rate": 33.8,
+        "profit_factor": 0.945,
+        "net_pnl": -2617.79
+      },
+      "2025-08-28..2026-02-28": {
+        "trades": 64,
+        "win_rate": 35.9,
+        "profit_factor": 1.639,
+        "net_pnl": 28267.5
+      },
+      "2026-02-28..2026-08-28": {
+        "trades": 47,
+        "win_rate": 31.9,
+        "profit_factor": 1.436,
+        "net_pnl": 14691.12
+      }
+    },
+    "window_starts": {
+      "5y": "2021-08-28",
+      "1y": "2025-08-28",
+      "3mo": "2026-05-28",
+      "1mo": "2026-07-28"
+    },
+    "end_date": "2026-08-28"
+  }
+}
