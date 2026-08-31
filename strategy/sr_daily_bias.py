@@ -71,6 +71,7 @@ from zoneinfo import ZoneInfo
 from core.models import Bar, SignalDirection, Timeframe
 from core.validation import require_non_negative, require_positive
 from market_structure.structure_models import MarketState
+from research.regime_analysis import RegimeType, analyze_regime
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
@@ -160,6 +161,8 @@ class SrDailyBiasConfig:
     max_risk_atr: float = 6.0
     min_reward_atr: float = 0.5
     fixed_rr: float | None = None  # None = liquidity-zone TP (validated variant); set a float to use fixed-R TP instead
+    require_ranging_regime: bool = False  # Opt-in, OFF by default -- see FirstFvg15mConfig's docstring for the same flag; ADVANCED_VALIDATION_REPORT.md #3/#3.1 found this strategy's edge concentrated in RANGING too (improved 7/10 walk-forward folds), not yet forward-validated.
+    regime_window_bars: int = 200  # research.regime_analysis.analyze_regime()'s own default; not re-tuned.
 
     def __post_init__(self) -> None:
         """Validates parameter ranges, matching the Pine script's own
@@ -176,6 +179,7 @@ class SrDailyBiasConfig:
             "daily_bias_len", "swing_len", "min_sr_dist_atr", "breakout_confirm_bars",
             "retest_max_bars", "vol_sma_len", "vol_multiplier", "adx_len",
             "adx_threshold", "atr_len", "min_risk_atr", "max_risk_atr", "min_reward_atr",
+            "regime_window_bars",
         ):
             require_positive(getattr(self, name), name)
         for name in (
@@ -460,6 +464,14 @@ class SrDailyBiasStrategy(TradeSetupStrategy):
             reward = abs(tp - entry)
             if reward < cfg.min_reward_atr * atr:
                 return self._reject(RejectionReason.REWARD_TOO_SMALL)
+
+        if cfg.require_ranging_regime:
+            regime = analyze_regime(
+                market_state.bars_view(), symbol=market_state.symbol,
+                timeframe=market_state.timeframe, window_bars=cfg.regime_window_bars,
+            )
+            if regime.regime != RegimeType.RANGING:
+                return self._reject(RejectionReason.REGIME_NOT_RANGING)
 
         direction_label = "Bullish" if direction == SignalDirection.BUY else "Bearish"
         ts_str = bar.timestamp.strftime("%Y%m%d_%H%M%S")

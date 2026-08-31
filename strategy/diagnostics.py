@@ -98,6 +98,16 @@ class RejectionReason(str, Enum):
     WRONG_SIDE_OF_TRENDLINE = "wrong_side_of_trendline"
     NO_ORDER_FLOW_CONFIRMATION = "no_order_flow_confirmation"
 
+    # Optional regime gate (FirstFvg15mStrategy / SrDailyBiasStrategy, opt-in
+    # via config.require_ranging_regime -- see ADVANCED_VALIDATION_REPORT.md
+    # #3/#3.1: both strategies' historical edge is concentrated in the
+    # RANGING regime and loses money in TRENDING/MEAN_REVERTING; the filter
+    # improved 8/10 and 7/10 independent walk-forward folds respectively,
+    # but has not yet been forward/paper-validated, hence opt-in and OFF by
+    # default rather than replacing the already-validated unconditional
+    # behavior).
+    REGIME_NOT_RANGING = "regime_not_ranging"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

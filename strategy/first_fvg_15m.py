@@ -50,6 +50,7 @@ from zoneinfo import ZoneInfo
 from core.models import Bar, SignalDirection, Timeframe
 from core.validation import require_positive
 from market_structure.structure_models import MarketState
+from research.regime_analysis import RegimeType, analyze_regime
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
@@ -73,13 +74,28 @@ class FirstFvg15mConfig:
             Default 2.0 -- the only R multiple that survived spread on both
             the 5y and 1y windows (see FIRST_FVG_15M_SPREAD_REPORT.md; 3R
             was tested and is WORSE on every metric, do not "upgrade" to it).
+        require_ranging_regime: Opt-in gate (default OFF, preserving the
+            already-validated unconditional behavior): when True, an entry
+            is only taken if research.regime_analysis.analyze_regime()
+            classifies the trailing regime_window_bars as RANGING.
+            ADVANCED_VALIDATION_REPORT.md #3/#3.1 found this strategy's
+            entire historical edge concentrated in the RANGING regime
+            (improved PF in 8/10 independent walk-forward folds), but that
+            has not been forward/paper-validated -- do not enable for real
+            order routing without doing so first.
+        regime_window_bars: Trailing bar count analyze_regime() uses to
+            classify the regime. Matches that function's own default (200);
+            not re-tuned here deliberately, see ADVANCED_VALIDATION_REPORT.md.
     """
 
     session_start: time = time(9, 30)
     fixed_tp_r: float = 2.0
+    require_ranging_regime: bool = False
+    regime_window_bars: int = 200
 
     def __post_init__(self) -> None:
         require_positive(self.fixed_tp_r, "fixed_tp_r")
+        require_positive(self.regime_window_bars, "regime_window_bars")
 
 
 class FirstFvg15mStrategy(TradeSetupStrategy):
@@ -215,9 +231,23 @@ class FirstFvg15mStrategy(TradeSetupStrategy):
         if risk_dist <= 0.0:
             return self._reject(RejectionReason.NON_POSITIVE_RISK)
 
-        tp = entry + cfg.fixed_tp_r * risk_dist if direction == SignalDirection.BUY else entry - cfg.fixed_tp_r * risk_dist
-
+        # Only one retest attempt per day either way (matches the validated
+        # batch script's semantics) -- set _trade_taken before the optional
+        # regime gate so a regime-rejected touch does not get a second
+        # attempt later the same day, which would be new, unvalidated
+        # behavior neither the batch script nor the walk-forward check
+        # modeled.
         self._trade_taken = True
+
+        if cfg.require_ranging_regime:
+            regime = analyze_regime(
+                market_state.bars_view(), symbol=market_state.symbol,
+                timeframe=market_state.timeframe, window_bars=cfg.regime_window_bars,
+            )
+            if regime.regime != RegimeType.RANGING:
+                return self._reject(RejectionReason.REGIME_NOT_RANGING)
+
+        tp = entry + cfg.fixed_tp_r * risk_dist if direction == SignalDirection.BUY else entry - cfg.fixed_tp_r * risk_dist
 
         direction_label = "Bullish" if direction == SignalDirection.BUY else "Bearish"
         ts_str = latest_bar.timestamp.strftime("%Y%m%d_%H%M%S")

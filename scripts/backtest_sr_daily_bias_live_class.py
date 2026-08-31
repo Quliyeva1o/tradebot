@@ -31,6 +31,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from dataclasses import dataclass
@@ -110,13 +111,18 @@ def simulate_outcome(direction: SignalDirection, entry: float, sl: float, tp: fl
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--require-ranging-regime", action="store_true",
+                         help="Opt-in gate from ADVANCED_VALIDATION_REPORT.md #3/#3.1 -- OFF by default.")
+    args = parser.parse_args()
+
     m1 = load_m1(INPUT_CSV)
     print(f"Loaded {len(m1)} M1 bars: {m1[0].timestamp} -> {m1[-1].timestamp}")
     m30 = resample(m1, 30)
     daily = resample(m1, 1440)
     print(f"Resampled to {len(m30)} M30 bars, {len(daily)} D1 bars")
 
-    strategy = SrDailyBiasStrategy(config=SrDailyBiasConfig())  # defaults = fixed_rr=None (liquidity-TP)
+    strategy = SrDailyBiasStrategy(config=SrDailyBiasConfig(require_ranging_regime=args.require_ranging_regime))
     market_state = MarketState(symbol="NAS100", timeframe=Timeframe.M30)
 
     trades: list[LiveTrade] = []
@@ -175,15 +181,16 @@ def main() -> None:
     pf = gp / gl if gl > 0 else float("inf")
     print(f"Win rate: {wins/n*100:.1f}%  PF (net): {pf:.3f}  Total R (net): {sum(t.r_multiple_net for t in trades):.2f}")
 
+    output_csv = "artifacts/sr_daily_bias_live_class_regime_trades.csv" if args.require_ranging_regime else OUTPUT_CSV
     Path("artifacts").mkdir(exist_ok=True)
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["entry_time", "direction", "entry_price", "stop", "target", "exit_time", "exit_price",
                     "exit_reason", "r_multiple_gross", "r_multiple_net"])
         for t in trades:
             w.writerow([t.entry_time, t.direction, t.entry_price, t.stop, t.target, t.exit_time, t.exit_price,
                         t.exit_reason, t.r_multiple_gross, t.r_multiple_net])
-    print(f"Wrote {OUTPUT_CSV}")
+    print(f"Wrote {output_csv}")
 
 
 if __name__ == "__main__":

@@ -174,6 +174,56 @@ onun breakeven həddini artıq keçib.
 
 ---
 
+---
+
+## 6. RANGING-filtrinin canlı sinif inteqrasiyası + doğrulanması
+
+§3.1-in fold-based təsdiqindən sonra filtr `strategy/first_fvg_15m.py` və
+`strategy/sr_daily_bias.py`-ə **opt-in** parametr kimi əlavə olundu:
+
+```python
+require_ranging_regime: bool = False   # default OFF -- mövcud, artıq doğrulanmış davranış toxunulmayıb
+regime_window_bars: int = 200          # research.regime_analysis.analyze_regime()-in öz defaultu
+```
+
+`True` olduqda, hər iki sinif giriş setup-u yaratmazdan dərhal əvvəl
+`research/regime_analysis.analyze_regime()`-i (dəyişməz) `market_state.bars_view()`
+üzərində çağırır və rejim RANGING olmadıqda yeni `RejectionReason.REGIME_NOT_RANGING`
+ilə rədd edir. First FVG üçün günün TƏK retest cəhdi hesab olunur (rədd
+olunsa belə həmin gün üçün ikinci cəhd YOXDUR — batch skriptin "bir gün, bir
+cəhd" semantikası qorunur).
+
+### Canlı sinif üzərindən doğrulama (`scripts/backtest_first_fvg_15m_live_class.py`, `scripts/backtest_sr_daily_bias_live_class.py --require-ranging-regime`)
+
+| | Regime-gate OFF (default, dəyişməz) | Regime-gate ON |
+|---|---|---|
+| First FVG (canlı sinif) | n=1105, PF 1.004 | **n=766, PF 1.063** |
+| SR+Bias (canlı sinif) | n=839, PF 1.025 (əvvəlki sessiyanın 838/1.024-ə uyğun — reqressiya yoxdur) | **n=568, PF 1.168** |
+
+Hər iki halda REAL canlı sinif (offline trade-etiketləmə deyil) filtri
+tətbiq edəndə oxşar yaxşılaşma göstərir (§3.1-in offline RANGING-only
+rəqəmlərinə yaxın: First FVG n=773/PF 1.053, SR n=543/PF 1.189 — kiçik
+fərqlər aşağıdakı qeydə görədir).
+
+**Əlaqəli, yeni tapılan qeyd (First FVG-ə aid, regime-gate-dən ASILI
+DEYİL):** doğrulama skriptinin öz exit-simulyasiyası (`open_until_idx`
+gating + SL/TP-ni gün sərhədi olmadan axtarma) batch skriptin EOD-close
+konvensiyasından (`simulate_trade`, gün bitəndə hələ açıq olan trade-i
+sonuncu bar-ın bağlanışında məcburi bağlayır) fərqlənir — real canlı bot da
+EOD-də məcburi bağlamır (broker SL/TP-ni gün sərhədindən asılı olmayaraq
+saxlayır), ona görə bu doğrulama skripti real davranışa DAHA yaxındır, amma
+bu, batch skriptin özündə HEÇ vaxt modelləşdirilməmiş, kiçik (n fərqi
+~1%) bir sahədir. SR-in artıq sənədləşdirilmiş "KNOWN FIDELITY GAP"-ına
+bənzər, kiçik və qeyri-kritik.
+
+### Tövsiyə
+Kod artıq mövcuddur və default olaraq SÖNÜKDÜR (canlı botların hazırkı
+davranışı DƏYİŞMƏYİB). Canlıda aktivləşdirmək (Scheduled Task-ları yeni
+CLI bayraqla yenidən başlatmaq) AYRICA, açıq təsdiq tələb edən qərardır —
+tövsiyə: əvvəlcə Paper rejimində bir neçə həftə izləmək, sonra Demo-ya keçmək.
+
+---
+
 ## Yekun sintez
 
 | Test | First FVG | SR+Bias |
@@ -204,5 +254,8 @@ təsdiqlənə bilməyəcək qədər kövrəkdir.** Bu artıq təsadüf ehtimalı
 ## Fayllar
 - **Walk-forward + Monte Carlo:** [scripts/walk_forward_montecarlo.py](scripts/walk_forward_montecarlo.py)
 - **Rejim-asılılığı:** [scripts/regime_conditioned_performance.py](scripts/regime_conditioned_performance.py)
+- **RANGING-filtrinin fold-based yoxlanması:** [scripts/regime_filter_walk_forward.py](scripts/regime_filter_walk_forward.py)
 - **Portfel-səviyyəli risk:** [scripts/portfolio_combined_risk.py](scripts/portfolio_combined_risk.py)
+- **Canlı sinif + regime-gate doğrulaması:** [scripts/backtest_first_fvg_15m_live_class.py](scripts/backtest_first_fvg_15m_live_class.py), [scripts/backtest_sr_daily_bias_live_class.py](scripts/backtest_sr_daily_bias_live_class.py)
+- **Strategiya kodu (opt-in `require_ranging_regime`):** [strategy/first_fvg_15m.py](strategy/first_fvg_15m.py), [strategy/sr_daily_bias.py](strategy/sr_daily_bias.py), [strategy/diagnostics.py](strategy/diagnostics.py)
 - **İstifadə olunan mövcud tədqiqat modulları (dəyişməz):** `research/monte_carlo.py`, `research/regime_analysis.py`
