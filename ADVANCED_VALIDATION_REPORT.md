@@ -114,6 +114,25 @@ TRENDING/MEAN_REVERTING-dirsə keç) — AMMA eyni tarixi datada aşkarlanıb,
 ona görə out-of-sample sınanmadan tətbiq edilməməlidir (özü ayrıca
 walk-forward test tələb edir ki, bu, curve-fit deyil, real filtr olsun).
 
+### 3.1. RANGING-filtrinin fold-based yoxlanması (`scripts/regime_filter_walk_forward.py`)
+
+§3-də tapılan "bütün edge RANGING-dən gəlir" tapıntısı tək bir AQREQAT
+ölçü idi — bir neçə böyük fold nəticəni idarə edə bilərdi. Ona görə §1-in
+EYNİ 10 fold-una bölünüb, hər fold-da AYRICA yoxlanıldı: filtri (yalnız
+RANGING trade-ləri saxla) tətbiq etsək, o fold-un PF-i yaxşılaşırmı?
+
+| | Filtr yaxşılaşdıran fold | Orta fold PF (əvvəl → sonra) |
+|---|---|---|
+| First FVG | **8/10** | 1.002 → **1.097** |
+| SR+Bias | **7/10** | 1.107 → **1.257** |
+
+Bu, tək aqreqat ölçüdən qat-qat güclü sübutdur — filtr demək olar HƏR
+MÜSTƏQİL 6-aylıq dövrdə yaxşılaşma verir, təkcə ümumi cəmdə deyil. **Qeyd:**
+bu hələ də EYNİ tarixi data üzərindədir (əsl kor out-of-sample deyil) — 10
+ayrı fold-un 8-i/7-i eyni istiqamətdə çıxması təsadüf ehtimalını xeyli
+azaldır, amma yekun sübut yalnız filtri canlı/paper-də işə salıb İRƏLİYƏ
+doğru izləməklə gələ bilər.
+
 ---
 
 ## 4. Portfel-səviyyəli birləşik risk (real `trade_manager.py` exclusivity ilə)
