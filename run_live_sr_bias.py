@@ -93,6 +93,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
     parser.add_argument(
+        "--require-ranging-regime", action="store_true",
+        help=(
+            "Opt-in gate from ADVANCED_VALIDATION_REPORT.md #3/#3.1: only take a trade if "
+            "research.regime_analysis.analyze_regime() classifies the trailing 200 bars as "
+            "RANGING. Improved 7/10 walk-forward folds in backtest and is regression-free on the "
+            "live class when off (the default) -- but has not yet been forward/paper-validated, "
+            "so it defaults to off."
+        ),
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="Use PaperBroker (virtual fills against real MT5 prices, no real orders) instead of "
@@ -370,7 +380,7 @@ def main(argv: list[str] | None = None) -> None:
 
         daily_risk_tracker.check_and_update(account_info.equity)
 
-        strategy = SrDailyBiasStrategy(config=SrDailyBiasConfig())
+        strategy = SrDailyBiasStrategy(config=SrDailyBiasConfig(require_ranging_regime=args.require_ranging_regime))
         position_sizer = PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
         trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
         run_once(

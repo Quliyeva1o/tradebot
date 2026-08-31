@@ -103,6 +103,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=None)
+    parser.add_argument(
+        "--require-ranging-regime", action="store_true",
+        help=(
+            "Opt-in gate from ADVANCED_VALIDATION_REPORT.md #3/#3.1: only take a trade if "
+            "research.regime_analysis.analyze_regime() classifies the trailing 200 M15 bars as "
+            "RANGING. Improved 8/10 walk-forward folds in backtest and is regression-free on the "
+            "live class when off (the default) -- but has not yet been forward/paper-validated, "
+            "so it defaults to off."
+        ),
+    )
     parser.add_argument("--fixed-tp-r", type=float, default=2.0,
                          help="Default 2.0 -- the only R multiple validated with spread. "
                          "Do not set 3.0: tested and confirmed worse on every metric, "
@@ -486,7 +496,9 @@ def main(argv: list[str] | None = None) -> None:
 
         daily_risk_tracker.check_and_update(account_info.equity)
 
-        strategy = FirstFvg15mStrategy(config=FirstFvg15mConfig(fixed_tp_r=args.fixed_tp_r))
+        strategy = FirstFvg15mStrategy(config=FirstFvg15mConfig(
+            fixed_tp_r=args.fixed_tp_r, require_ranging_regime=args.require_ranging_regime,
+        ))
         position_sizer = (
             PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
             if args.risk_per_trade_pct is not None

@@ -216,11 +216,20 @@ bu, batch skriptin özündə HEÇ vaxt modelləşdirilməmiş, kiçik (n fərqi
 ~1%) bir sahədir. SR-in artıq sənədləşdirilmiş "KNOWN FIDELITY GAP"-ına
 bənzər, kiçik və qeyri-kritik.
 
-### Tövsiyə
-Kod artıq mövcuddur və default olaraq SÖNÜKDÜR (canlı botların hazırkı
-davranışı DƏYİŞMƏYİB). Canlıda aktivləşdirmək (Scheduled Task-ları yeni
-CLI bayraqla yenidən başlatmaq) AYRICA, açıq təsdiq tələb edən qərardır —
-tövsiyə: əvvəlcə Paper rejimində bir neçə həftə izləmək, sonra Demo-ya keçmək.
+### Tövsiyə → Status (2026-08-31, tətbiq edildi)
+`run_live_first_fvg_15m.py` / `run_live_sr_bias.py`-ə `--require-ranging-regime`
+CLI bayrağı əlavə olundu, hər ikisi paper-mode-da smoke-test edildi (xəta
+yoxdur). Bayraq YALNIZ **Paper** Scheduled Task-ların öz `.bat` fayllarına
+əlavə edildi:
+- `run_live_first_fvg_15m_paper.bat` (`FirstFVG15m_NAS100_Paper` task-ı)
+- `run_live_sr_bias_nas100_paper.bat` (`SRBias_NAS100_Paper` task-ı)
+
+**Demo (real sifariş yönləndirən) botlar TOXUNULMAYIB** —
+`run_live_first_fvg_15m_demo.bat` / `run_live_sr_bias_nas100_demo.bat`
+köhnə, artıq tam doğrulanmış davranışı saxlayır. Bu, tövsiyə olunan
+"əvvəlcə Paper-də izlə" ardıcıllığının birbaşa tətbiqidir — filtr indi
+canlı Paper hesabda REAL vaxtda işləyir, amma real pul/real order
+yönləndirmə heç vaxt bu qərardan asılı olmayıb.
 
 ---
 
