@@ -185,33 +185,75 @@ edilib, amma indi "hər şeyi commitlə" tapşırığı gəldi).
 
 ## 5. NÖVBƏTİ SESSİYA ÜÇÜN TODO (prioritet sırası ilə)
 
-1. **`strategy/xauusd_orb_liquidity_sweep.py`-i YENİLƏ** — hazırda hələ M5
-   fərziyyəsi ilə yazılıb (`or_start`/`entry_window_end` M5 vaxtları ilə,
-   docstring-də köhnə M5-idealized rəqəmlər var). §2.5-2.6-nın tapıntısına
-   görə M15 range + real-fill EN GÜCLÜ namizəddir — sinifi M15-ə köçürüb
-   (`bar_minutes=15` məntiqini strategiyaya inteqrasiya et, hazırda bu
-   yalnız BATCH skriptdə var), docstring-i yeni rəqəmlərlə yenilə.
-2. **§2.8-i həll et** — `REVERSAL_LOOKBACK_BARS` həssaslığını sına, real
-   darboğazı tap, sənədləşdir.
-3. M15 real-fill (n=97) üçün TAM battery (walk-forward, Monte Carlo, regime)
-   hələ işlədilməyib — yalnız bootstrap/recency/cost-stress edilib (§2.5).
-   `scripts/xauusd_orb_validation.py`-ı M15+next_open dəstəyi ilə yenilə.
-4. Live sinif M15-ə köçdükdən sonra fidelity check-i (`scripts/backtest_xauusd_orb_live_class.py`)
-   TƏKRAR işlət (hazırkı fidelity check M5 üzərindədir, M15-ə aid deyil).
-5. `entry_fill_mode="next_open"` konsepti canlı sinifin ÖZÜNDƏ deyil,
-   yalnız BATCH skriptdə var — bu, əslində real broker artıq market order
-   işlətdiyi üçün canlı sinifə əlavə etmək lazım DEYİL (broker öz-özünə
-   "next open"-ə bənzər davranış göstərir); sadəcə gözləntiləri (docstring-i)
-   real-fill rəqəmlərinə uyğunlaşdırmaq kifayətdir.
-6. Yuxarıdakı hamısı bitəndən sonra: Paper runner-i (`run_live_xauusd_orb.py`)
-   M15 ilə yenidən smoke-test et, sonra Scheduled Task kimi qur (SR/First
-   FVG Paper botlarının nümunəsi ilə).
+1. ~~`strategy/xauusd_orb_liquidity_sweep.py`-i YENİLƏ~~ **BİTDİ 2026-09-01**
+   — `entry_window_end` default 10:00→11:00 dəyişdirildi (OR indi 09:30-09:45
+   tək M15 şamıdır), docstring tam yeniləndi. **DİQQƏT — bu, FƏRQLİ
+   maşında/hesabda edildi**: bu sessiya FXTM-Demo02 hesabında (login
+   67660753) işlədi, orada qızıl sadəcə **"XAUUSD"**-dır, "XAUUSD.ifx" DEYİL
+   (o, əvvəlki sessiyanın İFXBrokers-Real tədqiqat hesabına məxsus idi).
+   Bu hesabın öz `data/history/XAUUSD_M1.csv` faylı artıq 2020-01-dən
+   2026-08-27-dək (6.7 illik) mövcuddur — §0-dakı "yenidən yüklə" addımı
+   BU HESAB ÜÇÜN artıq lazım deyildi. `run_live_xauusd_orb.py`-nin
+   `--symbol`/`--timeframe` default-ları "XAUUSD"/"M15"-ə yeniləndi.
+2. ~~§2.8-i həll et~~ **CAVABLANDI 2026-09-01** — həm batch, həm canlı sinif
+   6.7 illik data üzərində alətləndirildi (instrumented): `REVERSAL_LOOKBACK_BARS`
+   (=4)-in "expire" budağı BİR DƏFƏ BELƏ işə düşmür, nə M5-də, nə M15-də.
+   Səbəb: entry pəncərəsi HƏMİŞƏ tam 5 şam enindədir (lookback-un öz
+   4-şamlıq büdcəsi ilə eyni), ona görə pəncərənin özü sweep-i lookback-dan
+   ƏVVƏL bağlayır. Deməli `reversal_lookback_bars` hazırkı pəncərə eni ilə
+   TAM ARTIQDIR (redundant), real məhdudlaşdırıcı DEYİL — əsl darboğaz sweep-in
+   öz nadirliyidir. Bunu dəyişmək heç nəyi dəyişməyəcək; pəncərəni DARALTMAQ
+   real təsir edərdi (sınanmayıb).
+3. ~~M15 real-fill üçün TAM battery~~ **BİTDİ 2026-09-01** —
+   `scripts/xauusd_orb_validation.py` özü M5-dəymiş VƏ öz köhnə A+B-birgə
+   filtrasiya səhvini daşıyırmış (heç vaxt düzəldilməmişdi) — hər ikisi
+   düzəldildi (M15/next-open + `enable_breakout=False`), sonra tam battery
+   işlədildi (n=137, bu hesabın 6.7 illik datası, spread net):
+   bootstrap 97.7% (median PF 1.50), recency split PF 1.46→1.63
+   (yaxşılaşan), walk-forward 5/7 fold PF≥1.0 (İKİ İTKİN FOLD 2020-2021-dir
+   — bu konfiqurasiya öz ilk ~2 ilində qazanclı OLMAYIB, 2021-sonundan bəri
+   ardıcıl müsbətdir), Monte Carlo REAL risklə (0.5%) gözlənilən qazanc
+   CƏMİ +1.7% (6.7 il ərzində) — bu, "PF 1.33, +$17.8k" başlığından daha
+   zəif, real başlıq rəqəmi budur. Regime: bütün 3 rejimdə müsbətdir amma
+   BƏRABƏR DEYİL — trade-lərin əksəriyyəti (84/137) məhz ən zəif marjinal
+   RANGING rejimindədir (PF 1.10). Tam yazı: strategy modulunun öz
+   docstring-i, "Full battery run 2026-09-01" bəndi.
+4. ~~Fidelity check TƏKRAR işlət~~ **BİTDİ 2026-09-01, VƏ dərinləşdirildi** —
+   n=181 (live) vs n=187 (batch) tapıldı; 10 faizlik WR fərqi "məlum EOD
+   gap"-a sadəcə istinad edilmədi, HƏR 6 fərqli trade AYRI-AYRI
+   kökləndirildi (bax strategy modulunun öz docstring-i, "M15 port" bölməsi):
+   4/6 — məlum, qəbul edilmiş harness fərqi (EOD force-close yoxdur, uzun
+   müddət açıq qalan mövqe sonrakı setup-u bloklayır — real live sistem də
+   eyni şeyi edərdi); 1/6 — datanın son günü, backtest sadəcə bitdiyi üçün
+   trade heç vaxt "resolve" olmadı (real canlıda problem deyil); 1/6 —
+   BATCH skriptin ÖZÜNDƏ kiçik bir korrektlik boşluğu tapıldı: `open_trade()`
+   `risk = abs(entry_price - sl)` işlədir (işarəsiz), buna görə entry-nin
+   sweep wick-dən "səhv tərəfdə" olduğu nadir hal (SL invert olub) səhvən
+   keçərli trade kimi qəbul olunur; canlı sinif `risk = zone_top - sl`
+   (işarəli) işlədir və bunu düzgün rədd edir. ~187 trade-dən 1-i təsirlənib
+   — kiçik, aşağı prioritetli, BU SESSİYADA DÜZƏLDİLMƏYİB (batch skriptin
+   öz tarixi rəqəmlərinə toxunardı).
+5. ~~Docstring-i real-fill rəqəmlərinə uyğunlaşdır~~ **BİTDİ 2026-09-01** —
+   modul docstring-i indi HƏM idealized zone-edge (n=187, PF 2.218), HƏM
+   realistic next-open (n=137, PF 1.326) rəqəmlərini ehtiva edir, aydın
+   şəkildə "next-open etibarlıdır, zone-edge tavandır" qeydi ilə.
+6. ~~Paper runner-i M15 ilə smoke-test et~~ **BİTDİ 2026-09-01** —
+   `run_live_xauusd_orb.py --symbol XAUUSD --timeframe M15 --paper` FXTM-
+   Demo02-yə qoşuldu, 288 M15 bar çəkdi (3 gün), düzgün "NO SIGNAL"
+   (not_in_session — o an NY 03:00 idi, pəncərədən kənar) qaytardı, xəta
+   yox. Hələ AÇIQ: Scheduled Task kimi qurmaq (SR/First FVG Paper
+   botlarının nümunəsi ilə) — bu, canlı/avtomatlaşdırılmış konfiqurasiya
+   dəyişikliyi olduğu üçün İSTİFADƏÇİNİN AÇIQ TƏSDİQİ olmadan edilməyib;
+   əvvəlcə bir neçə əl ilə smoke-test/paper-run dövrü, sonra istifadəçi ilə
+   razılaşma tövsiyə olunur (bax [[project-live-bot-composition]] memory-də
+   necə əvvəlki strategiyalar üçün edilib).
 
 ---
 
 ## Fayl xəritəsi (artifacts/)
 
-- `xauusd_orb_liquidity_sweep_trades.csv` — son run-un ümumi (A+B) nəticəsi (üzərinə yazılır, referans üçün etibarsız)
+- `xauusd_orb_liquidity_sweep_trades.csv` — son run-un ümumi (A+B) nəticəsi (üzərinə yazılır, referans üçün etibarsız) — hazırda 2026-09-01-in M15/zone-edge/bu-hesab run-unun nəticəsini daşıyır
+- `xauusd_orb_M15_nextopen_thisaccount_trades.csv` — 2026-09-01, M15, pəncərəli, REAL fill, bu hesabın (FXTM-Demo02, "XAUUSD") 6.7 illik datası üzərində — n=137, PF 1.326, canlı sinifin gözlədiyi rəqəmə ən yaxın müstəqil təsdiq
 - `xauusd_orb_reversal_trades.csv`, `_4yr.csv`, `_4yr_spread.csv` — ERKƏN, SƏHV (A+B birgə run-dan filtr edilmiş) Setup B nəticələri — İSTİFADƏ ETMƏ, §2.2-yə bax
 - `xauusd_orb_reversal_ONLY_trades_4yr.csv` — DÜZƏLDİLMİŞ, təcrid olunmuş Setup B (M5, pəncərəli, idealized fill, n=115) — canlı sinif fidelity-nin əsaslandığı fayl
 - `xauusd_orb_live_class_trades.csv` — canlı sinifdən (M5) çıxan nəticə, fidelity check
@@ -220,3 +262,47 @@ edilib, amma indi "hər şeyi commitlə" tapşırığı gəldi).
 - `xauusd_orb_M5_windowed_nextopen_gross.csv` — M5, pəncərəli, real fill
 - `xauusd_orb_M*_allday_*` — bütün-gün təcrübələri (§2.6, rədd edilib)
 - `nas100_orb_reversal_trades.csv` — NAS100 üzərində eyni strategiyanın (A+B birgə filtr, YƏNİ SƏHV METODLA) yoxlanması — təkrar edilməlidir düzgün təcrid ilə
+
+---
+
+## 6. Portfel testi: SR + Bias ilə birgə (2026-09-01)
+
+`scripts/portfolio_sr_orb_risk.py` (yeni skript) — SR+Bias (NAS100/30m) və
+XAUUSD ORB-un (M15/next-open) EYNİ hesabda EYNİ VAXTDA işləməsini
+simulyasiya edir. **Diqqət: bu, `scripts/portfolio_combined_risk.py`-dən
+(First FVG+SR) FƏRQLİ modeldir** — o ikisi eyni simvolda (NAS100) idi və
+real `trade_manager.py` bir pozisiya slotunu paylaşır; SR (NAS100) və ORB
+(XAUUSD) FƏRQLİ simvoldur, real sistemdə heç bir slot paylaşmır (bax
+`run_live_*.py`-in `_partition_positions()`-u, yalnız EYNİ simvollu
+bot-ları bloklayır) — ikisi HƏQİQƏTƏN eyni anda açıq ola bilər. Ona görə
+skript "hansı trade slot-u itirir" deyil, "iki bot EYNİ balansdan
+müstəqil ölçüləndiyində birgə drawdown nə olur" sualına baxır (event-driven
+balans modeli, hər trade-in giriş anındakı balansdan öz risk%-i qədər
+risk götürməsi).
+
+**Nəticə (2020-2026, hər ikisi öz sənədləşdirilmiş default riski ilə —
+SR 0.25%, ORB 0.5%):**
+
+| | Solo | |
+|---|---|---|
+| SR+Bias | n=813, PF 1.057, return +7.7%, max DD **11.0%** |
+| XAUUSD ORB | n=137, PF 1.326, return +9.1%, max DD **5.8%** |
+| **Birgə (1 hesab)** | return **+17.4%** (təxminən solo cəmi qədər), max DD **13.3%** |
+
+- Birgə DD (13.3%) hər İKİ solo DD-dən (11.0%/5.8%) PİSDİR — First
+  FVG+SR-in eyni-simvol nəticəsinə bənzər siqnal: "korrelyasiyasız = tam
+  təhlükəsiz" fərziyyəsi burada da tam doğru deyil.
+- AMMA fərq: qazanc da təxminən solo cəminə uyğun artıb (+17.4% ≈
+  +7.7%+9.1%), First FVG+SR-dəki kimi "DD pisləşir, qazanc PROPORSIONAL
+  artmır" effekti YOXDUR — DD-nin pisləşməsi ölçülü (2.3 faiz bəndi əlavə),
+  əldə edilən əlavə qazancla təxminən mütənasibdir.
+- Aylıq R-multiple cəmi korrelyasiyası: **+0.15** (zəif müsbət, demək olar
+  sıfır) — orijinal 3-bot iddiasının (-0.21…+0.26) aralığında.
+- `max_concurrent_open=2` — hər iki bot HƏQİQƏTƏN eyni anda açıq olub
+  (gözlənildiyi kimi, fərqli simvol olduğu üçün).
+
+**Nəticə:** SR+ORB cütlüyü First FVG+SR cütlüyündən DAHA sağlam
+diversifikasiya nümunəsidir (DD artımı qazanc artımı ilə mütənasibdir),
+amma "risk artmır" demək YALANDIR — birgə işlədəndə hər bot öz solo
+DD-sindən daha böyük DD-yə məruz qala bilər. Risk büdcəsi qurarkən bunu
+nəzərə al.

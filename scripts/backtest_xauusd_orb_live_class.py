@@ -1,15 +1,24 @@
 """Full trade-outcome backtest of the LIVE XauusdOrbLiquiditySweepStrategy
-class (strategy/xauusd_orb_liquidity_sweep.py), bar-by-bar over XAUUSD M5,
+class (strategy/xauusd_orb_liquidity_sweep.py), bar-by-bar over XAUUSD M15,
 mirroring scripts/backtest_first_fvg_15m_live_class.py's / backtest_sr_daily_bias_live_class.py's
 pattern for the same kind of check on the other live classes.
 
+Updated 2026-09-01: the live class moved from M5 to M15 (see that module's
+own docstring for the full rationale -- M15 range + real market-order fill
+was found to be the strongest validated configuration). This script was
+switched from resampling to M5 to resampling to M15 to match, and its
+default input is now data/history/XAUUSD_M1.csv (this account's own data,
+2020-01 to present, FXTM-Demo02 / plain "XAUUSD" ticker) rather than the
+XAUUSD.ifx_M1.csv file from the machine the original research session ran
+on (a different broker feed that is not present on this machine).
+
 Purpose: regression/fidelity check -- this must reproduce
 scripts/xauusd_orb_liquidity_sweep_backtest.py's Setup-B-only trade count/PF
-closely (n=101, PF 1.62 net of 0.39pt spread, over data/history/XAUUSD.ifx_M1.csv
-resampled to M5). A real gap here would mean the live class's state machine
-diverges from the validated batch script despite being written to mirror it
-bar-by-bar -- exactly the kind of silent drift SrDailyBiasStrategy's own
-"KNOWN FIDELITY GAP" note warns about.
+closely (`--bar-minutes 15 --entry-window-end 11:00 --no-enable-breakout
+--spread-points 0.39`). A real gap here would mean the live class's state
+machine diverges from the validated batch script despite being written to
+mirror it bar-by-bar -- exactly the kind of silent drift SrDailyBiasStrategy's
+own "KNOWN FIDELITY GAP" note warns about.
 
 Known, accepted fidelity gap (same one documented for FirstFvg15mStrategy's
 live-class check): this harness's own exit simulation walks forward through
@@ -38,7 +47,7 @@ from scripts.backtest_common import load_m1, resample
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig, XauusdOrbLiquiditySweepStrategy
 
 NY = ZoneInfo("America/New_York")
-INPUT_CSV = "data/history/XAUUSD.ifx_M1.csv"
+INPUT_CSV = "data/history/XAUUSD_M1.csv"
 SPREAD_POINTS = 0.39  # robustness_analysis.SPREAD_BY_SYMBOL["XAUUSD"]
 
 
@@ -76,13 +85,13 @@ def simulate_outcome(direction: SignalDirection, entry: float, sl: float, tp: fl
 
 def run() -> list[LiveTrade]:
     m1 = load_m1(INPUT_CSV)
-    m5_df = resample(m1, 5)
-    m5_df.index = m5_df.index.tz_convert(NY)
-    bars = df_to_bars(m5_df)
-    print(f"Loaded {len(bars)} M5 bars: {bars[0].timestamp} -> {bars[-1].timestamp}")
+    m15_df = resample(m1, 15)
+    m15_df.index = m15_df.index.tz_convert(NY)
+    bars = df_to_bars(m15_df)
+    print(f"Loaded {len(bars)} M15 bars: {bars[0].timestamp} -> {bars[-1].timestamp}")
 
     strategy = XauusdOrbLiquiditySweepStrategy(config=XauusdOrbLiquiditySweepConfig())
-    market_state = MarketState(symbol="XAUUSD", timeframe=Timeframe.M5)
+    market_state = MarketState(symbol="XAUUSD", timeframe=Timeframe.M15)
 
     trades: list[LiveTrade] = []
     open_until_idx: int | None = None

@@ -6,9 +6,42 @@ what changed, what is trustworthy, what is not, and what to do next.
 > **2026-08-31/09-01 update:** a new strategy (XAUUSD 09:30 Opening-Range
 > Breakout + Liquidity-Sweep) was built, backtested, ported to a live class,
 > and Paper-smoke-tested. See **[XAUUSD_ORB_SESSION_HANDOFF.md](XAUUSD_ORB_SESSION_HANDOFF.md)**
-> for the full writeup, open findings, and next-session TODO list — it is
-> NOT yet finished (the live class still needs updating to the M15
-> configuration found to be strongest; see that doc's §5).
+> for the full writeup, open findings, and next-session TODO list.
+>
+> **2026-09-01 update:** the live class was ported to the M15 configuration
+> (§5 items 1, 2, 4, 5, 6 of that doc are now done — see its "M15 port"
+> section for the full writeup, including 6 individually root-caused
+> fidelity-gap trades and an independent re-validation on a different
+> account/broker's data, PF 2.22 idealized / PF 1.33 realistic-fill).
+> Still open: the full walk-forward/Monte Carlo/regime battery for M15
+> (item 3), and wiring this into a Scheduled Task (item 6's second half,
+> deliberately left for explicit user go-ahead).
+>
+> **2026-09-01 update (live bot composition changed, user-approved):**
+> based on the M15 XAUUSD ORB battery above plus a re-check of First FVG's
+> already-documented 2026-08-31 downgrade (see
+> [ADVANCED_VALIDATION_REPORT.md](ADVANCED_VALIDATION_REPORT.md)) and a new
+> SR+ORB portfolio-level risk test, the user approved a live-composition
+> change. `FirstFVG15m_NAS100_Demo`/`_Paper` are now **disabled** (5
+> independent tests found no real edge net of live spread -- see
+> [STRATEGY_RANKING.md](STRATEGY_RANKING.md)). `SRBias_NAS100_Demo` now
+> also runs `--require-ranging-regime` (previously Paper-only) at 0.2%
+> risk (was 0.25%). `XauusdOrb_Paper` and (a later same-session
+> follow-up) `XauusdOrb_Demo` are both running, at **2% risk** (the user's
+> explicit choice after seeing the risk-pct sweep -- 2% is the aggressive,
+> worst-case-64.3%-drawdown end, NOT the 0.25% conservative end originally
+> recommended; reasoning: this is Demo/Paper virtual money, so the
+> tail-risk argument against 2% for REAL capital doesn't carry the same
+> weight here). A real bug was found and fixed while wiring up Demo:
+> `run_live_xauusd_orb.py`'s `STRATEGY_TAG` was too long to survive MT5's
+> comment-truncation, so it could never recognize its own real positions --
+> see `project-live-bot-composition` memory for the full writeup. Also
+> found and deliberately ruled out: running the SAME strategy at two risk
+> levels as genuinely separate simultaneous bots (blocked by the
+> same-symbol position-exclusivity logic); the risk-pct comparison is done
+> arithmetically from one real trade log instead. The table in §1 below is
+> now stale; treat this callout as the current source of truth until it's
+> rewritten.
 
 ---
 

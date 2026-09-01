@@ -15,20 +15,22 @@ order flow), this is a fresh backtest-to-live port. Run with --paper for an
 extended trial BEFORE ever running without that flag -- there is no
 established live track record to fall back on yet.
 
-Symbol name note: the connected MT5 account's broker (IFXBrokers) lists
-gold as "XAUUSD.ifx", not bare "XAUUSD" -- pass --symbol XAUUSD.ifx (or
-whatever this account's Market Watch actually shows) rather than assuming
-the bare ticker resolves.
+Symbol name note: this account's broker (FXTM-Demo02) lists gold as plain
+"XAUUSD" -- the earlier "XAUUSD.ifx" default was specific to a DIFFERENT
+account (IFXBrokers) used only for that session's initial research; always
+check --symbol against mt5.symbols_get() before running on any other
+account/broker rather than assuming the bare ticker resolves.
 
-No session-window gate beyond what the strategy itself enforces (09:30-10:00
-NY, day-scoped) and no fast-poll extension: the strategy's own entry window
-is only 25 minutes wide on M5 bars (5 bars), so a ~2-minute poll cadence
-already gives each bar 2-3 chances to be "the newest bar" during its life --
-adequate without sub-bar polling, same reasoning run_live_sr_bias.py gives
-for its own bar-close-triggered entries.
+No session-window gate beyond what the strategy itself enforces (09:30-11:00
+NY, day-scoped, since the 2026-09-01 M15 port -- see
+strategy/xauusd_orb_liquidity_sweep.py's module docstring) and no fast-poll
+extension: the strategy's own entry window is 75 minutes wide on M15 bars (5
+bars), so a ~2-minute poll cadence already gives each bar many chances to be
+"the newest bar" during its life -- adequate without sub-bar polling, same
+reasoning run_live_sr_bias.py gives for its own bar-close-triggered entries.
 
 Usage:
-    python run_live_xauusd_orb.py --symbol XAUUSD.ifx --timeframe M5 --paper
+    python run_live_xauusd_orb.py --symbol XAUUSD --timeframe M15 --paper
 """
 
 import argparse
@@ -57,9 +59,9 @@ from market_structure.structure_models import MarketState
 logger = setup_logger("run_live_xauusd_orb", log_to_file=True)
 trade_events_logger = setup_structured_logger("trade_events")
 
-# M5 default: 3 days gives ample ATR(14) warmup (needs >1h of M5 bars) plus
-# today's full session, at a trivial per-invocation replay size
-# (3 * 288 M5 bars/day = 864).
+# M15 default: 3 days gives ample ATR(14) warmup (needs >3.5h of M15 bars)
+# plus today's full session, at a trivial per-invocation replay size
+# (3 * 96 M15 bars/day = 288).
 DEFAULT_LOOKBACK_DAYS = 3
 DEFAULT_VOLUME = 0.1
 DEFAULT_RISK_PER_TRADE_PCT = 0.005  # 0.5% -- the strategy's own validated default, see module docstring
@@ -76,8 +78,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Live XAUUSD 09:30 ORB Liquidity-Sweep loop against a DEMO MT5 account "
         "(places real demo orders -- see module docstring)."
     )
-    parser.add_argument("--symbol", default="XAUUSD.ifx", help="MT5 symbol name (broker-suffixed, see module docstring)")
-    parser.add_argument("--timeframe", default="M5")
+    parser.add_argument("--symbol", default="XAUUSD", help="MT5 symbol name (this account's ticker, see module docstring)")
+    parser.add_argument("--timeframe", default="M15")
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
@@ -131,7 +133,19 @@ def _log_trade_event(event: str, **fields: object) -> None:
 # _build_setup in strategy/xauusd_orb_liquidity_sweep.py), and
 # TradeManager.open_trade sends the setup_id as the order comment, so it
 # travels back on the open Position.
-STRATEGY_TAG = "setup_xauusd_orb_reversal"
+#
+# MUST be <=20 chars: MT5Broker._mt5_comment() truncates any comment over
+# _MT5_COMMENT_MAX_LENGTH=29 to its first 20 chars + "_" + an 8-hex-char
+# hash (execution/mt5_broker.py). The original "setup_xauusd_orb_reversal"
+# (25 chars) was silently broken -- Position.comment.startswith(STRATEGY_TAG)
+# was ALWAYS False for any real (non-Paper) fill, since the stored comment
+# only ever contains the first 20 characters. Never caught before 2026-09-01
+# because PaperBroker stores the untruncated setup_id (no MT5 comment-length
+# constraint applies to it) and ORB had only ever run in Paper mode -- a
+# fidelity gap between Paper and MT5Broker this specific bug depended on to
+# stay hidden. Confirmed empirically before fixing: see the smoke-test
+# session in XAUUSD_ORB_SESSION_HANDOFF.md.
+STRATEGY_TAG = "setup_xauusd_orb"
 
 
 def _partition_positions(

@@ -46,23 +46,146 @@ a rougher corroborating signal than the XAUUSD numbers): PF 1.69, bootstrap
 0.887) and the edge there IS RANGING-concentrated (PF 2.87 RANGING vs 0.86
 MEAN_REVERTING) -- this class targets XAUUSD specifically; the NAS100
 result is a corroborating signal, not a second validated deployment target.
+THE ABOVE M5 NUMBERS ARE HISTORICAL -- this class no longer runs on M5, see
+the M15 section immediately below, which superseded it.
+
+M15 port (2026-09-01 session): the prior session's own top TODO was to move
+this class from the M5 spec-literal OR to the M15 range that its own
+research (batch script `--bar-minutes 15 --entry-window-end 11:00`) found
+outperforms M5 in every fill-mode/window comparison it ran. Done this
+session: `entry_window_end` default changed 10:00 -> 11:00 (OR candle is
+therefore 09:30-09:45, not 09:30-09:35; see Mechanics below). Re-validated
+on a DIFFERENT machine/account than the M5 numbers above -- this one runs
+FXTM-Demo02 (login 67660753), where gold is plain "XAUUSD" (not
+"XAUUSD.ifx"), using this account's own `data/history/XAUUSD_M1.csv`
+(2020-01-02 -> 2026-08-27, 6.7 years, wider and from a different broker feed
+than the M5 session's 3.75y XAUUSD.ifx file) -- a genuinely independent
+out-of-sample/out-of-broker check, not a re-run of the same numbers:
+  - Isolated batch, idealized zone-edge fill (spread-adjusted 0.39pt, 0.5%
+    risk): n=187, WR 59.9%, PF 2.218, net R +76.56, PnL +$38,280.
+  - Isolated batch, REALISTIC next-bar-open fill (matches how
+    execution/fill_simulator.py actually fills a live MARKET order -- see
+    the M5-era finding below that zone-edge overstates results repo-wide):
+    n=137, WR 51.1%, PF 1.326, net R +17.77, PnL +$8,886. This is the
+    number to trust for what live/paper trading should actually produce;
+    the zone-edge figure above is a ceiling, not an expectation.
+  - Live-class fidelity (this module's actual class, bar-by-bar, zone-edge
+    mode to match how this class fills -- see scripts/backtest_xauusd_orb_live_class.py):
+    n=181 vs batch's 187, WR 49.2% vs 59.9%, PF (net) 1.768 vs 2.218, total
+    net R 74.94 vs 76.56. A 10pp win-rate gap looked alarming enough to
+    warrant tracing every one of the 6 missing trades individually (not
+    hand-waved as "the known EOD gap") -- all 6 are now root-caused, none
+    are a live-class bug:
+      * 4/6: the SAME accepted gap already documented for the M5 port --
+        this harness's own outcome simulation has no EOD force-close, so a
+        trade opened days earlier can still be "open" (not yet at its real
+        SL/TP) when a later setup fires, and the harness (correctly, like
+        a real broker with one open position) skips the later setup. M15's
+        wider OR-derived stops make trades take longer to resolve than
+        M5's did, so this harness quirk bites more often here (4/187 vs
+        the M5 port's much smaller fraction) -- still not a fidelity bug,
+        since a real live TradeManager would make the exact same call (see
+        run_live_xauusd_orb.py's `run_once`: no new-trade evaluation while
+        a position is open).
+      * 1/6 (2026-08-27, the LAST day in the dataset): the fidelity
+        harness's `simulate_outcome` ran out of future bars before the
+        trade resolved and aborted the whole replay (`if not resolved:
+        break`) -- an artifact of finite backtest data ending mid-trade,
+        not a real divergence; live trading wouldn't hit this at all.
+      * 1/6 (2022-12-09): a genuine, tiny batch-script edge case, not a
+        live-class miss. Price kept falling after the sweep bar, so the
+        FVG zone's near edge (the entry) ended up BELOW the original sweep
+        wick (the stop anchor) -- an inverted SL sitting on the wrong side
+        of entry. `scripts/xauusd_orb_liquidity_sweep_backtest.py`'s
+        `open_trade()` computes `risk = abs(entry_price - sl)` (unsigned),
+        so it silently accepted this as a normal small-risk trade (which
+        happened to hit TP). This class computes `risk = zone_top - sl`
+        (signed) and correctly rejects it via `risk <= 0`
+        (RISK_OUT_OF_BOUNDS) -- the live class's behavior here is more
+        correct than the batch script's, not less. Affects roughly 1/187
+        trades in this dataset; not fixed in the batch script this session
+        (would touch its own already-cited historical numbers) -- flagged
+        as a real, low-priority correctness follow-up, not blocking.
+  - Also answers the prior session's open §2.8/§3 question ("is the real
+    bottleneck sweep rarity or the 4-bar REVERSAL_LOOKBACK_BARS lookback?")
+    definitively: neither batch nor this class EVER hits the lookback-expiry
+    branch across the full 6.7-year dataset (verified by instrumenting it).
+    The entry window is exactly 5 bars wide (matching the lookback's own
+    4-bar-after-sweep budget) in BOTH the M5 and M15 configs, so the window
+    itself always ends a sweep's candidacy before the lookback ever could --
+    `reversal_lookback_bars` is currently fully redundant with
+    `entry_window_end`, not a separate constraint. Changing it would do
+    nothing at the current window width; narrowing the window is the lever
+    that would actually matter, and this session did not test that.
+  - Full battery run 2026-09-01 (same session, via
+    scripts/xauusd_orb_validation.py -- this script had its OWN unfixed copy
+    of the A+B-combined-filtering bug described above, plus M5 defaults;
+    both fixed as part of this run). Realistic next-open, isolated Setup B,
+    net of 0.39pt spread, n=137, 2020-01 -> 2026-08 (this account's data):
+      * Full history: WR 51.1%, PF 1.33, net R +17.8.
+      * Bootstrap (5000x): 97.7% probability of a real (PF>1) edge, median
+        PF 1.50, 90% CI [1.08, 2.05].
+      * Recency split (80/20): PF 1.46 (first 80%) -> 1.63 (last 20%) --
+        improving, not decaying.
+      * Walk-forward (7 ~1-year calendar folds): 5/7 PF>=1.0. BOTH failing
+        folds are 2020-2021 (PF 0.34, 0.59, net -7.3R/-4.5R combined) --
+        every fold from late-2021 onward passes (PF 1.13-8.49, one of which
+        rests on only n=15 and should be read as noise, not a real 8x
+        edge). Read as: this configuration was NOT profitable in its
+        earliest ~2 years of data and has been consistently profitable
+        since -- not evenly good across the whole window.
+      * Monte Carlo, REAL sizing (0.5% fixed-fractional, 5000 trials,
+        bootstrap + adverse noise): expected return only +1.7% over the
+        FULL 6.7-year window (median final balance $101,447, 90% CI
+        [$89,535, $115,263]), median drawdown 6.1%, worst-case 22.3%, 0%
+        risk of ruin. This is the honest headline, not the full-history
+        PF/R above -- +1.7% total over 6.7 years is a thin, barely-positive
+        edge once realistic execution noise is modeled, materially weaker
+        than "PF 1.33, +$17,800" sounds standalone. (A fixed-$-per-trade
+        sizing model, which does NOT match how the live bots actually
+        size, shows a more flattering +3.4%/47.3% worst-drawdown --
+        not the number to use.)
+      * Regime-conditioned (gross): positive in all three trend regimes,
+        but NOT evenly -- TRENDING PF 13.05 (n=12, too small to trust the
+        point estimate), MEAN_REVERTING PF 1.82 (n=40), RANGING PF 1.10
+        (n=84, the MAJORITY of trades, and the thinnest margin of the
+        three). Unlike First FVG/SR+Bias (edge is RANGING-only), this one
+        does NOT depend on one regime -- but most of its trades come from
+        the regime with the weakest edge, which tempers the "regime-
+        independent" framing somewhat.
+    Net read: a real, statistically-supported edge (97.7% bootstrap, 5/7
+    walk-forward folds, improving recency split) that is modest in size at
+    real risk (+1.7% Monte Carlo expectation over 6.7 years) and was not
+    profitable in its own earliest ~2 years of data -- weaker than First
+    FVG/SR+Bias's own battery results, not a slam-dunk case for live
+    capital at anything beyond the already-conservative 0.5% default.
 
 NOT YET forward/paper-validated -- this is a fresh backtest-to-live port,
 not a strategy with a live track record like FirstFvg15mStrategy/
 SrDailyBiasStrategy (both already fidelity-checked against months of real
 order flow). Route through a Paper runner first, the same "validate before
 real order routing" sequence already applied to the RANGING-regime gate on
-those two classes (see ADVANCED_VALIDATION_REPORT.md #6).
+those two classes (see ADVANCED_VALIDATION_REPORT.md #6). Also note:
+run_live_xauusd_orb.py's `--symbol` default is now "XAUUSD" (this account's
+ticker) and `--timeframe` default is now "M15" -- verify both against
+`mt5.symbols_get()` before running on any OTHER account/broker.
 
-Mechanics (M5 bars, NY session -- see the batch script's own docstring for
-the full spec derivation):
-  1. Opening Range = the single 09:30-09:35 NY candle's high/low.
-  2. Entry window: 09:35-10:00 NY. No new setup may start outside it (a
-     sweep detected right at 09:55 that doesn't complete its FVG+retest
-     before 10:00 simply expires unfilled -- this mirrors the validated
+Mechanics (M15 bars, NY session -- see the batch script's own docstring for
+the full spec derivation; this was M5/09:35-10:00 before the 2026-09-01 M15
+port, see the module docstring's M15 section above):
+  1. Opening Range = the single 09:30-09:45 NY candle's high/low.
+  2. Entry window: 09:45-11:00 NY. No new setup may start outside it (a
+     sweep detected right at 10:45 that doesn't complete its FVG+retest
+     before 11:00 simply expires unfilled -- this mirrors the validated
      batch script's own behavior exactly: the reversal state machine is
      gated behind the SAME in-window check as new-sweep detection, so a
-     pending sweep gets no extra time past 10:00 either).
+     pending sweep gets no extra time past 11:00 either). The window is
+     exactly 5 M15 bars wide, same as `reversal_lookback_bars`'s 4-bars-
+     after-sweep budget -- in practice the window always ends a pending
+     sweep's candidacy before the lookback itself could ever expire it
+     (verified: the lookback-expiry branch never fires across 6.7 years of
+     data), so `reversal_lookback_bars` is currently redundant with this
+     window width, not an independent filter.
   3. BUY reversal: price wicks below OR Low and closes back above it
      (sweep), then within `reversal_lookback_bars` a same-direction 3-candle
      FVG forms (ATR-scaled min gap) whose middle candle itself qualifies as
@@ -75,13 +198,15 @@ the full spec derivation):
      which is what makes "revenge-trading the same level" structurally
      impossible here (a stopped-out reversal on one side can never re-arm
      the same day) -- same guarantee the batch script's `setup_used` dict
-     gives.
+     gives. Re-checked on M15 (this session): 0 of 187 validated trades
+     ever shared a calendar day, same as the M5 finding -- cap=1 still
+     loses no validated edge.
 
-Timeframe assumption: this class assumes it is fed M5 bars specifically (the
-Opening Range is defined as exactly one M5 candle) -- same undeclared
-TF-coupling as FirstFvg15mStrategy's M15 assumption; feeding it any other
-timeframe silently computes a differently-sized "opening range" that was
-never backtested.
+Timeframe assumption: this class assumes it is fed M15 bars specifically
+(the Opening Range is defined as exactly one M15 candle) -- same undeclared
+TF-coupling as FirstFvg15mStrategy's own M15 assumption; feeding it any
+other timeframe silently computes a differently-sized "opening range" that
+was never backtested.
 
 Safety: this class only ever RETURNS a TradeSetup candidate; it never places
 an order.
@@ -111,10 +236,15 @@ class XauusdOrbLiquiditySweepConfig:
 
     Attributes:
         or_start: NY local time the single Opening Range candle begins
-            (default 09:30). Assumes M5 bars -- see module docstring.
+            (default 09:30). Assumes M15 bars -- see module docstring. (The
+            OR candle is therefore 09:30-09:45, not a M5 09:30-09:35 candle.)
         entry_window_end: NY local time after which no NEW setup may start
-            (default 10:00). A sweep already pending when this passes gets
-            no grace period -- matches the validated batch script exactly.
+            (default 11:00, i.e. 5 M15 bars past the OR -- the same
+            bar-count width as the original M5 spec's 09:35-10:00 window,
+            per the validated batch script's `--bar-minutes 15
+            --entry-window-end 11:00` config, see module docstring §M15).
+            A sweep already pending when this passes gets no grace period --
+            matches the validated batch script exactly.
         fixed_tp_r: Take-profit as a multiple of the SL risk distance.
             Default 2.0 -- the batch script's own spec-preferred choice
             (section 5: "backtest zamanı qaydanı dəyişməmək üçün əvvəlcə
@@ -153,7 +283,7 @@ class XauusdOrbLiquiditySweepConfig:
     """
 
     or_start: time = time(9, 30)
-    entry_window_end: time = time(10, 0)
+    entry_window_end: time = time(11, 0)
     fixed_tp_r: float = 2.0
     max_trades_per_day: int = 1
     reversal_lookback_bars: int = 4
@@ -280,7 +410,7 @@ class XauusdOrbLiquiditySweepStrategy(TradeSetupStrategy):
         )
 
     def evaluate(self, market_state: MarketState) -> TradeSetup | None:
-        """Evaluates the latest M5 bar against the day-scoped "OR sweep +
+        """Evaluates the latest M15 bar against the day-scoped "OR sweep +
         displacement + FVG retest" state machine (Setup B only).
         """
         self.diagnostics.record_evaluation()

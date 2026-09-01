@@ -8,20 +8,39 @@ than inventing a fourth measurement convention:
     scripts/robustness_analysis.py (unchanged import).
   - Calendar-time walk-forward folds + Monte Carlo (bootstrap resample +
     adverse noise, fixed-fractional real-risk sizing):
-    scripts/walk_forward_montecarlo.py (unchanged import), fold count
-    reduced from 10 to 4 -- this strategy only has ~2 years of history
-    (XAUUSD data starts 2024-08-22) versus the ~5-6 years behind the other
-    two configs' 10-fold split, so 10 folds here would average ~1.5
-    trades/fold and be meaningless.
+    scripts/walk_forward_montecarlo.py (unchanged import).
   - Regime-conditioned performance (TRENDING/MEAN_REVERTING/RANGING):
     scripts/regime_conditioned_performance.py's tag_and_report (unchanged
     import).
 
-Sample-size caveat, stated up front rather than left implicit: Setup B has
-n=64 trades over 2 years, roughly 1/13th of SR+Bias's n=813 and 1/17th of
-First FVG's n=1117. Every confidence interval below will be much wider than
-those two strategies' reports -- that is the data talking, not a flaw in the
-method.
+Updated 2026-09-01 (M15 port session): this script previously generated its
+trade log via `run_backtest("data/history/XAUUSD_M1.csv", spread_points=0.0)`
+with NO `enable_breakout=False` -- i.e. it ran the COMBINED Setup-A+B batch
+and filtered to `setup_type=="reversal"`, exactly the filtering bug
+`strategy/xauusd_orb_liquidity_sweep.py`'s own docstring documents as WRONG
+(Setup A's excluded, losing trades occupy the shared position slot and
+suppress genuine Setup B opportunities) -- this script itself was never
+fixed when that bug was found and fixed elsewhere, which is why the
+strategy docstring's M5 numbers cite a manual `python -c` run instead of
+this script's own output. Fixed here: `enable_breakout=False` now passed
+explicitly. Also switched from the M5 defaults (bar_minutes=5,
+entry_window_end=10:00) to the validated M15 config (bar_minutes=15,
+entry_window_end=11:00), and from the idealized `zone_edge` entry fill to
+the REALISTIC `next_open` fill (a live/paper MARKET order actually fills at
+the next bar's open, not the FVG zone's exact edge -- see
+execution/fill_simulator.py and the strategy docstring's "KRİTİK TAPINTI"
+section) -- this is the number this repo's convention treats as trustworthy,
+not the idealized ceiling. Data source is this machine's own
+data/history/XAUUSD_M1.csv (FXTM-Demo02 account, plain "XAUUSD" ticker,
+2020-01-02 -> 2026-08-27, 6.7 years) rather than the XAUUSD.ifx file the M5
+numbers were measured against (not present on this machine -- see
+XAUUSD_ORB_SESSION_HANDOFF.md §0).
+
+Sample-size caveat, stated up front rather than left implicit: this
+next-open, isolated-Setup-B configuration has n=137 trades over 6.7 years
+(~20/year), still a fraction of SR+Bias's n~800+ or First FVG's n~1100+.
+Confidence intervals below will be much wider than those two strategies'
+reports -- that is the data talking, not a flaw in the method.
 
 Usage:
     python -m scripts.xauusd_orb_validation
@@ -30,6 +49,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+from datetime import time as dtime
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
@@ -41,18 +61,26 @@ from scripts.robustness_analysis import bootstrap, cost_stress, load as load_rob
 from scripts.walk_forward_montecarlo import Trade as WfmcTrade, monte_carlo, walk_forward
 from scripts.xauusd_orb_liquidity_sweep_backtest import run_backtest, write_trades_csv
 
-REVERSAL_CSV = "artifacts/xauusd_orb_reversal_trades.csv"
-N_FOLDS = 4
+INPUT_CSV = "data/history/XAUUSD_M1.csv"
+REVERSAL_CSV = "artifacts/xauusd_orb_M15_nextopen_reversal_only_trades.csv"
+BAR_MINUTES = 15
+ENTRY_WINDOW_END = dtime(11, 0)
+N_FOLDS = 7  # ~137 trades / 6.7y -> ~1yr, ~20 trades/fold; matches the M5-era "7 six-month folds" granularity
 LIVE_RISK_PCT = 0.005  # matches the strategy's own documented 0.5% default
 
 
 def generate_reversal_trades() -> None:
     """Gross (no spread baked in) so downstream tools apply their own,
-    consistent spread-cost convention instead of double-counting it."""
-    trades, _funnel = run_backtest("data/history/XAUUSD_M1.csv", spread_points=0.0)
+    consistent spread-cost convention instead of double-counting it.
+    Setup B isolated (`enable_breakout=False`) and realistic next-bar-open
+    fill -- see module docstring for why both matter."""
+    trades, _funnel = run_backtest(
+        INPUT_CSV, spread_points=0.0, enable_breakout=False,
+        bar_minutes=BAR_MINUTES, entry_window_end=ENTRY_WINDOW_END, entry_fill_mode="next_open",
+    )
     reversal = [t for t in trades if t.setup_type == "reversal"]
     write_trades_csv(reversal, REVERSAL_CSV)
-    print(f"Wrote {len(reversal)} reversal-only (gross) trades to {REVERSAL_CSV}")
+    print(f"Wrote {len(reversal)} reversal-only (gross, M15, next-open fill) trades to {REVERSAL_CSV}")
 
 
 def run_robustness_battery() -> None:
@@ -122,8 +150,8 @@ def run_walk_forward_and_monte_carlo() -> None:
 
 
 def run_regime_analysis() -> None:
-    m1 = load_m1("data/history/XAUUSD_M1.csv")
-    m5 = df_to_bars(resample(m1, 5))
+    m1 = load_m1(INPUT_CSV)
+    m15 = df_to_bars(resample(m1, BAR_MINUTES))
     import csv as csv_mod
     from datetime import datetime
     trades = []
@@ -131,7 +159,7 @@ def run_regime_analysis() -> None:
         for row in csv_mod.DictReader(f):
             trades.append((datetime.fromisoformat(row["entry_time"]), float(row["r_multiple"])))
     trades.sort(key=lambda t: t[0])
-    tag_and_report("XAUUSD ORB reversal (Setup B, gross)", trades, m5, Timeframe.M5, "XAUUSD")
+    tag_and_report("XAUUSD ORB reversal (Setup B, M15, next-open, gross)", trades, m15, Timeframe.M15, "XAUUSD")
 
 
 if __name__ == "__main__":
