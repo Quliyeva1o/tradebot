@@ -42,6 +42,18 @@ what changed, what is trustworthy, what is not, and what to do next.
 > arithmetically from one real trade log instead. The table in §1 below is
 > now stale; treat this callout as the current source of truth until it's
 > rewritten.
+>
+> **2026-09-01 update (new strategy, NASDAQ ORB+M1 Breakout):** a fully
+> new, user-specified strategy was built and backtested on NAS100/XAUUSD --
+> see **[NASDAQ_ORB_M1_BREAKOUT_SESSION_HANDOFF.md](NASDAQ_ORB_M1_BREAKOUT_SESSION_HANDOFF.md)**
+> for the full writeup. Headline finding: LONG-only trading beats
+> both-directions in every one of 8 measured combinations (2 instruments x
+> 2 R-targets x {full history, last 2y}), including the FIRST positive
+> last-12-months result of any strategy tested in this project so far
+> (XAUUSD LONG-only 3R: PF 1.42 last year, PF 1.31 last 2 years). A real
+> variable-shadowing bug was found and fixed along the way (see that doc's
+> §4). Not yet wired into any live bot; full validation battery
+> (bootstrap/walk-forward) still outstanding.
 
 ---
 
