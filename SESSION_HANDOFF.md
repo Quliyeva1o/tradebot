@@ -3,6 +3,13 @@
 Continuation notes for picking this project up on another machine. Covers
 what changed, what is trustworthy, what is not, and what to do next.
 
+> **2026-08-31/09-01 update:** a new strategy (XAUUSD 09:30 Opening-Range
+> Breakout + Liquidity-Sweep) was built, backtested, ported to a live class,
+> and Paper-smoke-tested. See **[XAUUSD_ORB_SESSION_HANDOFF.md](XAUUSD_ORB_SESSION_HANDOFF.md)**
+> for the full writeup, open findings, and next-session TODO list — it is
+> NOT yet finished (the live class still needs updating to the M15
+> configuration found to be strongest; see that doc's §5).
+
 ---
 
 ## 1. Current live state

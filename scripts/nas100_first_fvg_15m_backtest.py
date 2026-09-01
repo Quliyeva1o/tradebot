@@ -52,6 +52,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.backtest_common import NY, load_m1
+from scripts.po3_backtest import compute_daily_bias, compute_daily_levels
 
 STARTING_BALANCE = 100_000.0
 RISK_PCT = 0.01
@@ -215,13 +216,34 @@ def simulate_trade(day_bars: pd.DataFrame, fvg: dict, long_only: bool, tp_r: flo
     )
 
 
-def run_backtest(input_csv: str, long_only: bool = False, tp_r: float = TP_R) -> tuple[list[Trade], dict]:
+def run_backtest(
+    input_csv: str, long_only: bool = False, tp_r: float = TP_R, bias_filter: bool = False
+) -> tuple[list[Trade], dict]:
+    """
+    bias_filter: when True, a day's FVG is only tradeable if its direction
+    agrees with the HTF Daily Bias at the moment the FVG confirms (LONG
+    needs Bullish, SHORT needs Bearish; Neutral or disagreement -> skipped).
+
+    Bias = scripts.po3_backtest.compute_daily_bias, reused as-is rather than
+    reimplemented: 1H swing structure vote + PDH/PDL-mid discount/premium
+    vote, both must agree, and already lookahead-safe (re-stamped to each 1H
+    bar's CLOSE via htf_bias_to_index -- see scripts/backtest_common.py).
+    That function only cares about OHLCV + a DatetimeIndex, so feeding it
+    M15 bars instead of its usual M1 input is valid: it resamples to 1H and
+    1D internally regardless of the input's own bar size.
+    """
     m1 = load_m1(input_csv)
     bars = m1  # already 15m bars, no resampling needed
     bars.index = bars.index.tz_convert(NY) if bars.index.tz is not None else bars.index
 
+    bias_m15 = None
+    if bias_filter:
+        levels = compute_daily_levels(bars)
+        bias_m15 = compute_daily_bias(bars, levels)
+
     funnel = {"days_scanned": 0, "days_with_930_bar": 0, "days_with_fvg": 0,
-              "days_bullish": 0, "days_bearish": 0, "days_triggered": 0, "days_untriggered": 0}
+              "days_bullish": 0, "days_bearish": 0, "days_bias_rejected": 0,
+              "days_triggered": 0, "days_untriggered": 0}
 
     trades: list[Trade] = []
     day_keys = pd.Series(bars.index.date, index=bars.index)
@@ -238,6 +260,13 @@ def run_backtest(input_csv: str, long_only: bool = False, tp_r: float = TP_R) ->
             continue
         funnel["days_with_fvg"] += 1
         funnel["days_bullish" if fvg["direction"] == "LONG" else "days_bearish"] += 1
+
+        if bias_filter:
+            bias_val = int(bias_m15.loc[fvg["confirm_time"]])
+            wants = 1 if fvg["direction"] == "LONG" else -1
+            if bias_val != wants:
+                funnel["days_bias_rejected"] += 1
+                continue
 
         trade = simulate_trade(session, fvg, long_only, tp_r)
         if trade is None:
@@ -284,9 +313,10 @@ if __name__ == "__main__":
     parser.add_argument("--input-csv", default="data/history_fresh/USTEC_M15.csv")
     parser.add_argument("--long-only", action="store_true", help="restrict to the literal bullish-only spec")
     parser.add_argument("--tp-r", type=float, default=TP_R, help="take-profit target in R multiples")
+    parser.add_argument("--bias-filter", action="store_true", help="only trade FVGs that agree with the HTF Daily Bias")
     args = parser.parse_args()
 
-    trades, funnel = run_backtest(args.input_csv, args.long_only, args.tp_r)
+    trades, funnel = run_backtest(args.input_csv, args.long_only, args.tp_r, args.bias_filter)
     out_path = "artifacts/nas100_first_fvg_15m_trades.csv"
     write_trades_csv(trades, out_path)
     stats = summarize(trades)
