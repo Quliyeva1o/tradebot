@@ -404,13 +404,20 @@ class SrDailyBiasStrategy(TradeSetupStrategy):
         bullish_breakout = bias == 1 and fresh_up and bool(vol_confirmed)
         bearish_breakout = bias == -1 and fresh_down and bool(vol_confirmed)
 
+        # Captured BEFORE this bar's own breakout (if any) sets a fresh level:
+        # a retest may only consume a level broken on a PRIOR bar, never the
+        # level this same bar just broke -- otherwise a breakout bar whose
+        # low/high also happens to wick back into the touch-tolerance band
+        # would immediately null the pending level, discarding it before any
+        # later, genuine retest bar ever gets to use it.
+        retest_long_level = self._broken_res_level
+        retest_short_level = self._broken_sup_level
+
         if bullish_breakout:
             self._broken_res_level, self._broken_res_bar = self._resistance, this_bar_index
         if bearish_breakout:
             self._broken_sup_level, self._broken_sup_bar = self._support, this_bar_index
 
-        retest_long_level = self._broken_res_level  # captured BEFORE consuming below
-        retest_short_level = self._broken_sup_level
         retest_long = (
             bias == 1 and retest_long_level is not None
             and retest_long_level - cfg.touch_tolerance_atr * atr <= bar.low <= retest_long_level + cfg.touch_tolerance_atr * atr

@@ -8,9 +8,8 @@ MT5Connector.fetch_recent_bars() (read-only; no real order is ever sent to
 MT5) so fills and mark-to-market P&L reflect genuine live price action
 instead of synthetic data.
 
-Not consumed anywhere yet (Sprint 2 scope): no production code path
-constructs a PaperBroker or reads config.execution_config.ExecutionConfig to
-decide to. live_signal_check.py is untouched.
+Consumed by every run_live_*.py script's `--paper` mode (see each script's
+PaperBroker(..., state_file=...) construction for its isolated state file).
 """
 
 import json
@@ -38,32 +37,35 @@ _LOCK_FILE = Path(__file__).parent / "paper_broker_state.json.lock"
 
 
 class _StateFileLock:
-    """Cross-process exclusive lock guarding every STATE_FILE read-modify-
+    """Cross-process exclusive lock guarding every state-file read-modify-
     write cycle.
 
-    Every strategy's `--paper` runner shares this ONE STATE_FILE (multiple
-    Scheduled Tasks, one per symbol/strategy, all polling every ~2 minutes --
-    see run_live_*.py). Each is a short-lived separate Python process: without
-    this lock, two overlapping processes can both read the same prior state,
-    each apply their own change in memory, and whichever calls _save_state()
-    LAST silently overwrites the file with only its own view -- discarding
-    the other process's newly-opened position, closed trade, or balance
-    update. Locking the whole refresh-mutate-save sequence (not just the
-    individual read or write) closes that window entirely, not just narrows
-    it.
+    Each PaperBroker's `--paper` runner is a short-lived separate Python
+    process polling every ~2 minutes (see run_live_*.py): without this lock,
+    two overlapping processes sharing the SAME state file could both read the
+    same prior state, each apply their own change in memory, and whichever
+    calls _save_state() LAST silently overwrites the file with only its own
+    view -- discarding the other process's newly-opened position, closed
+    trade, or balance update. Locking the whole refresh-mutate-save sequence
+    (not just the individual read or write) closes that window entirely, not
+    just narrows it. Since PaperBroker.__init__ now takes a per-instance
+    state_file (see its docstring), each isolated bot also gets its own lock
+    file -- this class only matters when two processes deliberately share one
+    state_file.
 
     Windows-only (msvcrt.locking), matching this project's deployment
     target -- see mt5/connector.py and every run_live_*.py script's own
     Windows-only assumptions (MT5_PATH, Scheduled Tasks).
     """
 
-    def __init__(self, timeout_seconds: float = 10.0) -> None:
+    def __init__(self, lock_file: Path = _LOCK_FILE, timeout_seconds: float = 10.0) -> None:
+        self._lock_file = lock_file
         self._timeout_seconds = timeout_seconds
         self._fh = None
 
     def __enter__(self) -> "_StateFileLock":
-        _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(_LOCK_FILE, "a+b")
+        self._lock_file.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._lock_file, "a+b")
         deadline = _time.monotonic() + self._timeout_seconds
         while True:
             try:
@@ -206,8 +208,9 @@ class PaperBroker(IBroker):
         initial_balance: float = 10_000.0,
         slippage: float = 0.0,
         timeframe: str = "M5",
+        state_file: Path | None = None,
     ) -> None:
-        """Initializes the PaperBroker, loading any persisted state from STATE_FILE.
+        """Initializes the PaperBroker, loading any persisted state from state_file.
 
         Args:
             connector: The MT5Connector used for read-only real price data
@@ -220,6 +223,16 @@ class PaperBroker(IBroker):
                 simulated market-order fill (see execution/fill_simulator.py).
             timeframe: MT5 timeframe key (e.g. "M5") used to fetch the
                 reference bar for fills and mark-to-market pricing.
+            state_file: Where this broker's balance/orders/positions are
+                persisted. Defaults to the module-level STATE_FILE, shared by
+                every caller that omits this -- pass a distinct path per
+                strategy/symbol (mirroring DailyRiskTracker's
+                per-symbol-tagged state_file convention in run_live_*.py) so
+                each `--paper` bot's balance is isolated and one strategy's
+                paper losses can't be misread as another's. The lock file
+                used to guard concurrent access is derived from this path
+                (state_file with ".lock" appended) so isolated bots never
+                contend with each other's locks either.
 
         Raises:
             ValueError: If initial_balance is not strictly positive, or
@@ -231,6 +244,8 @@ class PaperBroker(IBroker):
         self._initial_balance = initial_balance
         self._slippage = slippage
         self._timeframe = timeframe
+        self._state_file = state_file if state_file is not None else STATE_FILE
+        self._lock_file = self._state_file.with_name(self._state_file.name + ".lock")
         self._balance: float = initial_balance
         self._orders: dict[str, Order] = {}
         self._positions: dict[str, Position] = {}
@@ -255,10 +270,11 @@ class PaperBroker(IBroker):
             always 0.0 -- margin/leverage modeling is not implemented this
             sprint, so free_margin always equals equity.
         """
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             balance = self._balance
-            positions = [self._mark_to_market(position) for position in self._positions.values()]
+            positions = list(self._positions.values())
+        positions = [self._mark_to_market(position) for position in positions]
         floating_pnl = sum(position.profit for position in positions)
         equity = balance + floating_pnl
         return AccountInfo(balance=balance, equity=equity, margin=0.0, free_margin=equity)
@@ -343,7 +359,7 @@ class PaperBroker(IBroker):
         internal_order = Order(order_id=order_id, request=order)
 
         if order.order_type not in _MARKET_ORDER_TYPES:
-            with _StateFileLock():
+            with _StateFileLock(self._lock_file):
                 self._load_state()
                 self._orders[order_id] = internal_order
                 self._save_state()
@@ -371,7 +387,7 @@ class PaperBroker(IBroker):
             # position so ownership stays resolvable in paper mode too.
             comment=order.comment or "",
         )
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             self._orders[order_id] = internal_order
             self._positions[order_id] = position
@@ -407,7 +423,7 @@ class PaperBroker(IBroker):
             True if the order was canceled, False if order_id is unknown or
             the order is no longer PENDING (e.g. already filled).
         """
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             order = self._orders.get(order_id)
             if order is None:
@@ -450,7 +466,7 @@ class PaperBroker(IBroker):
                 real price data cannot be fetched for its symbol (propagated
                 from MT5Connector.fetch_recent_bars()).
         """
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             position = self._positions.get(position_id)
         if position is None:
@@ -470,7 +486,7 @@ class PaperBroker(IBroker):
         closing_order = Order(order_id=closing_order_id, request=closing_request)
         closing_order.fill(fill_price)
 
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             position = self._positions.get(position_id)
             if position is None:
@@ -480,10 +496,7 @@ class PaperBroker(IBroker):
                 )
             self._orders[closing_order_id] = closing_order
 
-            if position.order_type == OrderType.BUY_MARKET:
-                pnl = (fill_price - position.open_price) * position.volume
-            else:
-                pnl = (position.open_price - fill_price) * position.volume
+            pnl = self._compute_pnl(position, fill_price)
             self._balance += pnl
 
             del self._positions[position_id]
@@ -526,7 +539,7 @@ class PaperBroker(IBroker):
             RuntimeError: If real price data cannot be fetched for an open
                 position's symbol (propagated from MT5Connector.fetch_recent_bars()).
         """
-        with _StateFileLock():
+        with _StateFileLock(self._lock_file):
             self._load_state()
             positions = list(self._positions.values())
         return [self._mark_to_market(position) for position in positions]
@@ -553,14 +566,29 @@ class PaperBroker(IBroker):
         current_price = self._connector.fetch_recent_bars(position.symbol, self._timeframe, count=1)[
             -1
         ].close
-        if position.order_type == OrderType.BUY_MARKET:
-            profit = (current_price - position.open_price) * position.volume
-        else:
-            profit = (position.open_price - current_price) * position.volume
+        profit = self._compute_pnl(position, current_price)
         return replace(position, current_price=current_price, profit=profit)
 
+    def _compute_pnl(self, position: Position, exit_price: float) -> float:
+        """Computes P&L in account currency using the symbol's own tick size/value.
+
+        A raw (price_diff * volume) formula is only correct when
+        tick_value == tick_size (true for NAS100/USTEC by coincidence); for
+        XAUUSD/FX pairs it is wrong by the tick_value/tick_size ratio. Mirrors
+        PositionSizer.calculate_size()'s distance_ticks * tick_value convention
+        so paper P&L matches what a real fill would realize.
+        """
+        constraints = self._connector.fetch_symbol_info(position.symbol)
+        distance_price = (
+            exit_price - position.open_price
+            if position.order_type == OrderType.BUY_MARKET
+            else position.open_price - exit_price
+        )
+        distance_ticks = distance_price / constraints.tick_size
+        return distance_ticks * constraints.tick_value * position.volume
+
     def _load_state(self) -> None:
-        """Loads persisted state from STATE_FILE, fail-open on any corruption.
+        """Loads persisted state from self._state_file, fail-open on any corruption.
 
         Mirrors risk/daily_risk_tracker.py's DailyRiskTracker fail-open
         pattern: a missing file is a fresh account (no error); a
@@ -585,7 +613,7 @@ class PaperBroker(IBroker):
             logger.error(
                 "Malformed paper broker state in %s: %s. Resetting to a fresh paper "
                 "account (initial_balance=%.2f).",
-                STATE_FILE,
+                self._state_file,
                 type(exc).__name__,
                 self._initial_balance,
             )
@@ -599,16 +627,16 @@ class PaperBroker(IBroker):
         self._positions = positions
 
     def _read_state(self) -> dict | None:
-        """Reads and parses STATE_FILE. Never raises; returns None if missing/corrupt."""
+        """Reads and parses self._state_file. Never raises; returns None if missing/corrupt."""
         try:
-            data: dict = json.loads(STATE_FILE.read_text())
+            data: dict = json.loads(self._state_file.read_text())
             return data
         except FileNotFoundError:
             return None
         except Exception as exc:  # must never raise; always logged
             logger.error(
                 "Could not read/parse %s: %s. Resetting to a fresh paper account.",
-                STATE_FILE,
+                self._state_file,
                 type(exc).__name__,
             )
             return None
@@ -616,8 +644,8 @@ class PaperBroker(IBroker):
     def _save_state(self) -> None:
         """Persists the current balance/orders/positions. Never raises (logs ERROR on failure)."""
         try:
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            STATE_FILE.write_text(
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._state_file.write_text(
                 json.dumps(
                     {
                         "balance": self._balance,
@@ -629,4 +657,4 @@ class PaperBroker(IBroker):
                 )
             )
         except Exception as exc:  # must never raise; always logged
-            logger.error("Could not persist paper broker state to %s: %s", STATE_FILE, type(exc).__name__)
+            logger.error("Could not persist paper broker state to %s: %s", self._state_file, type(exc).__name__)

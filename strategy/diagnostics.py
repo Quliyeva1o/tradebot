@@ -108,6 +108,11 @@ class RejectionReason(str, Enum):
     # behavior).
     REGIME_NOT_RANGING = "regime_not_ranging"
 
+    # PineOrderBlockWicksStrategy gates (Order Block + Wick Rejection, ported
+    # from pine_order_block_wicks.pine). Reuses NO_LATEST_BAR,
+    # NO_ORDER_BLOCKS, NON_POSITIVE_RISK, RR_GATE_FAILED above.
+    ZONE_TOO_SMALL = "zone_too_small"
+
 
 class StrategyDiagnostics:
     """Counters tracking why a strategy accepted or rejected candidates."""

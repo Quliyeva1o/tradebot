@@ -312,7 +312,11 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     connector = MT5Connector()
-    broker = PaperBroker(connector=connector, timeframe=args.timeframe) if args.paper else MT5Broker(connector=connector)
+    broker = (
+        PaperBroker(connector=connector, timeframe=args.timeframe, state_file=risk_dir / f"paper_broker_state_xauusd_orb_{symbol_tag}.json")
+        if args.paper
+        else MT5Broker(connector=connector)
+    )
     if not broker.connect():
         logger.error("Could not connect to MT5.")
         sys.exit(1)
