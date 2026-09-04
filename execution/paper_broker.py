@@ -14,6 +14,8 @@ decide to. live_signal_check.py is untouched.
 """
 
 import json
+import msvcrt
+import time as _time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -32,6 +34,60 @@ from utils.logging import setup_logger
 logger = setup_logger("paper_broker")
 
 STATE_FILE = Path(__file__).parent / "paper_broker_state.json"
+_LOCK_FILE = Path(__file__).parent / "paper_broker_state.json.lock"
+
+
+class _StateFileLock:
+    """Cross-process exclusive lock guarding every STATE_FILE read-modify-
+    write cycle.
+
+    Every strategy's `--paper` runner shares this ONE STATE_FILE (multiple
+    Scheduled Tasks, one per symbol/strategy, all polling every ~2 minutes --
+    see run_live_*.py). Each is a short-lived separate Python process: without
+    this lock, two overlapping processes can both read the same prior state,
+    each apply their own change in memory, and whichever calls _save_state()
+    LAST silently overwrites the file with only its own view -- discarding
+    the other process's newly-opened position, closed trade, or balance
+    update. Locking the whole refresh-mutate-save sequence (not just the
+    individual read or write) closes that window entirely, not just narrows
+    it.
+
+    Windows-only (msvcrt.locking), matching this project's deployment
+    target -- see mt5/connector.py and every run_live_*.py script's own
+    Windows-only assumptions (MT5_PATH, Scheduled Tasks).
+    """
+
+    def __init__(self, timeout_seconds: float = 10.0) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._fh = None
+
+    def __enter__(self) -> "_StateFileLock":
+        _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(_LOCK_FILE, "a+b")
+        deadline = _time.monotonic() + self._timeout_seconds
+        while True:
+            try:
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return self
+            except OSError:
+                if _time.monotonic() >= deadline:
+                    self._fh.close()
+                    self._fh = None
+                    raise TimeoutError(
+                        f"Could not acquire paper broker state lock within {self._timeout_seconds}s "
+                        "-- another paper bot process is holding it unusually long."
+                    )
+                _time.sleep(0.05)
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            finally:
+                self._fh.close()
+                self._fh = None
 
 _MARKET_ORDER_TYPES = (OrderType.BUY_MARKET, OrderType.SELL_MARKET)
 
@@ -199,10 +255,13 @@ class PaperBroker(IBroker):
             always 0.0 -- margin/leverage modeling is not implemented this
             sprint, so free_margin always equals equity.
         """
-        positions = self.get_open_positions()
+        with _StateFileLock():
+            self._load_state()
+            balance = self._balance
+            positions = [self._mark_to_market(position) for position in self._positions.values()]
         floating_pnl = sum(position.profit for position in positions)
-        equity = self._balance + floating_pnl
-        return AccountInfo(balance=self._balance, equity=equity, margin=0.0, free_margin=equity)
+        equity = balance + floating_pnl
+        return AccountInfo(balance=balance, equity=equity, margin=0.0, free_margin=equity)
 
     def get_symbol_constraints(self, symbol: str) -> SymbolConstraints:
         """Delegates to the underlying MT5Connector.fetch_symbol_info().
@@ -282,10 +341,12 @@ class PaperBroker(IBroker):
         """
         order_id = str(uuid.uuid4())
         internal_order = Order(order_id=order_id, request=order)
-        self._orders[order_id] = internal_order
 
         if order.order_type not in _MARKET_ORDER_TYPES:
-            self._save_state()
+            with _StateFileLock():
+                self._load_state()
+                self._orders[order_id] = internal_order
+                self._save_state()
             logger.info("Pending order %s stored for %s (not yet triggered).", order_id, order.symbol)
             return OrderResult(
                 success=True,
@@ -310,8 +371,11 @@ class PaperBroker(IBroker):
             # position so ownership stays resolvable in paper mode too.
             comment=order.comment or "",
         )
-        self._positions[order_id] = position
-        self._save_state()
+        with _StateFileLock():
+            self._load_state()
+            self._orders[order_id] = internal_order
+            self._positions[order_id] = position
+            self._save_state()
 
         logger.info("Filled paper order %s for %s @ %.5f", order_id, order.symbol, fill_price)
         log_fill(
@@ -343,18 +407,20 @@ class PaperBroker(IBroker):
             True if the order was canceled, False if order_id is unknown or
             the order is no longer PENDING (e.g. already filled).
         """
-        order = self._orders.get(order_id)
-        if order is None:
-            logger.error("cancel_order: unknown order_id %r", order_id)
-            return False
+        with _StateFileLock():
+            self._load_state()
+            order = self._orders.get(order_id)
+            if order is None:
+                logger.error("cancel_order: unknown order_id %r", order_id)
+                return False
 
-        try:
-            order.cancel()
-        except ValueError as exc:
-            logger.error("cancel_order: %s", exc)
-            return False
+            try:
+                order.cancel()
+            except ValueError as exc:
+                logger.error("cancel_order: %s", exc)
+                return False
 
-        self._save_state()
+            self._save_state()
         return True
 
     def close_position(self, position_id: str) -> OrderResult:
@@ -384,7 +450,9 @@ class PaperBroker(IBroker):
                 real price data cannot be fetched for its symbol (propagated
                 from MT5Connector.fetch_recent_bars()).
         """
-        position = self._positions.get(position_id)
+        with _StateFileLock():
+            self._load_state()
+            position = self._positions.get(position_id)
         if position is None:
             raise RuntimeError(f"No open paper position found for position_id {position_id!r}.")
 
@@ -401,16 +469,25 @@ class PaperBroker(IBroker):
         closing_order_id = str(uuid.uuid4())
         closing_order = Order(order_id=closing_order_id, request=closing_request)
         closing_order.fill(fill_price)
-        self._orders[closing_order_id] = closing_order
 
-        if position.order_type == OrderType.BUY_MARKET:
-            pnl = (fill_price - position.open_price) * position.volume
-        else:
-            pnl = (position.open_price - fill_price) * position.volume
-        self._balance += pnl
+        with _StateFileLock():
+            self._load_state()
+            position = self._positions.get(position_id)
+            if position is None:
+                raise RuntimeError(
+                    f"Paper position {position_id!r} was closed by another process while this "
+                    "close_position() call was in flight."
+                )
+            self._orders[closing_order_id] = closing_order
 
-        del self._positions[position_id]
-        self._save_state()
+            if position.order_type == OrderType.BUY_MARKET:
+                pnl = (fill_price - position.open_price) * position.volume
+            else:
+                pnl = (position.open_price - fill_price) * position.volume
+            self._balance += pnl
+
+            del self._positions[position_id]
+            self._save_state()
 
         logger.info(
             "Closed paper position %s for %s @ %.5f (pnl=%.2f)",
@@ -449,7 +526,10 @@ class PaperBroker(IBroker):
             RuntimeError: If real price data cannot be fetched for an open
                 position's symbol (propagated from MT5Connector.fetch_recent_bars()).
         """
-        return [self._mark_to_market(position) for position in self._positions.values()]
+        with _StateFileLock():
+            self._load_state()
+            positions = list(self._positions.values())
+        return [self._mark_to_market(position) for position in positions]
 
     def _simulate_fill(self, symbol: str, order_type: OrderType) -> tuple[float, float]:
         """Fetches the latest real bar for symbol and simulates a market fill against it.
