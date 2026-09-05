@@ -90,7 +90,7 @@ def test_backtest_winning_trade(
 
     # Candles
     # Candle 0: triggers signal
-    # Candle 1: Low enters entry zone (1.1000), triggers entry at entry_zone[1]=1.1010
+    # Candle 1: MARKET order fills unconditionally at this bar's own open (1.1020)
     # Candle 2: High hits TP (1.1060)
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
@@ -103,7 +103,7 @@ def test_backtest_winning_trade(
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == 1.1050
     assert trade.pnl > 0.0
     assert result.total_profit > 0.0
@@ -138,7 +138,7 @@ def test_backtest_losing_trade(
 
     # Candles
     # Candle 0: triggers signal
-    # Candle 1: Low enters entry zone (1.1000), triggers entry at 1.1010
+    # Candle 1: MARKET order fills unconditionally at this bar's own open (1.1020)
     # Candle 2: Low hits SL (1.0970 <= 1.0980)
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
@@ -270,14 +270,19 @@ def test_backtest_drawdown_calculation(state_builder: MarketStateBuilder) -> Non
     )
     engine = BacktestEngine(config=config)
 
-    # Candles
-    # Trade 1: entries at 1.1010, exits winning at 1.1050 (+$1333.33)
-    # Trade 2: entries at 1.1010, exits losing at 1.0980 (-$1133.33)
+    # Candles. Entry-fill bars' OPEN is set to entry_zone's low edge (1.0990,
+    # the BUY-direction sizing price resolve_entry_price() resolves to) so
+    # the position-sizing reference price and the actual MARKET-fill price
+    # coincide -- a MARKET order fills at the entry-fill bar's own open
+    # unconditionally now (see BacktestEngine.run()'s step 3), not at any
+    # zone edge, so this is just a convenient choice, not a requirement.
+    # Trade 1: entries at 1.0990, exits winning at 1.1050 (+$6000.00)
+    # Trade 2: entries at 1.0990, exits losing at 1.0980 (-$1600.00)
     candles = [
         # T1 setup (Candle 0) - Call 0
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
         # T1 entry (Candle 1)
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(1, 1.0990, 1.1030, 1.1000, 1.1015),
         # T1 TP (Candle 2) - Call 1
         _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055),
         # Candle 3 - Call 2
@@ -287,7 +292,7 @@ def test_backtest_drawdown_calculation(state_builder: MarketStateBuilder) -> Non
         # T2 setup trigger (Candle 5) - Call 4
         _create_bar(5, 1.1020, 1.1030, 1.1015, 1.1020),
         # T2 entry (Candle 6)
-        _create_bar(6, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(6, 1.0990, 1.1030, 1.1000, 1.1015),
         # T2 SL (Candle 7)
         _create_bar(7, 1.1015, 1.1020, 1.0970, 1.0985),
     ]
@@ -298,9 +303,9 @@ def test_backtest_drawdown_calculation(state_builder: MarketStateBuilder) -> Non
     assert result.trades[0].result == TradeResult.WIN
     assert result.trades[1].result == TradeResult.LOSS
 
-    # Balance peak is initial_balance + trade 1 profit: $10000.0 + $1333.33 = $11333.33
-    # Balance trough is $11333.33 - trade 2 loss: $11333.33 - $1133.33 = $10200.00
-    # Expected relative drawdown: (11333.33 - 10200.00) / 11333.33 = 1133.33 / 11333.33 = ~10.0%
+    # Balance peak is initial_balance + trade 1 profit: $10000.0 + $6000.00 = $16000.00
+    # Balance trough is $16000.00 - trade 2 loss: $16000.00 - $1600.00 = $14400.00
+    # Expected relative drawdown: (16000 - 14400) / 16000 = 1600 / 16000 = 10.0%
     assert 0.099 < result.max_drawdown < 0.101
 
 
@@ -334,10 +339,13 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
         timestamp=datetime(2026, 1, 1),
     )
 
-    # TP hit
+    # TP hit. Entry-fill bar's open (candle 1) is set to entry_zone's low
+    # edge (1.0990, the BUY sizing price resolve_entry_price() resolves to)
+    # so it's easy to hand-verify -- a MARKET order fills at this bar's own
+    # open unconditionally now, not at any zone edge.
     candles_tp = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1010 + 0.0001 + 0.0001 = 1.1012
+        _create_bar(1, 1.0990, 1.1030, 1.1000, 1.1015), # Entry at 1.0990 + 0.0001 + 0.0001 = 1.0992
         _create_bar(2, 1.1015, 1.1060, 1.1010, 1.1055), # TP hit at 1.1050
     ]
 
@@ -347,14 +355,14 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == pytest.approx(1.1012)
+    assert trade.entry_price == pytest.approx(1.0992)
     # BUY TP exit: exit_price = tp - spread/2 - slippage = 1.1050 - 0.0001 - 0.0001 = 1.1048
     assert trade.exit_price == pytest.approx(1.1048)
 
     # SL hit
     candles_sl = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1012
+        _create_bar(1, 1.0990, 1.1030, 1.1000, 1.1015), # Entry at 1.0992
         _create_bar(2, 1.1015, 1.1020, 1.0970, 1.0985), # SL hit at 1.0980
     ]
     evaluator = MockEvaluator([[setup_win], [], []])
@@ -384,10 +392,12 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
         timestamp=datetime(2026, 1, 1),
     )
 
-    # SELL TP hit
+    # SELL TP hit. Entry-fill bar's open (candle 1) is set to entry_zone's
+    # high edge (1.1010, the SELL sizing price resolve_entry_price()
+    # resolves to).
     candles_sell_tp = [
         _create_bar(0, 1.0980, 1.0985, 1.0970, 1.0980),
-        _create_bar(1, 1.0980, 1.1000, 1.0970, 1.0980), # Entry at 1.0990 - 0.0001 - 0.0001 = 1.0988
+        _create_bar(1, 1.1010, 1.1010, 1.0970, 1.0980), # Entry at 1.1010 - 0.0001 - 0.0001 = 1.1008
         _create_bar(2, 1.0980, 1.0990, 1.0940, 1.0955), # TP hit at 1.0950
     ]
     evaluator = MockEvaluator([[setup_sell], [], []])
@@ -395,7 +405,7 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == pytest.approx(1.0988)
+    assert trade.entry_price == pytest.approx(1.1008)
     # SELL TP exit: exit_price = tp + spread/2 + slippage = 1.0960 + 0.0001 + 0.0001 = 1.0962
     assert trade.exit_price == pytest.approx(1.0962)
 
@@ -411,7 +421,7 @@ def test_exit_spread_slippage_symmetry(state_builder: MarketStateBuilder) -> Non
     )
     candles_expired = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015), # Entry at 1.1012
+        _create_bar(1, 1.0990, 1.1030, 1.1000, 1.1015), # Entry at 1.0992
         _create_bar(2, 1.1015, 1.1025, 1.1010, 1.1020), # bars_held = 1
         _create_bar(3, 1.1015, 1.1025, 1.1010, 1.1020), # bars_held = 2, close 1.1020
     ]
@@ -457,13 +467,14 @@ def test_max_holding_bars_forces_close_after_n_bars(state_builder: MarketStateBu
     )
 
     # Candle 0: triggers signal (pending setup proposed)
-    # Candle 1: entry fills at entry_zone[1]=1.1010 (bars_held starts at 0 this bar)
+    # Candle 1: MARKET fill at this bar's own open (set to entry_zone's low
+    #   edge, 1.0990, so it's easy to hand-verify -- bars_held starts at 0)
     # Candle 2: bars_held becomes 1, still open
     # Candle 3: bars_held becomes 2, still open
     # Candle 4: bars_held becomes 3 == max_holding_bars -> forced EXPIRED close at this candle's close
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
+        _create_bar(1, 1.0990, 1.1030, 1.1000, 1.1015),
         _create_bar(2, 1.1015, 1.1025, 1.1010, 1.1018),
         _create_bar(3, 1.1018, 1.1028, 1.1012, 1.1022),
         _create_bar(4, 1.1022, 1.1032, 1.1016, 1.1026),
@@ -477,7 +488,7 @@ def test_max_holding_bars_forces_close_after_n_bars(state_builder: MarketStateBu
     trade = result.trades[0]
     assert trade.result == TradeResult.EXPIRED
     assert trade.bars_held == 3
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.0990
     assert trade.exit_price == pytest.approx(1.1026)  # candle 4's close, no spread/slippage configured
     assert trade.exit_time == candles[4].timestamp
 
@@ -525,7 +536,7 @@ def test_conditional_tp_extension_default_none_is_a_no_op(
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == 1.1050
     assert trade.pnl > 0.0
     assert result.total_profit > 0.0
@@ -571,7 +582,7 @@ def test_conditional_tp_extension_extends_when_hit_within_window(
     )
 
     # Candle 0: triggers signal
-    # Candle 1: entry fills at 1.1010 (bars_held=0 at fill)
+    # Candle 1: MARKET fill at this bar's own open, 1.1020 (bars_held=0 at fill)
     # Candle 2: bars_held becomes 1 (<=3 window), high touches TP1 (1.1050) -> extend, no close
     # Candle 3: bars_held becomes 2, price pulls back, no exit
     # Candle 4: bars_held becomes 3, high touches TP2 (1.1100) -> WIN at TP2
@@ -590,7 +601,7 @@ def test_conditional_tp_extension_extends_when_hit_within_window(
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == pytest.approx(1.1100)  # TP2, not TP1
     assert trade.exit_time == candles[4].timestamp
 
@@ -649,7 +660,7 @@ def test_conditional_tp_extension_stays_at_tp1_outside_window(
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == pytest.approx(1.1050)  # TP1, extension window had passed
     assert trade.exit_time == candles[5].timestamp
 
@@ -696,8 +707,8 @@ def test_bar_spread_override(state_builder: MarketStateBuilder) -> None:
 
     assert len(result.trades) == 1
     trade = result.trades[0]
-    # Entry spread should be 0.0005: 1.1010 + 0.00025 + 0.0001 = 1.10135
-    assert trade.entry_price == pytest.approx(1.10135)
+    # Entry spread should be 0.0005: candle 1's own open (1.1020) + 0.00025 + 0.0001 = 1.10235
+    assert trade.entry_price == pytest.approx(1.10235)
     # Exit spread should be 0.0004: 1.1050 - 0.0002 - 0.0001 = 1.1047
     assert trade.exit_price == pytest.approx(1.1047)
 
@@ -718,8 +729,8 @@ def test_commission_per_lot(state_builder: MarketStateBuilder) -> None:
         symbol="EURUSD",
         timeframe=Timeframe.M15,
         direction=SignalDirection.BUY,
-        entry_zone=(1.0990, 1.1010),  # entry price 1.1010
-        stop_zone=(1.0960, 1.0970),  # stop price 1.0960 (dist 0.0050)
+        entry_zone=(1.0990, 1.1010),  # sizing price 1.0990 (BUY -> low edge)
+        stop_zone=(1.0960, 1.0970),  # stop price 1.0960 (sizing dist 0.0030)
         target_zone=(1.1060, 1.1070),
         confidence_score=0.9,
         confluence=[],
@@ -731,9 +742,12 @@ def test_commission_per_lot(state_builder: MarketStateBuilder) -> None:
         timestamp=datetime(2026, 1, 1),
     )
 
-    # Risk distance is 0.0050. Position size = 100 / 0.0050 = 20,000 units
-    # Commission = 2.5 * 20,000 = 50,000? Wait, the unit or lot format in SimplePositionSizer returns:
-    # risk_amount / price_distance = 100 / 0.0050 = 20000.0
+    # Sizing risk distance is 0.0030 (entry_zone's low edge 1.0990 to stop
+    # 1.0960 -- resolve_entry_price()'s BUY convention). Position size =
+    # 100 / 0.0030 = 33333.33 units. The ACTUAL fill (candle 1's own open,
+    # 1.1020, spread=0) is a different price than the sizing edge -- exactly
+    # like live, where the order must be sized before the real fill price
+    # is known.
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
         _create_bar(1, 1.1020, 1.1030, 1.1000, 1.1015),
@@ -746,9 +760,9 @@ def test_commission_per_lot(state_builder: MarketStateBuilder) -> None:
 
     assert len(result.trades) == 1
     trade = result.trades[0]
-    pos_size = 20000.0
-    expected_commission = 2.5 * pos_size  # $50,000 commission!
-    expected_gross_pnl = (1.1060 - 1.1010) * pos_size  # 0.0050 * 20000 = $100
+    pos_size = 100.0 / 0.0030
+    expected_commission = 2.5 * pos_size
+    expected_gross_pnl = (1.1060 - 1.1020) * pos_size  # TP - actual fill (candle 1's open)
     expected_net_pnl = expected_gross_pnl - expected_commission
     assert trade.pnl == pytest.approx(expected_net_pnl)
 
@@ -1022,17 +1036,19 @@ def test_round_trip_spread_cost_is_charged_once(state_builder: MarketStateBuilde
     evaluator = MockEvaluator([[setup], [], []])
     engine = BacktestEngine(config=config)
 
-    # Candles
+    # Candles. Entry-fill bar's open (candle 1) is set to entry_zone's low
+    # edge (1.0990, the BUY sizing price) so the sizing reference and actual
+    # MARKET fill coincide.
     # Candle 0: triggers signal
-    # Candle 1: Low goes to 1.0990, triggers entry at limit_price = 1.1000
-    #           Expected entry_price = 1.1000 + spread/2 = 1.1005
-    #           Position size = 100 / (1.1005 - 1.0900) = 100 / 0.0105 = 9523.8095
+    # Candle 1: MARKET fill at this bar's own open (1.0990)
+    #           Expected entry_price = 1.0990 + spread/2 = 1.0995
+    #           Position size = 100 / (1.0990 - 1.0900) = 100 / 0.0090 = 11111.1111
     # Candle 2: High hits TP (1.1120)
     #           Expected exit_price = 1.1100 - spread/2 = 1.1095
-    #           Expected gross PnL = (1.1095 - 1.1005) * 9523.8095 = 0.0090 * 9523.8095 = 85.7143
+    #           Expected gross PnL = (1.1095 - 1.0995) * 11111.1111 = 0.0100 * 11111.1111 = 111.1111
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.0990, 1.1015),
+        _create_bar(1, 1.0990, 1.1030, 1.0990, 1.1015),
         _create_bar(2, 1.1015, 1.1120, 1.1010, 1.1055),
     ]
 
@@ -1042,29 +1058,37 @@ def test_round_trip_spread_cost_is_charged_once(state_builder: MarketStateBuilde
     trade = result.trades[0]
 
     # Verify entry and exit prices
-    assert abs(trade.entry_price - 1.1005) < 1e-7
+    assert abs(trade.entry_price - 1.0995) < 1e-7
     assert abs(trade.exit_price - 1.1095) < 1e-7
 
     # Verify position sizing
-    expected_pos_size = 100.0 / (1.1005 - 1.0900)
+    expected_pos_size = 100.0 / (1.0990 - 1.0900)
     assert abs(trade.position_size - expected_pos_size) < 1e-7
 
-    # Verify gross/net PnL (round-trip difference is exactly 0.0090 price units)
-    expected_pnl = (1.1095 - 1.1005) * expected_pos_size
+    # Verify gross/net PnL (round-trip difference is exactly 0.0100 price units)
+    expected_pnl = (1.1095 - 1.0995) * expected_pos_size
     assert abs(trade.pnl - expected_pnl) < 1e-7
 
 
-def test_pending_order_configurable_expiry(state_builder: MarketStateBuilder) -> None:
-    """Verifies that pending orders can remain active for multiple bars based on BacktestConfig."""
-    # Setup parameters
+def test_pending_setup_always_fills_on_the_immediate_next_bar(state_builder: MarketStateBuilder) -> None:
+    """Regression test: a setup fills UNCONDITIONALLY as a MARKET order on
+    the very next bar's own open -- it never waits across multiple bars for
+    price to revisit its entry_zone. That "resting limit order" mechanic
+    (and the config knob that used to bound how many bars it could wait,
+    BacktestConfig.pending_order_expiry_bars) does not exist anywhere in
+    this codebase's live execution path: execution/trade_manager.py's
+    open_trade() always places an immediate MARKET order (see
+    execution/fill_simulator.simulate_market_fill()), so BacktestEngine
+    must not simulate anything else.
+    """
     setup = TradeSetup(
-        setup_id="setup_expiry_test",
+        setup_id="setup_market_fill_test",
         symbol="EURUSD",
         timeframe=Timeframe.M15,
         direction=SignalDirection.BUY,
-        entry_zone=(1.0990, 1.1000),      # limit_price = 1.1000
-        stop_zone=(1.0900, 1.0910),       # sl = 1.0900
-        target_zone=(1.1100, 1.1110),     # tp = 1.1100
+        entry_zone=(1.0990, 1.1000),
+        stop_zone=(1.0900, 1.0910),
+        target_zone=(1.1100, 1.1110),
         confidence_score=1.0,
         confluence=[],
         trigger_reason="Test OB",
@@ -1075,57 +1099,36 @@ def test_pending_order_configurable_expiry(state_builder: MarketStateBuilder) ->
         timestamp=datetime(2026, 1, 1),
     )
 
-    # Candles
-    # Candle 0: triggers signal (setup created at idx 0)
-    # Candle 1: Low = 1.1050 (does not fill)
-    # Candle 2: Low = 1.0990 (fills at limit_price = 1.1000)
-    # Candle 3: High = 1.1120 (hits TP)
+    # Candle 1's own low (1.1050) never comes anywhere near entry_zone
+    # (1.0990-1.1000) -- under the old "resting limit order" model this
+    # setup would never have filled on this bar at all (it would have
+    # needed a LATER bar to dip back down to the zone). Under the current
+    # MARKET-order model it fills regardless, at candle 1's own open.
     candles = [
         _create_bar(0, 1.1020, 1.1030, 1.1015, 1.1020),
-        _create_bar(1, 1.1020, 1.1030, 1.1050, 1.1020), # Low is high, no fill
-        _create_bar(2, 1.1020, 1.1030, 1.0990, 1.1015), # Low fills limit_price
-        _create_bar(3, 1.1015, 1.1120, 1.1010, 1.1055), # High hits TP
+        _create_bar(1, 1.1020, 1.1055, 1.1020, 1.1050),
+        _create_bar(2, 1.1015, 1.1120, 1.1010, 1.1055),  # High hits TP
     ]
 
-    # --- Scenario A: Default Expiry = 1 bar ---
-    config_a = BacktestConfig(
+    config = BacktestConfig(
         initial_balance=10000.0,
         risk_per_trade=0.01,
         spread=0.0,
         commission=0.0,
         slippage=0.0,
         max_holding_bars=None,
-        pending_order_expiry_bars=1,
     )
-    evaluator_a = MockEvaluator([[setup], [], [], []])
-    engine_a = BacktestEngine(config=config_a)
-    result_a = engine_a.run(candles, evaluator_a, state_builder)
+    evaluator = MockEvaluator([[setup], [], []])
+    engine = BacktestEngine(config=config)
+    result = engine.run(candles, evaluator, state_builder)
 
-    # Should not execute the trade because setup expires after Candle 1
-    assert len(result_a.trades) == 0
-
-    # --- Scenario B: Configurable Expiry = 3 bars ---
-    config_b = BacktestConfig(
-        initial_balance=10000.0,
-        risk_per_trade=0.01,
-        spread=0.0,
-        commission=0.0,
-        slippage=0.0,
-        max_holding_bars=None,
-        pending_order_expiry_bars=3,
-    )
-    evaluator_b = MockEvaluator([[setup], [], [], []])
-    engine_b = BacktestEngine(config=config_b)
-    result_b = engine_b.run(candles, evaluator_b, state_builder)
-
-    # Should execute the trade on Candle 2 and exit at TP on Candle 3
-    assert len(result_b.trades) == 1
-    trade = result_b.trades[0]
+    assert len(result.trades) == 1
+    trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert abs(trade.entry_price - 1.1000) < 1e-7
+    assert abs(trade.entry_price - 1.1020) < 1e-7  # candle 1's own open, not any zone edge
     assert abs(trade.exit_price - 1.1100) < 1e-7
-    assert trade.entry_bar_index == 2
-    assert trade.exit_bar_index == 3
+    assert trade.entry_bar_index == 1
+    assert trade.exit_bar_index == 2
 
 
 # --- Bug #25: multiple strategies proposing setups on the same bar ------------------
@@ -1466,7 +1469,7 @@ def test_fully_resolved_backtest_is_unaffected_by_data_end_force_close(
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.result == TradeResult.WIN
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == 1.1050
     assert trade.pnl > 0.0
     assert result.total_profit > 0.0
@@ -1511,7 +1514,7 @@ def test_open_position_force_closed_at_data_end(state_builder: MarketStateBuilde
     )
 
     # Candle 0: triggers signal (pending setup proposed)
-    # Candle 1: entry fills at entry_zone[1]=1.1010 (bars_held starts at 0 this bar)
+    # Candle 1: MARKET fill at this bar's own open, 1.1020 (bars_held starts at 0 this bar)
     # Candle 2: bars_held becomes 1, still open
     # Candle 3: bars_held becomes 2, still open -- data ends here, position still open
     candles = [
@@ -1529,11 +1532,11 @@ def test_open_position_force_closed_at_data_end(state_builder: MarketStateBuilde
     trade = result.trades[0]
     assert trade.result == TradeResult.EXPIRED
     assert trade.bars_held == 2
-    assert trade.entry_price == 1.1010
+    assert trade.entry_price == 1.1020
     assert trade.exit_price == pytest.approx(1.1022)  # candle 3's close, no spread/slippage configured
     assert trade.exit_time == candles[3].timestamp
     assert trade.exit_bar_index == 3
-    assert trade.pnl == pytest.approx((1.1022 - 1.1010) * trade.position_size)
+    assert trade.pnl == pytest.approx((1.1022 - 1.1020) * trade.position_size)
 
     # The trade's outcome must now be visible in every top-level aggregate.
     assert result.total_profit == pytest.approx(trade.pnl)

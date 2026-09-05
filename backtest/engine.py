@@ -7,6 +7,7 @@ from backtest.models import BacktestConfig, BacktestResult, BacktestTrade, Trade
 from core.models import Bar, SignalDirection
 from market_structure.structure_models import MarketState
 from strategy.models import TradeSetup
+from strategy.risk_reward import resolve_entry_price, resolve_stop_and_target
 from utils.logging import setup_logger
 
 logger = setup_logger("backtest_engine")
@@ -137,7 +138,6 @@ class BacktestEngine:
         active_trade: dict | None = None
         closed_trades: list[BacktestTrade] = []
         pending_setup: TradeSetup | None = None
-        pending_setup_idx: int | None = None
 
         # Circuit breaker / state tracking
         account_blown = False
@@ -328,117 +328,79 @@ class BacktestEngine:
                     active_trade = None
 
             # 3. Handle pending trade execution (look-ahead bias avoidance: enter on N+1)
+            #
+            # A MARKET order, unconditionally, on the very next bar after the
+            # setup was found -- exactly what execution/trade_manager.py's
+            # open_trade() actually does live (always OrderType.BUY_MARKET/
+            # SELL_MARKET via broker.place_order(), see
+            # execution/fill_simulator.simulate_market_fill(), which every
+            # real/paper order goes through). There is no resting limit order
+            # anywhere in this codebase's live execution path: a setup never
+            # waits for price to revisit its entry_zone, and never expires
+            # unfilled -- it fills on bar N+1's open (plus spread/slippage)
+            # or not at all (if bar N+1 doesn't exist, e.g. the setup was
+            # found on the last historical bar).
+            #
+            # entry_zone is used ONLY to size the position (sizing_entry_price
+            # below), via strategy.risk_reward.resolve_entry_price() -- the
+            # identical function TradeManager.open_trade() calls, since live
+            # must estimate a risk-distance to size the order BEFORE it has a
+            # real fill price back from the broker. The zone plays no part in
+            # whether/when the trade actually fills.
             if account_blown:
                 pending_setup = None
-                pending_setup_idx = None
             if day_limit_reached:
                 pending_setup = None
-                pending_setup_idx = None
 
             if pending_setup is not None and active_trade is None:
-                entry_low, entry_high = pending_setup.entry_zone
-
-                sl_low, sl_high = pending_setup.stop_zone
-                sl_price = sl_low if pending_setup.direction == SignalDirection.BUY else sl_high
-
-                tp_low, tp_high = pending_setup.target_zone
-                tp_price = tp_low if pending_setup.direction == SignalDirection.BUY else tp_high
-
+                sl_price, tp_price = resolve_stop_and_target(pending_setup)
+                sizing_entry_price = resolve_entry_price(pending_setup)
                 strategy_name = getattr(pending_setup, "strategy_name", "")
 
                 spread = self._effective_spread(candle)
                 slippage = self.config.slippage
 
                 if pending_setup.direction == SignalDirection.BUY:
-                    limit_price = entry_high
-                    if candle.low <= limit_price:
-                        # Entry triggered
-                        entry_price = limit_price + spread / 2 + slippage
-                        pos_size = self.position_sizer.calculate_size(
-                            balance=balance,
-                            risk_per_trade=self.config.risk_per_trade,
-                            entry_price=entry_price,
-                            stop_loss=sl_price,
-                        )
-                        if pos_size > 0:
-                            if self._margin_ok(pos_size, entry_price, balance):
-                                active_trade = {
-                                    "entry_time": candle.timestamp,
-                                    "direction": SignalDirection.BUY,
-                                    "entry_price": entry_price,
-                                    "stop_loss": sl_price,
-                                    "take_profit": tp_price,
-                                    "position_size": pos_size,
-                                    "bars_held": 0,
-                                    "symbol": pending_setup.symbol,
-                                    "setup_id": pending_setup.setup_id,
-                                    "strategy_name": strategy_name,
-                                    "trigger_reason": pending_setup.trigger_reason,
-                                    "confidence_score": pending_setup.confidence_score,
-                                    "entry_bar_index": idx,
-                                    "entry_spread": spread,
-                                    "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
-                                    "tp_extension_price": pending_setup.conditional_tp_extension_price,
-                                    "tp_extension_applied": False,
-                                }
-                            else:
-                                margin_rejected_setups += 1
-                                pending_setup = None
-                                pending_setup_idx = None
-                else:  # SELL
-                    limit_price = entry_low
-                    if candle.high >= limit_price:
-                        # Entry triggered
-                        entry_price = limit_price - spread / 2 - slippage
-                        pos_size = self.position_sizer.calculate_size(
-                            balance=balance,
-                            risk_per_trade=self.config.risk_per_trade,
-                            entry_price=entry_price,
-                            stop_loss=sl_price,
-                        )
-                        if pos_size > 0:
-                            if self._margin_ok(pos_size, entry_price, balance):
-                                active_trade = {
-                                    "entry_time": candle.timestamp,
-                                    "direction": SignalDirection.SELL,
-                                    "entry_price": entry_price,
-                                    "stop_loss": sl_price,
-                                    "take_profit": tp_price,
-                                    "position_size": pos_size,
-                                    "bars_held": 0,
-                                    "symbol": pending_setup.symbol,
-                                    "setup_id": pending_setup.setup_id,
-                                    "strategy_name": strategy_name,
-                                    "trigger_reason": pending_setup.trigger_reason,
-                                    "confidence_score": pending_setup.confidence_score,
-                                    "entry_bar_index": idx,
-                                    "entry_spread": spread,
-                                    "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
-                                    "tp_extension_price": pending_setup.conditional_tp_extension_price,
-                                    "tp_extension_applied": False,
-                                }
-                            else:
-                                margin_rejected_setups += 1
-                                pending_setup = None
-                                pending_setup_idx = None
+                    entry_price = candle.open + spread / 2 + slippage
+                else:
+                    entry_price = candle.open - spread / 2 - slippage
 
-                # Discard or keep pending setup depending on fill or expiry
-                if active_trade is not None:
-                    pending_setup = None
-                    pending_setup_idx = None
-                elif pending_setup_idx is not None and (idx - pending_setup_idx) >= self.config.pending_order_expiry_bars:
-                    pending_setup = None
-                    pending_setup_idx = None
+                pos_size = self.position_sizer.calculate_size(
+                    balance=balance,
+                    risk_per_trade=self.config.risk_per_trade,
+                    entry_price=sizing_entry_price,
+                    stop_loss=sl_price,
+                )
+                if pos_size > 0 and self._margin_ok(pos_size, entry_price, balance):
+                    active_trade = {
+                        "entry_time": candle.timestamp,
+                        "direction": pending_setup.direction,
+                        "entry_price": entry_price,
+                        "stop_loss": sl_price,
+                        "take_profit": tp_price,
+                        "position_size": pos_size,
+                        "bars_held": 0,
+                        "symbol": pending_setup.symbol,
+                        "setup_id": pending_setup.setup_id,
+                        "strategy_name": strategy_name,
+                        "trigger_reason": pending_setup.trigger_reason,
+                        "confidence_score": pending_setup.confidence_score,
+                        "entry_bar_index": idx,
+                        "entry_spread": spread,
+                        "tp_extension_bars": pending_setup.conditional_tp_extension_bars,
+                        "tp_extension_price": pending_setup.conditional_tp_extension_price,
+                        "tp_extension_applied": False,
+                    }
+                elif pos_size > 0:
+                    margin_rejected_setups += 1
 
-            # 4. Generate next setups from current candle state N (to be executed on N+1)
-            if account_blown:
                 pending_setup = None
-                pending_setup_idx = None
-            if day_limit_reached:
-                pending_setup = None
-                pending_setup_idx = None
 
-            if active_trade is None and pending_setup is None and not account_blown and not day_limit_reached:
+            # 4. Generate next setups from current candle state N (to be executed on N+1).
+            # pending_setup is always None here -- step 3 above unconditionally
+            # resolves whatever it saw (fill or margin-reject) every bar, so
+            # nothing can still be waiting by this point.
+            if active_trade is None and not account_blown and not day_limit_reached:
                 setups = strategy_engine.run(market_state)
                 if setups:
                     if len(setups) > 1:
@@ -456,7 +418,6 @@ class BacktestEngine:
                                 [s.setup_id for s in setups[1:]],
                             )
                     pending_setup = setups[0]
-                    pending_setup_idx = idx
 
         # Bug #54 fix: a position still open when the candle series ends (no
         # max_holding_bars configured, or SL/TP simply never touched) was previously

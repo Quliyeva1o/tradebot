@@ -77,8 +77,15 @@ class TestContinuationRegression:
         assert fold["train_end_date"] == "2022-08-26 14:00"
         assert fold["val_start_date"] == "2022-08-26 14:15"
         assert fold["val_end_date"] == "2022-09-30 14:00"
+        # train_trades/win_rate and every diagnostics count below are
+        # unchanged, but train_net_profit shifted again: see
+        # tests/test_robustness.py's TestContinuationRegression for the full
+        # explanation -- BacktestEngine.run() no longer simulates a resting
+        # LIMIT order at the entry_zone's edge, it places an unconditional
+        # MARKET order filling at the very next bar's own open, exactly like
+        # live's TradeManager.open_trade() always does.
         assert fold["train_trades"] == 2
-        assert fold["train_net_profit"] == pytest.approx(-216.02745849298975)
+        assert fold["train_net_profit"] == pytest.approx(-491.95440000002407)
         assert fold["train_win_rate"] == pytest.approx(0.0)
         assert fold["val_trades"] == 0
         assert fold["val_net_profit"] == 0

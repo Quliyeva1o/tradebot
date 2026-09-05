@@ -59,6 +59,7 @@ from strategy.parametrized_smc import (
     PatternCandidateConfig,
     TrendFilterMode,
 )
+from strategy.risk_reward import resolve_entry_price, resolve_stop_and_target
 
 MIN_SAMPLE_SIZE = 30
 FDR_Q = 0.05
@@ -246,80 +247,56 @@ def _process_pending_fill(
     config: BacktestConfig,
     sizer: SimplePositionSizer,
 ) -> None:
-    """Fills sim's pending setup if this bar's range triggers the N+1 limit order.
+    """Fills sim's pending setup as a MARKET order on this bar's open.
 
-    Scoped mirror of BacktestEngine.run()'s step 3 (engine.py:338-431):
-    supports the pending-limit-order fill/expiry mechanics and
-    SimplePositionSizer-based sizing. Omits margin checking (screen_candidates()
-    rejects config.leverage is not None up front, so _margin_ok() would always
-    return True anyway) and conditional TP extension fields (never set by
-    ParametrizedSMCStrategy).
+    Scoped mirror of BacktestEngine.run()'s step 3 (engine.py): a setup
+    found on the PRIOR bar fills unconditionally on this bar's open (plus
+    spread/slippage) -- exactly what execution/trade_manager.py's
+    open_trade() actually does live (always a MARKET order via
+    broker.place_order(), see execution/fill_simulator.simulate_market_fill()).
+    There is no resting limit order and no expiry: a setup either fills on
+    the very next bar or (if pos_size resolves to 0) is dropped, never left
+    pending. entry_zone is used ONLY to size the position
+    (strategy.risk_reward.resolve_entry_price(), the same function
+    TradeManager.open_trade() calls), not to decide whether/when it fills.
+
+    Omits margin checking (screen_candidates() rejects config.leverage is
+    not None up front, so _margin_ok() would always return True anyway) and
+    conditional TP extension fields (never set by ParametrizedSMCStrategy).
     """
     pending_setup = sim["pending_setup"]
     if pending_setup is None or sim["active_trade"] is not None:
         return
 
-    entry_low, entry_high = pending_setup.entry_zone
-    sl_low, sl_high = pending_setup.stop_zone
-    sl_price = sl_low if pending_setup.direction == SignalDirection.BUY else sl_high
-    tp_low, tp_high = pending_setup.target_zone
-    tp_price = tp_low if pending_setup.direction == SignalDirection.BUY else tp_high
+    sl_price, tp_price = resolve_stop_and_target(pending_setup)
+    sizing_entry_price = resolve_entry_price(pending_setup)
     strategy_name = getattr(pending_setup, "strategy_name", "")
 
-    filled = False
     if pending_setup.direction == SignalDirection.BUY:
-        limit_price = entry_high
-        if candle.low <= limit_price:
-            entry_price = limit_price + spread / 2 + slippage
-            pos_size = sizer.calculate_size(sim["balance"], config.risk_per_trade, entry_price, sl_price)
-            if pos_size > 0:
-                sim["active_trade"] = {
-                    "entry_time": candle.timestamp,
-                    "direction": SignalDirection.BUY,
-                    "entry_price": entry_price,
-                    "stop_loss": sl_price,
-                    "take_profit": tp_price,
-                    "position_size": pos_size,
-                    "bars_held": 0,
-                    "symbol": pending_setup.symbol,
-                    "setup_id": pending_setup.setup_id,
-                    "strategy_name": strategy_name,
-                    "trigger_reason": pending_setup.trigger_reason,
-                    "confidence_score": pending_setup.confidence_score,
-                    "entry_bar_index": idx,
-                    "entry_spread": spread,
-                }
-                filled = True
+        entry_price = candle.open + spread / 2 + slippage
     else:
-        limit_price = entry_low
-        if candle.high >= limit_price:
-            entry_price = limit_price - spread / 2 - slippage
-            pos_size = sizer.calculate_size(sim["balance"], config.risk_per_trade, entry_price, sl_price)
-            if pos_size > 0:
-                sim["active_trade"] = {
-                    "entry_time": candle.timestamp,
-                    "direction": SignalDirection.SELL,
-                    "entry_price": entry_price,
-                    "stop_loss": sl_price,
-                    "take_profit": tp_price,
-                    "position_size": pos_size,
-                    "bars_held": 0,
-                    "symbol": pending_setup.symbol,
-                    "setup_id": pending_setup.setup_id,
-                    "strategy_name": strategy_name,
-                    "trigger_reason": pending_setup.trigger_reason,
-                    "confidence_score": pending_setup.confidence_score,
-                    "entry_bar_index": idx,
-                    "entry_spread": spread,
-                }
-                filled = True
+        entry_price = candle.open - spread / 2 - slippage
 
-    if filled:
-        sim["pending_setup"] = None
-        sim["pending_setup_idx"] = None
-    elif sim["pending_setup_idx"] is not None and (idx - sim["pending_setup_idx"]) >= config.pending_order_expiry_bars:
-        sim["pending_setup"] = None
-        sim["pending_setup_idx"] = None
+    pos_size = sizer.calculate_size(sim["balance"], config.risk_per_trade, sizing_entry_price, sl_price)
+    if pos_size > 0:
+        sim["active_trade"] = {
+            "entry_time": candle.timestamp,
+            "direction": pending_setup.direction,
+            "entry_price": entry_price,
+            "stop_loss": sl_price,
+            "take_profit": tp_price,
+            "position_size": pos_size,
+            "bars_held": 0,
+            "symbol": pending_setup.symbol,
+            "setup_id": pending_setup.setup_id,
+            "strategy_name": strategy_name,
+            "trigger_reason": pending_setup.trigger_reason,
+            "confidence_score": pending_setup.confidence_score,
+            "entry_bar_index": idx,
+            "entry_spread": spread,
+        }
+
+    sim["pending_setup"] = None
 
 
 def _force_close_at_end(
@@ -472,7 +449,6 @@ def screen_candidates(
             "max_drawdown": 0.0,
             "active_trade": None,
             "pending_setup": None,
-            "pending_setup_idx": None,
             "closed_trades": [],
         }
         for c in candidates
@@ -490,7 +466,6 @@ def screen_candidates(
                 setup = sim["strategy"].evaluate(market_state)
                 if setup is not None:
                     sim["pending_setup"] = setup
-                    sim["pending_setup_idx"] = idx
 
     if bars:
         last_candle = bars[-1]

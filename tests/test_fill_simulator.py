@@ -2,8 +2,8 @@
 
 Includes a direct cross-check against backtest/engine.py's own entry-price
 arithmetic (BacktestEngine.run(), pending-setup fill block, BUY:
-`entry_price = limit_price + spread / 2 + slippage`; SELL:
-`entry_price = limit_price - spread / 2 - slippage`) to confirm
+`entry_price = candle.open + spread / 2 + slippage`; SELL:
+`entry_price = candle.open - spread / 2 - slippage`) to confirm
 simulate_market_fill() actually reproduces the same half-spread +
 full-slippage, worse-price-for-the-trader convention BacktestConfig.spread's
 docstring describes, rather than merely claiming to in its own docstring.
@@ -15,16 +15,18 @@ from core.models import OrderType
 from execution.fill_simulator import simulate_market_fill
 
 
-def _backtest_engine_entry_price(direction_is_buy: bool, limit_price: float, spread: float, slippage: float) -> float:
+def _backtest_engine_entry_price(direction_is_buy: bool, reference_price: float, spread: float, slippage: float) -> float:
     """Reproduces BacktestEngine.run()'s pending-setup entry-price formula verbatim.
 
-    See backtest/engine.py, the pending-setup-execution block (~lines
-    352-392): entry_price = limit_price +/- spread / 2 +/- slippage,
-    BUY paying more, SELL receiving less.
+    See backtest/engine.py's pending-setup-execution block ("3. Handle
+    pending trade execution"): entry_price = candle.open (the bar
+    immediately after the setup was found) +/- spread / 2 +/- slippage,
+    BUY paying more, SELL receiving less -- reference_price here stands in
+    for that candle.open.
     """
     if direction_is_buy:
-        return limit_price + spread / 2 + slippage
-    return limit_price - spread / 2 - slippage
+        return reference_price + spread / 2 + slippage
+    return reference_price - spread / 2 - slippage
 
 
 class TestCrossCheckAgainstBacktestEngine:
