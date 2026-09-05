@@ -58,18 +58,18 @@ class MarketStateBuilder:
         if result.upgraded_swing is not None:
             self.structure_engine.handle_upgrade(result.upgraded_swing)
 
-        new_swing = result.new_swing
-        is_replacement = result.is_replacement
+        if result.replaced_swing is not None:
+            # Rebuild structure engine state since a past swing was replaced
+            self.structure_engine.reset()
+            for s in self._market_state.swing_graph.nodes:
+                self.structure_engine.update(s)
 
-        if new_swing:
-            if is_replacement:
-                # Rebuild structure engine state since a past swing was replaced
-                self.structure_engine.reset()
-                for s in self._market_state.swing_graph.nodes:
-                    self.structure_engine.update(s)
-            else:
-                self._market_state.swing_graph.add_swing(new_swing)
-                self.structure_engine.update(new_swing)
+        # A spike bar can confirm BOTH a swing high and a swing low at once
+        # (see IncrementalSwingResult's docstring) -- add and feed each to
+        # the structure engine in order, not just the first.
+        for new_swing in result.new_swings:
+            self._market_state.swing_graph.add_swing(new_swing)
+            self.structure_engine.update(new_swing)
 
         new_break = self.structure_engine.check_structural_break(bar)
 

@@ -87,11 +87,19 @@ class TestContinuationRegression:
         assert metrics["skipped_10pct"]["net_profit"] == pytest.approx(-288.81150948788564)
         assert metrics["skipped_25pct"]["net_profit"] == pytest.approx(-253.54655714452724)
 
-        # Diagnostics: exact rejection-reason counts, unchanged from the captured baseline.
+        # Diagnostics: exact rejection-reason counts, unchanged from the captured baseline,
+        # EXCEPT no_trend (5913 -> 5890): a later fix to SwingDetector.detect_incremental
+        # (it used to silently drop a bar's swing LOW whenever that same bar was ALSO a
+        # swing high -- a "spike" bar -- unlike detect_batch, which has always kept both)
+        # means MarketStructureEngine now sees swing lows it previously never got, so 23
+        # more evaluations across this fixture correctly resolve a trend instead of
+        # falling through to "no_trend". trades/net_profit/max_drawdown and every other
+        # field below are unaffected on this fixture -- the swing fix is invisible except
+        # in this rejection-reason bucketing.
         baseline_diag = metrics["baseline"]["diagnostics"]
         assert baseline_diag["0_BullishContinuationStrategy"]["evaluations"] == 7977
         assert baseline_diag["0_BullishContinuationStrategy"]["setups_generated"] == 2
-        assert baseline_diag["0_BullishContinuationStrategy"]["rejections"]["no_trend"] == 5913
+        assert baseline_diag["0_BullishContinuationStrategy"]["rejections"]["no_trend"] == 5890
         assert baseline_diag["1_BearishContinuationStrategy"]["setups_generated"] == 1
 
 

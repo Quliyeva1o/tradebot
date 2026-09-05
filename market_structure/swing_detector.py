@@ -20,11 +20,30 @@ from market_structure.swing_models import (
 
 @dataclass(frozen=True)
 class IncrementalSwingResult:
-    """Contains results of incremental swing detection and updates."""
+    """Contains results of incremental swing detection and updates.
 
-    new_swing: Swing | None = None
+    new_swings is a tuple, not a single Swing, because one bar CAN confirm
+    both a swing high AND a swing low at the same index (a "spike" bar --
+    e.g. its high clears `left`/`right` bars on both sides while its low
+    also does) -- detect_batch has always appended both independently (see
+    its raw_candidate loop), but detect_incremental used to build only ONE
+    Swing object via `if is_high: ... elif is_low: ...`, silently discarding
+    the second one entirely whenever both fired on the same bar. That made
+    a live/incremental run structurally diverge from what a batch backtest
+    over the exact same bars would find -- see this bug's regression tests
+    in tests/test_swing_incremental.py.
+    """
+
+    new_swings: tuple[Swing, ...] = ()
+    # Set (and the graph's last node already replaced in-place -- see
+    # _finalize_incremental_candidate) when a candidate supersedes the
+    # graph's existing last node of the same type with a more extreme
+    # price, mirroring detect_batch's own extreme-wins duplicate handling.
+    # At most one of the (at most two) same-bar candidates can be a
+    # replacement, since both would be compared against the same single
+    # graph.last_node().
+    replaced_swing: Swing | None = None
     upgraded_swing: Swing | None = None
-    is_replacement: bool = False
 
 
 class SwingDetector:
@@ -205,7 +224,6 @@ class SwingDetector:
         left = self.config.left_bars
         right = self.config.right_bars
         n = len(bars)
-        is_replacement = False
 
         # Upgrade Check (always checked on every closed bar)
         upgraded_swing = None
@@ -220,7 +238,7 @@ class SwingDetector:
         t = n - 1
         candidate_idx = t - right
         if candidate_idx < left:
-            return IncrementalSwingResult(None, upgraded_swing)
+            return IncrementalSwingResult(upgraded_swing=upgraded_swing)
 
         bar = bars[candidate_idx]
 
@@ -274,28 +292,85 @@ class SwingDetector:
                         is_low = False
                         break
 
-        candidate = None
+        # Both are built independently (not `elif`): a "spike" bar can be
+        # BOTH a swing high and a swing low at once (its high clears
+        # left/right bars on one side, its low clears them on the other) --
+        # detect_batch has always allowed both (see its raw_candidates loop
+        # above); dropping the second one here would silently diverge from
+        # what a batch backtest over these same bars finds.
+        raw_candidates: list[Swing] = []
         if is_high:
-            candidate = Swing(
-                id=f"swing_{candidate_idx}_high",
-                timestamp=bar.timestamp,
-                index=candidate_idx,
-                price=bar.high,
-                type=SwingType.HIGH,
+            raw_candidates.append(
+                Swing(
+                    id=f"swing_{candidate_idx}_high",
+                    timestamp=bar.timestamp,
+                    index=candidate_idx,
+                    price=bar.high,
+                    type=SwingType.HIGH,
+                )
             )
-        elif is_low:
-            candidate = Swing(
-                id=f"swing_{candidate_idx}_low",
-                timestamp=bar.timestamp,
-                index=candidate_idx,
-                price=bar.low,
-                type=SwingType.LOW,
+        if is_low:
+            raw_candidates.append(
+                Swing(
+                    id=f"swing_{candidate_idx}_low",
+                    timestamp=bar.timestamp,
+                    index=candidate_idx,
+                    price=bar.low,
+                    type=SwingType.LOW,
+                )
             )
 
-        if not candidate:
-            return IncrementalSwingResult(None, upgraded_swing)
+        if not raw_candidates:
+            return IncrementalSwingResult(upgraded_swing=upgraded_swing)
 
-        # Filter check against graph
+        confirmed: list[Swing] = []
+        replaced_swing: Swing | None = None
+        for raw in raw_candidates:
+            finalized, was_replacement = self._finalize_incremental_candidate(raw, bars, graph)
+            if finalized is None:
+                continue
+            if was_replacement:
+                # graph.replace_last_node() already mutated the graph
+                # in-place inside the helper -- at most one of the (at
+                # most two) same-bar candidates can be a replacement,
+                # since both are compared against the same graph.last_node().
+                replaced_swing = finalized
+            else:
+                confirmed.append(finalized)
+
+        return IncrementalSwingResult(
+            new_swings=tuple(confirmed),
+            replaced_swing=replaced_swing,
+            upgraded_swing=upgraded_swing,
+        )
+
+    def _finalize_incremental_candidate(
+        self, candidate: Swing, bars: Sequence[Bar], graph: SwingGraph
+    ) -> tuple[Swing | None, bool]:
+        """Runs one raw candidate through detect_incremental's filter/classify/
+        strength/link pipeline. Extracted so a spike bar's high and low
+        candidates (see detect_incremental) can each go through the exact
+        same checks without duplicating this logic.
+
+        NOTE on ordering when called twice for the same bar: each call sees
+        `graph` as it stood at the START of this detect_incremental()
+        invocation (a non-replacement candidate is only added to `graph` by
+        the CALLER, after detect_incremental returns -- the existing,
+        unchanged contract for the single-candidate case). So the second
+        candidate's alternation check does not see the first candidate's
+        result. This is an intentional, documented divergence from
+        detect_batch's own _apply_filtering (which resolves both in one
+        sequential pass): fixing it fully needs a graph-mutation-timing
+        redesign, out of scope for this fix. It changes behavior only in
+        the doubly-rare case of a spike bar whose OTHER-type predecessor
+        would otherwise need to alternate against a same-bar sibling.
+
+        Returns:
+            (finalized_swing_or_None, is_replacement). When is_replacement
+            is True, graph.replace_last_node() has already been called.
+        """
+        is_replacement = False
+
         if self.config.filter_enabled:
             # Min Bar Distance filter
             last_same_type = (
@@ -314,31 +389,29 @@ class SwingDetector:
                     else (candidate.price < last_same_type.price)
                 )
                 if not better:
-                    candidate = None
+                    return None, False
 
             # Alternate/Duplicate Swing filter
-            if candidate:
-                last_swing = graph.last_node()
-                if last_swing:
-                    if last_swing.type == candidate.type:
-                        # Consecutive duplicate. Keep the extreme one.
-                        better = (
-                            (candidate.price > last_swing.price)
-                            if candidate.type == SwingType.HIGH
-                            else (candidate.price < last_swing.price)
-                        )
-                        if better:
-                            is_replacement = True
-                        elif candidate.price == last_swing.price and (
-                            (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
-                            or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
-                        ):
-                            pass
-                        else:
-                            candidate = None
+            last_swing = graph.last_node()
+            if last_swing and last_swing.type == candidate.type:
+                # Consecutive duplicate. Keep the extreme one.
+                better = (
+                    (candidate.price > last_swing.price)
+                    if candidate.type == SwingType.HIGH
+                    else (candidate.price < last_swing.price)
+                )
+                if better:
+                    is_replacement = True
+                elif candidate.price == last_swing.price and (
+                    (candidate.type == SwingType.HIGH and self.config.allow_equal_highs)
+                    or (candidate.type == SwingType.LOW and self.config.allow_equal_lows)
+                ):
+                    pass
+                else:
+                    return None, False
 
             # Min Price Distance filter
-            if candidate and self.config.minimum_price_distance > 0.0 and last_same_type:
+            if self.config.minimum_price_distance > 0.0 and last_same_type:
                 if abs(candidate.price - last_same_type.price) < self.config.minimum_price_distance:
                     better = (
                         (candidate.price > last_same_type.price)
@@ -346,31 +419,30 @@ class SwingDetector:
                         else (candidate.price < last_same_type.price)
                     )
                     if not better:
-                        candidate = None
+                        return None, False
 
-        if candidate:
-            # Classify candidates
-            if self.config.classification_enabled:
-                candidate.classification = self._classify_swing(candidate, bars)
-            else:
-                candidate.classification = SwingClassification.UNKNOWN
+        # Classify candidate
+        if self.config.classification_enabled:
+            candidate.classification = self._classify_swing(candidate, bars)
+        else:
+            candidate.classification = SwingClassification.UNKNOWN
 
-            # Calculate Strength
-            candidate.strength = self._calculate_strength(candidate, bars)
-            candidate.strength_category = self._map_strength_category(candidate.strength)
+        # Calculate Strength
+        candidate.strength = self._calculate_strength(candidate, bars)
+        candidate.strength_category = self._map_strength_category(candidate.strength)
 
-            if is_replacement:
-                # We replace the last node in the graph instead of appending
-                graph.replace_last_node(candidate)
-            else:
-                # Set Links to last swing in graph
-                prev = graph.last_node()
-                if prev:
-                    candidate.previous_id = prev.id
-                    candidate.bar_distance = candidate.index - prev.index
-                    candidate.price_distance = float(candidate.price - prev.price)
+        if is_replacement:
+            # We replace the last node in the graph instead of appending
+            graph.replace_last_node(candidate)
+        else:
+            # Set Links to last swing in graph
+            prev = graph.last_node()
+            if prev:
+                candidate.previous_id = prev.id
+                candidate.bar_distance = candidate.index - prev.index
+                candidate.price_distance = float(candidate.price - prev.price)
 
-        return IncrementalSwingResult(new_swing=candidate, upgraded_swing=upgraded_swing, is_replacement=is_replacement)
+        return candidate, is_replacement
 
     def check_upgrade(self, swing: Swing, bars: Sequence[Bar]) -> bool:
         """Determines if an existing MINOR swing is eligible for upgrade to MAJOR.

@@ -323,6 +323,91 @@ def test_consecutive_bars_single_break() -> None:
     assert len(engine.breaks_history) == 1
 
 
+def test_lower_major_high_after_break_does_not_refire_a_phantom_break() -> None:
+    """Regression test: a new MAJOR HIGH swing that is LOWER than the
+    already-broken last_major_high must not reset last_broken_high_id to
+    None, or the very next bar sitting at the old (still-higher) breakout
+    price fires a second, phantom BOS against a level price never actually
+    came back down to test.
+
+    Scenario: price breaks 110 and reaches 112 (real BOS #1), then pulls
+    back and prints its own local top at 105 -- a real, valid MAJOR swing,
+    but lower than 110, and therefore already implicitly broken by the same
+    rally that produced BOS #1. A bar still sitting at 112 must not re-break
+    it.
+    """
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+
+    breakout_bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0, high=115.0, low=104.0, close=112.0, volume=100.0,
+    )
+    brk1 = engine.check_structural_break(breakout_bar)
+    assert brk1 is not None
+    assert brk1.break_type == BreakType.BOS
+    assert len(engine.breaks_history) == 1
+
+    # Price pulls back from 112 and prints its own (lower) major swing high.
+    pullback_high = _make_swing("s5_high", 20, 105.0, SwingType.HIGH)
+    engine.update(pullback_high)
+    assert engine.last_major_high.id == "s5_high"
+
+    # A later bar still sitting at the SAME 112 level as the original
+    # breakout -- not a new high, must not create a second break.
+    same_level_bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T13:00:00"),
+        open=111.0, high=113.0, low=110.5, close=112.0, volume=100.0,
+    )
+    brk2 = engine.check_structural_break(same_level_bar)
+    assert brk2 is None
+    assert len(engine.breaks_history) == 1
+
+
+def test_higher_major_high_after_break_is_a_genuinely_fresh_level() -> None:
+    """A new MAJOR HIGH that is HIGHER than the previous (already-broken)
+    one is a real, fresh, unbroken level -- it must still trigger its own
+    break when price later closes above it."""
+    swings = [
+        _make_swing("s1_high", 4, 100.0, SwingType.HIGH),
+        _make_swing("s2_low", 8, 90.0, SwingType.LOW),
+        _make_swing("s3_high", 12, 110.0, SwingType.HIGH),  # HH
+        _make_swing("s4_low", 16, 95.0, SwingType.LOW),  # HL -> Trend becomes BULLISH
+    ]
+    _link_swings(swings)
+
+    engine = MarketStructureEngine()
+    engine.analyze(swings)
+
+    breakout_bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T12:00:00"),
+        open=105.0, high=115.0, low=104.0, close=112.0, volume=100.0,
+    )
+    engine.check_structural_break(breakout_bar)
+    assert len(engine.breaks_history) == 1
+
+    higher_high = _make_swing("s5_high", 20, 120.0, SwingType.HIGH)
+    engine.update(higher_high)
+    assert engine.last_major_high.id == "s5_high"
+
+    fresh_break_bar = Bar(
+        timestamp=pd.Timestamp("2026-01-02T13:00:00"),
+        open=118.0, high=125.0, low=117.0, close=122.0, volume=100.0,
+    )
+    brk2 = engine.check_structural_break(fresh_break_bar)
+    assert brk2 is not None
+    assert brk2.broken_swing.id == "s5_high"
+    assert len(engine.breaks_history) == 2
+
+
 def test_get_structure_state() -> None:
     """Verifies that get_structure_state returns a correct StructureState matching the engine's status."""
     swings = [

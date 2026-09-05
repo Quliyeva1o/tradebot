@@ -84,14 +84,22 @@ class TestContinuationRegression:
         assert fold["val_net_profit"] == 0
         assert fold["val_win_rate"] == pytest.approx(0.0)
 
-        # Diagnostics: exact rejection-reason counts, unchanged from the captured baseline.
+        # Diagnostics: exact rejection-reason counts, unchanged from the captured baseline,
+        # EXCEPT no_trend (see tests/test_robustness.py's TestContinuationRegression for the
+        # full explanation): a later fix to SwingDetector.detect_incremental (it used to
+        # silently drop a bar's swing LOW whenever that same bar was ALSO a swing high -- a
+        # "spike" bar -- unlike detect_batch, which has always kept both) means
+        # MarketStructureEngine now sees swing lows it previously never got, so some
+        # evaluations across this fixture correctly resolve a trend instead of falling
+        # through to "no_trend". trades/net_profit/win_rate and every other field here are
+        # unaffected -- the swing fix is invisible except in this rejection-reason bucketing.
         train_diag = fold["train_diagnostics"]
         assert train_diag["0_BullishContinuationStrategy"]["evaluations"] == 3978
         assert train_diag["0_BullishContinuationStrategy"]["setups_generated"] == 2
-        assert train_diag["0_BullishContinuationStrategy"]["rejections"]["no_trend"] == 3039
+        assert train_diag["0_BullishContinuationStrategy"]["rejections"]["no_trend"] == 3016
         assert train_diag["1_BearishContinuationStrategy"]["evaluations"] == 3978
         assert train_diag["1_BearishContinuationStrategy"]["setups_generated"] == 0
-        assert train_diag["1_BearishContinuationStrategy"]["rejections"]["no_trend"] == 2757
+        assert train_diag["1_BearishContinuationStrategy"]["rejections"]["no_trend"] == 2742
         val_diag = fold["val_diagnostics"]
         assert val_diag["0_BullishContinuationStrategy"]["evaluations"] == 2400
         assert val_diag["1_BearishContinuationStrategy"]["evaluations"] == 2400

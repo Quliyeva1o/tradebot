@@ -142,16 +142,16 @@ def test_batch_incremental_swing_detection_equivalence() -> None:
                 upgraded_count += 1
                 engine_inc.handle_upgrade(res.upgraded_swing)
 
-            if res.new_swing:
-                if res.is_replacement:
-                    replacement_count += 1
-                    # Rebuild structure engine state since a past swing was replaced
-                    engine_inc.reset()
-                    for s in graph_inc.nodes:
-                        engine_inc.update(s)
-                else:
-                    graph_inc.add_swing(res.new_swing)
-                    engine_inc.update(res.new_swing)
+            if res.replaced_swing is not None:
+                replacement_count += 1
+                # Rebuild structure engine state since a past swing was replaced
+                engine_inc.reset()
+                for s in graph_inc.nodes:
+                    engine_inc.update(s)
+
+            for new_swing in res.new_swings:
+                graph_inc.add_swing(new_swing)
+                engine_inc.update(new_swing)
 
     incremental_swings = graph_inc.nodes
     incremental_structure = engine_inc.get_structure_state()

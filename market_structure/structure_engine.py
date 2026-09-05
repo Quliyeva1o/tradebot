@@ -153,12 +153,58 @@ class MarketStructureEngine:
         self._breaks_history_cache: list[StructureBreak] = []
         self._breaks_history_cache_len: int = 0
 
+    def _set_major_high(self, swing: Swing) -> None:
+        """Assigns a new MAJOR HIGH pointer, correctly carrying forward
+        already-broken status when the new swing is a LOWER peak than the
+        one it replaces.
+
+        Unconditionally resetting last_broken_high_id to None here (the
+        previous behavior) creates a phantom BOS/CHoCH: if price already
+        broke above the old last_major_high (last_broken_high_id ==
+        old.id), then rallies further, pulls back, and prints a NEW major
+        high swing that is LOWER than the old one (a real, valid swing --
+        e.g. the pullback's own local top), that new, lower swing has
+        necessarily ALSO already been exceeded by the same earlier rally.
+        Resetting to None made check_structural_break() treat it as a fresh,
+        unbroken level, so the very next bar sitting at the (still-higher)
+        rally price re-fired a break against a level price never actually
+        came back down to test.
+        """
+        old = self.last_major_high
+        self.last_major_high = swing
+        if old is not None and swing.price <= old.price and old.id == self.last_broken_high_id:
+            self.last_broken_high_id = swing.id
+        else:
+            self.last_broken_high_id = None
+
+    def _set_major_low(self, swing: Swing) -> None:
+        """Assigns a new MAJOR LOW pointer -- see _set_major_high's docstring
+        (mirrored for the downside: a new major low HIGHER than the one it
+        replaces, after the old one was already broken to the downside, is
+        also already broken)."""
+        old = self.last_major_low
+        self.last_major_low = swing
+        if old is not None and swing.price >= old.price and old.id == self.last_broken_low_id:
+            self.last_broken_low_id = swing.id
+        else:
+            self.last_broken_low_id = None
+
     def _validate_single(self, swing: Swing) -> None:
-        """Validates incoming swing sequence chronologically and checks for duplicate IDs."""
+        """Validates incoming swing sequence chronologically and checks for duplicate IDs.
+
+        Allows swing.index == self.last_index (not just strictly greater):
+        a single "spike" bar can legitimately confirm BOTH a swing high and
+        a swing low at the same index (see swing_detector.py's
+        IncrementalSwingResult/detect_incremental, and
+        MarketStateBuilder.append_bar(), which feeds both to update() in
+        sequence) -- that is two sibling events at the same bar, not a
+        chronology violation. Only a genuine regression (a LOWER index than
+        the last one processed) is rejected.
+        """
         if swing.id in self.processed_ids:
             raise DuplicateSwingIDError(f"Duplicate swing ID detected: {swing.id}")
 
-        if swing.index <= self.last_index:
+        if swing.index < self.last_index:
             raise InvalidSwingSequenceError(
                 f"Swing index {swing.index} violates chronological order. Last index: {self.last_index}"
             )
@@ -186,11 +232,9 @@ class MarketStructureEngine:
         # 1. Update pointers based on swing details
         if swing.classification == SwingClassification.MAJOR:
             if swing.type == SwingType.HIGH:
-                self.last_major_high = swing
-                self.last_broken_high_id = None
+                self._set_major_high(swing)
             elif swing.type == SwingType.LOW:
-                self.last_major_low = swing
-                self.last_broken_low_id = None
+                self._set_major_low(swing)
         elif swing.classification == SwingClassification.MINOR:
             if swing.type == SwingType.HIGH:
                 self.last_minor_high = swing
@@ -361,7 +405,15 @@ class MarketStructureEngine:
         return self.history
 
     def _validate_graph(self, swings: list[Swing]) -> None:
-        """Verifies sequence chronology and validation links in the Swing list."""
+        """Verifies sequence chronology and validation links in the Swing list.
+
+        Allows two consecutive swings at the SAME index (not just strictly
+        increasing) -- see _validate_single's docstring: a spike bar can
+        legitimately confirm both a swing high and a swing low at once, and
+        detect_batch has always returned both (in that order) for such a
+        bar. Only a genuine regression (a LOWER index than the previous
+        entry) is rejected.
+        """
         if not swings:
             return
 
@@ -373,9 +425,9 @@ class MarketStructureEngine:
                 raise DuplicateSwingIDError(f"Duplicate swing ID detected: {swing.id}")
             ids.add(swing.id)
 
-            if swing.index <= last_idx:
+            if swing.index < last_idx:
                 raise InvalidSwingSequenceError(
-                    f"Swings out of chronological order. index {swing.index} <= {last_idx}"
+                    f"Swings out of chronological order. index {swing.index} < {last_idx}"
                 )
             last_idx = swing.index
 
@@ -488,8 +540,6 @@ class MarketStructureEngine:
         """Handles the upgrade of an existing swing to MAJOR classification."""
         if swing.classification == SwingClassification.MAJOR:
             if swing.type == SwingType.HIGH:
-                self.last_major_high = swing
-                self.last_broken_high_id = None
+                self._set_major_high(swing)
             elif swing.type == SwingType.LOW:
-                self.last_major_low = swing
-                self.last_broken_low_id = None
+                self._set_major_low(swing)

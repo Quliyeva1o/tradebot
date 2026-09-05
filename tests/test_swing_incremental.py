@@ -79,9 +79,9 @@ def test_incremental_cosine_wave_oscillations() -> None:
     for t in range(1, length + 1):
         window = bars[:t]
         res = detector.detect_incremental(window, graph)
-        if res.new_swing:
-            graph.add_swing(res.new_swing)
-            incremental_swings.append(res.new_swing)
+        for new_swing in res.new_swings:
+            graph.add_swing(new_swing)
+            incremental_swings.append(new_swing)
 
     # Compare batch vs incremental counts and properties
     assert len(batch_swings) == len(incremental_swings)
@@ -115,7 +115,7 @@ def test_monotonic_trends_no_swings() -> None:
 
     graph = SwingGraph()
     for t in range(1, length + 1):
-        assert detector.detect_incremental(bars[:t], graph).new_swing is None
+        assert detector.detect_incremental(bars[:t], graph).new_swings == ()
 
 
 def test_insufficient_history_fails() -> None:
@@ -128,19 +128,23 @@ def test_insufficient_history_fails() -> None:
 
     # Incremental should just return None when candidate index is out of left bounds
     graph = SwingGraph()
-    assert detector.detect_incremental(bars, graph).new_swing is None
+    assert detector.detect_incremental(bars, graph).new_swings == ()
 
 
 def test_no_repaint_and_immutability_invariants() -> None:
     """Verifies the strict immutability of Swing attributes after creation."""
     length = 30
     bars = _generate_synthetic_bars(length)
-    # Inject a clear swing high at index 10
+    # Inject a clear swing high at index 10 -- low stays at the baseline
+    # (1.0995, same as every neighboring bar) so this bar is a swing high
+    # ONLY, not also a swing low (a "spike" bar), keeping this test's focus
+    # on a single swing's immutability. See test_spike_bar_confirms_both_a_
+    # swing_high_and_a_swing_low below for the dual-candidate case.
     bars[10] = Bar(
         timestamp=bars[10].timestamp,
         open=1.1000,
         high=1.1200,
-        low=1.0990,
+        low=1.1000 - 0.0005,  # bit-for-bit == every neighbor's low (see _generate_synthetic_bars)
         close=1.1000,
         volume=100.0,
     )
@@ -153,9 +157,9 @@ def test_no_repaint_and_immutability_invariants() -> None:
     # Stream bars
     for t in range(1, length + 1):
         res = detector.detect_incremental(bars[:t], graph)
-        if res.new_swing:
-            graph.add_swing(res.new_swing)
-            confirmed_swings.append(res.new_swing)
+        for new_swing in res.new_swings:
+            graph.add_swing(new_swing)
+            confirmed_swings.append(new_swing)
 
     assert len(confirmed_swings) == 1
     detected_swing = confirmed_swings[0]
@@ -175,6 +179,49 @@ def test_no_repaint_and_immutability_invariants() -> None:
     # Classification change should be allowed
     detected_swing.classification = SwingClassification.MAJOR
     assert detected_swing.classification == SwingClassification.MAJOR
+
+
+def test_spike_bar_confirms_both_a_swing_high_and_a_swing_low() -> None:
+    """Regression test: a single "spike" bar whose high clears its
+    left/right neighbors AND whose low also clears them (a real, if
+    unusual, price pattern -- e.g. a stop-hunt wick immediately reversed)
+    must be confirmed as BOTH a swing high and a swing low, exactly like
+    detect_batch has always done (see its raw_candidates loop, which
+    appends both independently). detect_incremental previously built the
+    candidate via `if is_high: ... elif is_low: ...`, silently dropping the
+    swing low whenever a bar was also a swing high -- a real divergence
+    between what a live/incremental run would see and what a batch
+    backtest over the exact same bars would find.
+    """
+    length = 20
+    bars = _generate_synthetic_bars(length)
+    bars[10] = Bar(
+        timestamp=bars[10].timestamp,
+        open=1.1000,
+        high=1.1200,  # clears every neighbor's high (1.1005) -- swing high
+        low=1.0800,  # clears every neighbor's low (1.0995) -- swing low too
+        close=1.1000,
+        volume=100.0,
+    )
+
+    config = SwingConfig(left_bars=3, right_bars=3)
+
+    batch_swings = SwingDetector(config=config).detect_batch(bars)
+    batch_types_at_10 = sorted(s.type.value for s in batch_swings if s.index == 10)
+    assert batch_types_at_10 == ["HIGH", "LOW"]
+
+    detector = SwingDetector(config=config)
+    graph = SwingGraph()
+    incremental_swings: list[Swing] = []
+    for t in range(1, length + 1):
+        res = detector.detect_incremental(bars[:t], graph)
+        for new_swing in res.new_swings:
+            graph.add_swing(new_swing)
+            incremental_swings.append(new_swing)
+
+    incremental_types_at_10 = sorted(s.type.value for s in incremental_swings if s.index == 10)
+    assert incremental_types_at_10 == ["HIGH", "LOW"]
+    assert len(batch_swings) == len(incremental_swings)
 
 
 def test_minor_to_major_label_upgrade() -> None:
@@ -203,8 +250,8 @@ def test_minor_to_major_label_upgrade() -> None:
     # The right_major requires 6 bars (up to index 16).
     for t in range(1, 15):
         res = detector.detect_incremental(bars[:t], graph)
-        if res.new_swing:
-            graph.add_swing(res.new_swing)
+        for new_swing in res.new_swings:
+            graph.add_swing(new_swing)
 
     latest_high = graph.get_latest_high()
     assert latest_high is not None

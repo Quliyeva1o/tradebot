@@ -261,11 +261,11 @@ def test_update_incremental_bug15_differential_matches_reference() -> None:
 
     for i in range(length):
         res_old = sd_old.detect_incremental(bars[: i + 1], graph_old)
-        if res_old.new_swing and not res_old.is_replacement:
-            graph_old.add_swing(res_old.new_swing)
+        for new_swing in res_old.new_swings:
+            graph_old.add_swing(new_swing)
         res_new = sd_new.detect_incremental(bars[: i + 1], graph_new)
-        if res_new.new_swing and not res_new.is_replacement:
-            graph_new.add_swing(res_new.new_swing)
+        for new_swing in res_new.new_swings:
+            graph_new.add_swing(new_swing)
 
         pools_old = det_old.update_incremental(graph_old)
         pools_new = det_new.update_incremental(graph_new)
@@ -321,9 +321,8 @@ def test_liquidity_performance_large_dataset() -> None:
     # Pre-populate swing graph bar-by-bar
     for idx in range(len(bars)):
         res = detector_swing.detect_incremental(bars[:idx+1], graph)
-        if res and hasattr(res, 'new_swing') and res.new_swing is not None:
-            if not getattr(res, 'is_replacement', False):
-                graph.add_swing(res.new_swing)
+        for new_swing in res.new_swings:
+            graph.add_swing(new_swing)
 
     total_swings = len(graph.nodes)
     print(f"\n[Perf Test Setup] Total bars: {length}, Total swings: {total_swings}")
