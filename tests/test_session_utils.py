@@ -1,6 +1,8 @@
-"""Unit tests for strategy/session_utils.py's TIMEFRAME_MINUTES mapping and
-session_length_in_bars helper, used by the session-scoped strategies'
-recommended_max_holding_bars() overrides.
+"""Unit tests for strategy/session_utils.py's TIMEFRAME_MINUTES mapping,
+session_length_in_bars helper (used by the session-scoped strategies'
+recommended_max_holding_bars() overrides), and add_minutes (used by
+strategy/nasdaq_orb_m1_breakout.py and strategy/opening_range_breakout.py to
+derive an Opening Range window's end from its start + duration).
 """
 
 from datetime import time
@@ -8,7 +10,24 @@ from datetime import time
 import pytest
 
 from core.models import Timeframe
-from strategy.session_utils import TIMEFRAME_MINUTES, session_length_in_bars
+from strategy.session_utils import TIMEFRAME_MINUTES, add_minutes, session_length_in_bars
+
+
+class TestAddMinutes:
+    def test_adds_minutes_within_the_same_day(self) -> None:
+        assert add_minutes(time(9, 30), 15) == time(9, 45)
+
+    def test_zero_minutes_is_a_no_op(self) -> None:
+        assert add_minutes(time(9, 30), 0) == time(9, 30)
+
+    def test_crosses_an_hour_boundary(self) -> None:
+        assert add_minutes(time(9, 50), 15) == time(10, 5)
+
+    def test_wraps_past_midnight(self) -> None:
+        assert add_minutes(time(23, 50), 20) == time(0, 10)
+
+    def test_preserves_seconds_and_microseconds_from_the_input(self) -> None:
+        assert add_minutes(time(9, 30, 15, 500), 10) == time(9, 40, 15, 500)
 
 
 class TestTimeframeMinutes:

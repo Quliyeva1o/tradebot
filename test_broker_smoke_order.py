@@ -44,7 +44,7 @@ from core.models import AccountInfo, OrderType
 from execution.models import OrderRequest
 from execution.mt5_broker import MT5Broker
 from mt5.connector import MT5Connector
-from risk.kill_switch import activate_kill_switch
+from risk.kill_switch import activate_kill_switch, is_trading_halted
 from utils.logging import setup_logger
 
 logger = setup_logger("test_broker_smoke_order", log_to_file=True)
@@ -110,6 +110,17 @@ def main() -> None:
               f"balance={account_info.balance:.2f} equity={account_info.equity:.2f}")
         terminal_info = mt5.terminal_info()
         print(f"Terminal trade_allowed (AutoTrading toggle): {terminal_info.trade_allowed if terminal_info else 'UNKNOWN'}")
+
+        # Every real-order run_live_*.py script refuses to trade while the
+        # kill-switch is active; this diagnostic places a REAL order too
+        # (see module docstring) and must not be the one exception that
+        # bypasses it -- an operator running this smoke test to debug a
+        # broker/terminal issue could otherwise place a live order while
+        # trading is supposed to be halted account-wide.
+        if is_trading_halted():
+            logger.error("Kill-switch is active; refusing to place a real order.")
+            print("REFUSING TO TRADE: kill-switch is active (risk/kill_switch.flag exists).")
+            sys.exit(1)
 
         order = OrderRequest(
             symbol=SYMBOL,

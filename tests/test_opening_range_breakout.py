@@ -92,6 +92,42 @@ class TestRangeCalculation:
         assert strategy._range_ready is False
         assert strategy._range_count == 4
 
+    def test_a_gap_in_the_opening_window_does_not_silently_widen_it(self) -> None:
+        """Regression test: counting bars instead of wall-clock time lets a
+        gapped bar during the opening window (09:32 missing here) silently
+        widen the range's real time span -- waiting for a 5th bar that
+        arrives well past the intended 09:30-09:35 window instead of
+        closing the range at 09:35 with whatever bars actually arrived."""
+        state = _new_state()
+        strategy = OpeningRangeBreakoutStrategy(volume_lookback=5, session_timezone="UTC")
+
+        gapped_bars = [
+            _bar(9, 30, 100.0, 100.2, 99.8, 100.1),
+            _bar(9, 31, 100.1, 100.8, 99.9, 100.3),
+            # 09:32 is missing (gap) -- widens range_high to 100.8 never happens from a 09:32 bar
+            _bar(9, 33, 100.0, 100.6, 99.6, 100.4),
+            _bar(9, 34, 100.1, 100.4, 99.9, 100.2),
+        ]
+        for bar in gapped_bars:
+            assert _feed(state, strategy, bar) is None
+        # Only 4 real bars seen so far -- range_bars=5 was never reached.
+        assert strategy._range_ready is False
+
+        # 09:35: wall-clock has now reached the window's end -- the range
+        # must close HERE using the 4 bars actually seen, not keep waiting
+        # for bars 5/6/7... which would silently push the window later and
+        # later the more bars are gapped.
+        window_end_bar = _bar(9, 35, 100.1, 100.3, 100.0, 100.2)
+        result = _feed(state, strategy, window_end_bar)
+
+        assert result is None  # closes inside the range -> NO_BREAKOUT, not a signal
+        assert strategy._range_ready is True
+        assert strategy._range_high == 100.8  # from the 4 real bars, not the 09:35 bar
+        assert strategy._range_low == 99.6
+        # The 09:35 bar itself was NOT folded into the range (it's the
+        # breakout-check bar, past the window) -- range_count stays at 4.
+        assert strategy._range_count == 4
+
 
 class TestBreakoutAndVolume:
     """Breakout + close-side confirmation + volume-spike gating."""

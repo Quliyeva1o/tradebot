@@ -27,6 +27,29 @@ TIMEFRAME_MINUTES: dict[Timeframe, int] = {
 }
 
 
+def add_minutes(t: time, minutes: int) -> time:
+    """Adds `minutes` to a time-of-day, wrapping around midnight.
+
+    Used to derive a session sub-window's end (e.g. an Opening Range's scan
+    start) from its start time + a duration, without a full datetime.
+
+    Args:
+        t: The starting time-of-day.
+        minutes: Minutes to add (any non-negative int).
+
+    Returns:
+        The resulting time-of-day, wrapped to [00:00:00, 24:00:00).
+    """
+    total_seconds = (t.hour * 3600 + t.minute * 60 + t.second) + minutes * 60
+    total_seconds %= 24 * 3600
+    return time(
+        hour=total_seconds // 3600,
+        minute=(total_seconds % 3600) // 60,
+        second=total_seconds % 60,
+        microsecond=t.microsecond,
+    )
+
+
 def is_in_session(
     timestamp: datetime, session_start: time, session_end: time, session_tz: ZoneInfo
 ) -> bool:

@@ -48,7 +48,7 @@ from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
-from strategy.session_utils import session_length_in_bars
+from strategy.session_utils import TIMEFRAME_MINUTES, add_minutes, session_length_in_bars
 
 
 @dataclass(frozen=True)
@@ -150,6 +150,12 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
         self.diagnostics = StrategyDiagnostics()
         self._reset_day_state()
         self._last_range_date: date | None = None
+        # Cached the first evaluate() call: converting range_bars (a count)
+        # to a time-of-day window end needs market_state.timeframe, which
+        # isn't known until then. Not expected to change across an
+        # instance's lifetime -- every run_live_*.py/backtest constructs one
+        # instance per (symbol, timeframe) pair.
+        self._range_end: time | None = None
 
     def _reset_day_state(self) -> None:
         """Resets the daily-scoped state (mirrors a new trading day)."""
@@ -192,29 +198,54 @@ class OpeningRangeBreakoutStrategy(TradeSetupStrategy):
         """
         self.diagnostics.record_evaluation()
 
+        if self._range_end is None:
+            range_minutes = self.range_bars * TIMEFRAME_MINUTES[market_state.timeframe]
+            self._range_end = add_minutes(self.session_start, range_minutes)
+
         latest_bar = market_state.get_latest_bar()
         if latest_bar is None:
             return self._reject(RejectionReason.NO_LATEST_BAR)
 
         local_dt = latest_bar.timestamp.astimezone(self._session_tz)
-        at_or_after_session_start = local_dt.time() >= self.session_start
+        local_time = local_dt.time()
+        at_or_after_session_start = local_time >= self.session_start
         if at_or_after_session_start and local_dt.date() != self._last_range_date:
             self._reset_day_state()
             self._last_range_date = local_dt.date()
 
         # --- Rule 1: Opening Range Accumulation ---
+        # Bar-count is still the PRIMARY trigger (preserves the existing,
+        # tested "the Nth bar itself completes the range AND is immediately
+        # eligible for the same-bar breakout check" convention, shared with
+        # AccumulationBreakoutStrategy's identical pattern) -- but capped by
+        # _range_end as a gap-safety net: a data gap during the window
+        # otherwise lets the bar count silently fall behind wall-clock time
+        # (a missed bar just means one fewer counted), so the Nth bar
+        # "closing" the range could land well past the intended window,
+        # silently widening it. Once wall-clock time reaches _range_end,
+        # stop waiting for more bars and use whatever range has actually
+        # been accumulated so far, exactly like
+        # strategy/nasdaq_orb_m1_breakout.py's own time-gated Opening Range
+        # already does (see that module's day-reset note).
         if not self._range_ready and at_or_after_session_start:
-            if self._range_count == 0:
-                self._first_bar_high = latest_bar.high
-                self._first_bar_low = latest_bar.low
-                self._range_high = latest_bar.high
-                self._range_low = latest_bar.low
-            else:
-                self._range_high = max(self._range_high, latest_bar.high)
-                self._range_low = min(self._range_low, latest_bar.low)
-            self._range_count += 1
-            if self._range_count == self.range_bars:
+            reached_time_cap = local_time >= self._range_end
+            if not reached_time_cap:
+                if self._range_high is None:
+                    self._first_bar_high = latest_bar.high
+                    self._first_bar_low = latest_bar.low
+                    self._range_high = latest_bar.high
+                    self._range_low = latest_bar.low
+                else:
+                    self._range_high = max(self._range_high, latest_bar.high)
+                    self._range_low = min(self._range_low, latest_bar.low)
+                self._range_count += 1
+            if self._range_count >= self.range_bars or (reached_time_cap and self._range_high is not None):
                 self._range_ready = True
+            elif reached_time_cap:
+                # Time cap reached with zero range bars ever seen this day
+                # (e.g. bot started mid-session past the window) -- nothing
+                # to measure a range against; wait for tomorrow.
+                return self._reject(RejectionReason.RANGE_NOT_READY)
 
         if not self._range_ready:
             return self._reject(RejectionReason.RANGE_NOT_READY)

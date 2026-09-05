@@ -54,7 +54,16 @@ def windowed(trades: list[TradeRow], years: float | None) -> list[TradeRow]:
     if years is None:
         return trades
     end = trades[-1].ts
-    cutoff = end.replace(year=end.year - int(years)) if years == int(years) else end
+    if years == int(years):
+        try:
+            cutoff = end.replace(year=end.year - int(years))
+        except ValueError:
+            # end is Feb 29 and the target year isn't a leap year -- clamp
+            # to Feb 28 rather than crashing the whole report over one day
+            # of imprecision in the cutoff.
+            cutoff = end.replace(month=2, day=28, year=end.year - int(years))
+    else:
+        cutoff = end
     return [t for t in trades if t.ts >= cutoff]
 
 

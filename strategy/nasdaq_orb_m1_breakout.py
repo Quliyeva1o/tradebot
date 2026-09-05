@@ -82,14 +82,9 @@ from market_structure.structure_models import MarketState
 from strategy.diagnostics import RejectionReason, StrategyDiagnostics
 from strategy.interfaces import TradeSetupStrategy
 from strategy.models import TradeSetup
+from strategy.session_utils import add_minutes
 
 NY = ZoneInfo("America/New_York")
-
-
-def _add_minutes(t: time, minutes: int) -> time:
-    total_seconds = (t.hour * 3600 + t.minute * 60 + t.second) + minutes * 60
-    total_seconds %= 24 * 3600
-    return time(hour=total_seconds // 3600, minute=(total_seconds % 3600) // 60, second=total_seconds % 60, microsecond=t.microsecond)
 
 
 @dataclass(frozen=True)
@@ -131,7 +126,7 @@ class NasdaqOrbM1BreakoutStrategy(TradeSetupStrategy):
 
     def __init__(self, config: NasdaqOrbM1BreakoutConfig | None = None) -> None:
         self.config = config or NasdaqOrbM1BreakoutConfig()
-        self._scan_start = _add_minutes(self.config.or_start, self.config.or_minutes)
+        self._scan_start = add_minutes(self.config.or_start, self.config.or_minutes)
         self.diagnostics = StrategyDiagnostics()
         self._current_date: date | None = None
         self._reset_day_state()
