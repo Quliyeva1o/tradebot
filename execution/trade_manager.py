@@ -171,6 +171,38 @@ class TradeManager:
         if rejected is not None:
             return rejected
 
+        if volume <= 0:
+            # PositionSizer.calculate_size() documents 0.0 as its return for
+            # a zero risk distance (entry_price == stop_loss) -- sizing is
+            # undefined there, not a divide-by-zero bug. OrderRequest itself
+            # requires a strictly positive volume, so this must be caught
+            # here and rejected the same "no order ever sent" way as
+            # _apply_margin_ceiling's own floor-volume-too-large case, rather
+            # than letting OrderRequest.__post_init__'s require_positive()
+            # raise ValueError uncaught into the caller (no run_live_*.py
+            # script wraps open_trade() in a try/except).
+            try:
+                placeholder_volume = broker.get_symbol_constraints(setup.symbol).volume_min
+            except Exception:  # never let a metadata call block reporting this rejection
+                placeholder_volume = 0.01
+            placeholder_request = OrderRequest(
+                symbol=setup.symbol, order_type=order_type, volume=placeholder_volume,
+                comment=setup.setup_id,
+            )
+            order = Order(order_id="", request=placeholder_request)
+            order.reject()
+            self.current_order = order
+            self.last_open_result = OrderResult(
+                success=False,
+                retcode=0,
+                comment=(
+                    f"blocked locally: PositionSizer returned a non-positive volume "
+                    f"({volume!r}) for {setup.symbol} -- entry_price ({entry_price!r}) equals "
+                    f"stop_loss ({stop_loss!r}), so no tradeable size exists for this setup."
+                ),
+            )
+            return order
+
         request = OrderRequest(
             symbol=setup.symbol,
             order_type=order_type,

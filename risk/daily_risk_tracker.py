@@ -63,7 +63,7 @@ class DailyRiskTracker:
         if self.state_file is None:
             self.state_file = STATE_FILE
 
-    def check_and_update(self, current_equity: float) -> bool:
+    def check_and_update(self, current_equity: float, account_login: int | None = None) -> bool:
         """Compares current_equity against today's recorded day-start equity.
 
         On the first call of a new UTC calendar day -- or if no valid prior
@@ -75,18 +75,41 @@ class DailyRiskTracker:
         Args:
             current_equity: The account's current equity (balance + floating
                 P&L), e.g. MT5Connector.fetch_account_info().equity.
-
-        Returns:
-            True if this call just newly activated the kill-switch (it was
-            not already active before this call); False otherwise,
-            including when the daily loss limit is breached but the
-            kill-switch was already active from an earlier call.
+            account_login: The connected account's number, e.g.
+                MT5Connector.fetch_account_info().login. If the baseline on
+                disk was recorded for a *different* login than this call's,
+                the stored equity is not comparable (different account,
+                different balance) -- treated the same as a new day, i.e.
+                the baseline is reset rather than compared. This is a real
+                incident this tracker has already caused: .env's MT5_LOGIN
+                was repointed from a ~$100k account to a ~$1k account
+                mid-day, and the ~$1k account's real equity read as a 99%
+                loss against the still-cached ~$100k baseline, tripping the
+                kill-switch on two unrelated accounts' balances. None (the
+                default, e.g. PaperBroker's login-less AccountInfo) skips
+                this check entirely, matching prior behavior.
         """
         today = datetime.now(UTC).date().isoformat()
         state = self._read_state()
 
         if state is None or state.get("date") != today:
-            self._write_state(today, current_equity)
+            self._write_state(today, current_equity, account_login)
+            return False
+
+        if (
+            account_login is not None
+            and state.get("account_login") is not None
+            and state.get("account_login") != account_login
+        ):
+            logger.warning(
+                "Account changed since today's baseline was recorded in %s (was login=%s, now login=%s); "
+                "resetting today's baseline to %.2f rather than comparing across accounts.",
+                self.state_file,
+                state.get("account_login"),
+                account_login,
+                current_equity,
+            )
+            self._write_state(today, current_equity, account_login)
             return False
 
         day_start_equity = state.get("day_start_equity")
@@ -97,7 +120,7 @@ class DailyRiskTracker:
                 day_start_equity,
                 current_equity,
             )
-            self._write_state(today, current_equity)
+            self._write_state(today, current_equity, account_login)
             return False
 
         loss_pct = (day_start_equity - current_equity) / day_start_equity
@@ -131,8 +154,9 @@ class DailyRiskTracker:
             logger.error("Could not read/parse %s: %s. Resetting today's baseline.", self.state_file, type(exc).__name__)
             return None
 
-    def _write_state(self, date: str, day_start_equity: float) -> None:
-        """Persists today's day-start equity. Never raises (logs ERROR on failure).
+    def _write_state(self, date: str, day_start_equity: float, account_login: int | None) -> None:
+        """Persists today's day-start equity (and account_login, if known).
+        Never raises (logs ERROR on failure).
 
         A write failure here does not affect this call's own in-memory
         decision (there is nothing to check yet on a new-day call) -- it
@@ -141,6 +165,8 @@ class DailyRiskTracker:
         """
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(json.dumps({"date": date, "day_start_equity": day_start_equity}))
+            self.state_file.write_text(
+                json.dumps({"date": date, "day_start_equity": day_start_equity, "account_login": account_login})
+            )
         except Exception as exc:  # noqa: BLE001
             logger.error("Could not persist daily risk state to %s: %s", self.state_file, type(exc).__name__)

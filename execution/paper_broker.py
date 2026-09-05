@@ -64,8 +64,24 @@ class _StateFileLock:
         self._fh = None
 
     def __enter__(self) -> "_StateFileLock":
-        self._lock_file.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self._lock_file, "a+b")
+        try:
+            self._lock_file.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = open(self._lock_file, "a+b")
+        except OSError as exc:
+            # Mirrors this module's _save_state/_load_state fail-open contract:
+            # a scheduled-task cycle crashing outright over a lock DIRECTORY
+            # problem (permissions, a stray same-named file) is worse than
+            # proceeding without cross-process exclusivity for this one
+            # read-modify-write -- especially since most run_live_*.py
+            # scripts have no crash alerting (see notifications' 1/7 coverage).
+            logger.error(
+                "Could not open lock file %s: %s. Proceeding WITHOUT the cross-process "
+                "state lock for this operation.",
+                self._lock_file,
+                type(exc).__name__,
+            )
+            self._fh = None
+            return self
         deadline = _time.monotonic() + self._timeout_seconds
         while True:
             try:

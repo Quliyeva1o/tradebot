@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
             account_info.equity,
         )
 
-        DailyRiskTracker().check_and_update(account_info.equity)
+        DailyRiskTracker().check_and_update(account_info.equity, account_info.login)
 
         strategy = NasdaqMidlineSweepStrategy(body_multiplier=args.body_multiplier)
         position_sizer = (

@@ -39,9 +39,18 @@ def _bar(open_: float = 29_000.0, close: float = 29_050.0, spread: float = 2.0) 
     )
 
 
-def _connector(bar: Bar | None = None) -> Mock:
+def _connector(bar: Bar | None = None, symbol: str = "USTEC") -> Mock:
     connector = Mock(spec=MT5Connector)
     connector.fetch_recent_bars.return_value = [bar if bar is not None else _bar()]
+    # tick_value == tick_size == 1.0 makes _compute_pnl's distance_ticks *
+    # tick_value * volume collapse to the pre-fix (price_diff * volume)
+    # formula, which is what every P&L assertion in this file below was
+    # written against -- a test that cares about tick_value != tick_size
+    # scaling overrides this return_value itself (see TestComputePnl).
+    connector.fetch_symbol_info.return_value = SymbolConstraints(
+        symbol=symbol, contract_size=1.0, tick_size=1.0, tick_value=1.0,
+        volume_min=0.01, volume_max=100.0, volume_step=0.01,
+    )
     return connector
 
 
@@ -172,7 +181,7 @@ class TestClosePosition:
     """Tests for PaperBroker.close_position()."""
 
     def test_close_buy_position_uses_opposite_side_fill(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],  # opening fill bar
             [_bar(open_=29_100.0, spread=2.0)],  # closing fill bar
@@ -188,7 +197,7 @@ class TestClosePosition:
         assert close_result.position_id == open_result.order_id
 
     def test_close_sell_position_uses_opposite_side_fill(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_100.0, spread=2.0)],
@@ -202,7 +211,7 @@ class TestClosePosition:
         assert close_result.price == pytest.approx(29_100.0 + 1.0 + 0.5)
 
     def test_close_removes_the_position(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_100.0, spread=0.0)],
@@ -215,7 +224,7 @@ class TestClosePosition:
         assert broker.get_open_positions() == []
 
     def test_close_realizes_pnl_into_balance(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_150.0, spread=0.0)],
@@ -228,7 +237,7 @@ class TestClosePosition:
         assert broker.get_account_info().balance == pytest.approx(10_150.0)
 
     def test_close_persists_a_new_filled_order_for_the_closing_leg(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_100.0, spread=0.0)],
@@ -256,7 +265,7 @@ class TestGetOpenPositions:
     """Tests for PaperBroker.get_open_positions() mark-to-market refresh."""
 
     def test_profit_reflects_current_close_price(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],  # fill bar
             [_bar(open_=29_100.0, close=29_150.0, spread=0.0)],  # mark-to-market bar
@@ -270,7 +279,7 @@ class TestGetOpenPositions:
         assert positions[0].profit == pytest.approx(150.0)  # (29150 - 29000) * 1.0
 
     def test_sell_position_profit_sign_is_inverted(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=28_900.0, close=28_850.0, spread=0.0)],
@@ -297,7 +306,7 @@ class TestGetAccountInfo:
         assert info.equity == 10_000.0
 
     def test_equity_includes_floating_pnl(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_100.0, close=29_200.0, spread=0.0)],
@@ -474,7 +483,7 @@ class TestSlippageLogging:
         assert kwargs["actual_price"] == result.price
 
     def test_close_position_logs_fill_with_reference_price_as_intended(self) -> None:
-        connector = Mock(spec=MT5Connector)
+        connector = _connector()
         connector.fetch_recent_bars.side_effect = [
             [_bar(open_=29_000.0, spread=0.0)],
             [_bar(open_=29_100.0, spread=2.0)],

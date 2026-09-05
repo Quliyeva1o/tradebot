@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("PAPER mode: balance=%.2f, equity=%.2f (no real orders will be placed).",
                         account_info.balance, account_info.equity)
 
-        daily_risk_tracker.check_and_update(account_info.equity)
+        daily_risk_tracker.check_and_update(account_info.equity, account_info.login)
 
         strategy = NyOpenAccumulationBreakoutStrategy(
             config=NyOpenAccumulationBreakoutConfig(max_rr_cap=args.max_rr_cap)

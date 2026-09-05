@@ -116,6 +116,14 @@ class AccountInfo:
     # means "unknown", and callers must skip the margin check rather than
     # divide by it.
     leverage: int = 0
+    # MT5's own account number (mt5.account_info().login), populated only by
+    # MT5Connector.fetch_account_info(). None for sources that don't expose
+    # it (e.g. PaperBroker.get_account_info()). Lets risk.DailyRiskTracker
+    # detect a same-day account switch (e.g. .env's MT5_LOGIN repointed to a
+    # different broker/account between runs) and refuse to compare that
+    # account's equity against a baseline recorded for a *different* account
+    # -- see DailyRiskTracker.check_and_update's account_login parameter.
+    login: int | None = None
 
 
 @dataclass(frozen=True)

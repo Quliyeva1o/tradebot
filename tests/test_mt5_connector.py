@@ -159,6 +159,7 @@ def _account_info(
     margin_level: float = 0.0,
     currency: str = "USD",
     trade_mode: int = 0,
+    login: int = 12345678,
 ) -> SimpleNamespace:
     """Minimal stand-in for MT5's AccountInfo named-tuple-like object,
     exposing only the fields fetch_account_info() reads.
@@ -175,6 +176,7 @@ def _account_info(
         margin_level=margin_level,
         currency=currency,
         trade_mode=trade_mode,
+        login=login,
     )
 
 
@@ -191,6 +193,7 @@ class TestFetchAccountInfo:
                 margin_level=5160.05,
                 currency="USD",
                 trade_mode=2,
+                login=49843976,
             ),
         ):
             info = connector.fetch_account_info()
@@ -203,6 +206,7 @@ class TestFetchAccountInfo:
         assert info.margin_level == 5160.05
         assert info.currency == "USD"
         assert info.trade_mode == 2
+        assert info.login == 49843976
 
     def test_raises_when_account_info_returns_none(self) -> None:
         connector = MT5Connector()

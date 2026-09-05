@@ -23,7 +23,7 @@ import live_signal_check
 import risk.daily_risk_tracker as daily_risk_tracker_module
 import risk.kill_switch as kill_switch_module
 import run_live_demo
-from core.models import AccountInfo, Bar, OrderType, SignalDirection, Timeframe
+from core.models import AccountInfo, Bar, OrderType, SignalDirection, SymbolConstraints, Timeframe
 from execution.models import Position
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
@@ -142,6 +142,14 @@ def _fake_connector(tick_histories: list[list[Bar]]) -> Mock:
     """
     connector = Mock(spec=MT5Connector)
     connector.connect.return_value = True
+    # tick_value == tick_size == 1.0 so PaperBroker._compute_pnl's tick-based
+    # P&L collapses to the plain (price_diff * volume) this file's assertions
+    # were written against (USTEC, like NAS100, has tick_value == tick_size
+    # for real -- see PaperBroker._compute_pnl's docstring).
+    connector.fetch_symbol_info.return_value = SymbolConstraints(
+        symbol="USTEC", contract_size=1.0, tick_size=1.0, tick_value=1.0,
+        volume_min=0.01, volume_max=100.0, volume_step=0.01,
+    )
     current = tick_histories[0]
     next_index = 0
 
@@ -185,6 +193,10 @@ def _current_broker() -> PaperBroker:
     """A fresh PaperBroker reading whatever state is currently persisted (read-only helper for assertions)."""
     connector = Mock(spec=MT5Connector)
     connector.fetch_recent_bars.return_value = [_neutral_bar()]
+    connector.fetch_symbol_info.return_value = SymbolConstraints(
+        symbol="USTEC", contract_size=1.0, tick_size=1.0, tick_value=1.0,
+        volume_min=0.01, volume_max=100.0, volume_step=0.01,
+    )
     return PaperBroker(connector=connector, slippage=0.0, timeframe="M5")
 
 

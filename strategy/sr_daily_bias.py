@@ -340,6 +340,19 @@ class SrDailyBiasStrategy(TradeSetupStrategy):
         self._bar_index += 1
         this_bar_index = self._bar_index
 
+        # KNOWN GAP (tracked, not fixed here -- see walkthrough/session notes):
+        # every sibling strategy localizes to NY (.astimezone(NY).date())
+        # before comparing calendar dates; this compares bar.timestamp's raw
+        # UTC date instead. It currently agrees with the NY date for this
+        # strategy's actual trading hours, but that is a coincidence of the
+        # UTC/NY offset, not a deliberate invariant -- flagged here so a
+        # future BROKER_TZ or session-hours change doesn't silently break it
+        # unnoticed. Left as raw UTC rather than switched to
+        # bar.timestamp.astimezone(NY).date() in this pass: that change
+        # alone flips ~20 existing UTC-midnight-hour test fixtures in
+        # tests/test_sr_daily_bias.py onto the PREVIOUS NY calendar day
+        # (Jan 10 00:00 UTC = Jan 9 19:00 EST), which needs a deliberate
+        # fixture rewrite, not a drive-by edit alongside unrelated fixes.
         ctx = self._daily_bias_context
         if ctx is None or ctx.for_date != bar.timestamp.date():
             # Still update all rolling state below so nothing desyncs once a

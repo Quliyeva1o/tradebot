@@ -28,9 +28,11 @@ def _today() -> str:
     return datetime.now(UTC).date().isoformat()
 
 
-def _write_state(date: str, day_start_equity) -> None:
+def _write_state(date: str, day_start_equity, account_login: int | None = None) -> None:
     tracker_module.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tracker_module.STATE_FILE.write_text(json.dumps({"date": date, "day_start_equity": day_start_equity}))
+    tracker_module.STATE_FILE.write_text(
+        json.dumps({"date": date, "day_start_equity": day_start_equity, "account_login": account_login})
+    )
 
 
 class TestNewBaseline:
@@ -42,7 +44,7 @@ class TestNewBaseline:
         assert result is False
         mock_activate.assert_not_called()
         state = json.loads(tracker_module.STATE_FILE.read_text())
-        assert state == {"date": _today(), "day_start_equity": 10_000.0}
+        assert state == {"date": _today(), "day_start_equity": 10_000.0, "account_login": None}
 
     def test_new_calendar_day_resets_baseline_to_current_equity(self) -> None:
         _write_state("2000-01-01", 5_000.0)  # unambiguously a different day
@@ -54,7 +56,7 @@ class TestNewBaseline:
         assert result is False
         mock_activate.assert_not_called()  # nothing to compare against yet on a new day
         state = json.loads(tracker_module.STATE_FILE.read_text())
-        assert state == {"date": _today(), "day_start_equity": 9_000.0}
+        assert state == {"date": _today(), "day_start_equity": 9_000.0, "account_login": None}
 
 
 class TestThresholdCheck:
@@ -125,6 +127,54 @@ class TestThresholdCheck:
         mock_activate.assert_called_once()  # still called -- idempotency is activate_kill_switch's job
 
 
+class TestAccountLogin:
+    def test_same_account_login_compares_normally(self) -> None:
+        _write_state(_today(), 10_000.0, account_login=49843976)
+        risk_tracker = DailyRiskTracker(max_daily_loss_pct=0.05)
+
+        with (
+            patch.object(tracker_module, "activate_kill_switch") as mock_activate,
+            patch.object(tracker_module, "is_trading_halted", return_value=False),
+        ):
+            result = risk_tracker.check_and_update(9_400.0, account_login=49843976)  # 6% loss
+
+        assert result is True
+        mock_activate.assert_called_once()
+
+    def test_different_account_login_resets_baseline_instead_of_comparing(self) -> None:
+        """Regression test for the 2026-09-02 incident: .env's MT5_LOGIN was
+        repointed from a ~$100k account to a ~$1k account mid-day, and the
+        ~$1k account's real equity read as a 99% loss against the still-cached
+        ~$100k baseline, tripping the kill-switch across two unrelated
+        accounts' balances."""
+        _write_state(_today(), 99_998.14, account_login=12345678)  # yesterday's FXTM-style baseline
+        risk_tracker = DailyRiskTracker(max_daily_loss_pct=0.05)
+
+        with patch.object(tracker_module, "activate_kill_switch") as mock_activate:
+            result = risk_tracker.check_and_update(1_000.00, account_login=49843976)  # different (HFM-style) account
+
+        assert result is False
+        mock_activate.assert_not_called()
+        state = json.loads(tracker_module.STATE_FILE.read_text())
+        assert state == {"date": _today(), "day_start_equity": 1_000.00, "account_login": 49843976}
+
+    def test_unknown_account_login_skips_the_cross_account_check(self) -> None:
+        """None (e.g. PaperBroker's login-less AccountInfo) preserves the
+        prior no-login behavior rather than treating every call as a new
+        account."""
+        _write_state(_today(), 10_000.0, account_login=None)
+        risk_tracker = DailyRiskTracker(max_daily_loss_pct=0.05)
+
+        with (
+            patch.object(tracker_module, "activate_kill_switch") as mock_activate,
+            patch.object(tracker_module, "is_trading_halted", return_value=False),
+        ):
+            result = risk_tracker.check_and_update(9_400.0, account_login=None)  # 6% loss
+
+        assert result is True
+        mock_activate.assert_called_once()
+
+
 class TestFailOpen:
     def test_corrupt_state_file_resets_baseline_and_does_not_raise(self) -> None:
         tracker_module.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -137,7 +187,7 @@ class TestFailOpen:
         assert result is False
         mock_activate.assert_not_called()
         state = json.loads(tracker_module.STATE_FILE.read_text())
-        assert state == {"date": _today(), "day_start_equity": 10_000.0}
+        assert state == {"date": _today(), "day_start_equity": 10_000.0, "account_login": None}
 
     def test_missing_state_file_is_treated_as_new_baseline(self) -> None:
         assert not tracker_module.STATE_FILE.exists()
@@ -158,7 +208,7 @@ class TestFailOpen:
         assert result is False
         mock_activate.assert_not_called()
         state = json.loads(tracker_module.STATE_FILE.read_text())
-        assert state == {"date": _today(), "day_start_equity": 10_000.0}
+        assert state == {"date": _today(), "day_start_equity": 10_000.0, "account_login": None}
 
     def test_write_failure_does_not_raise(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
         blocked_parent = tmp_path / "blocked"

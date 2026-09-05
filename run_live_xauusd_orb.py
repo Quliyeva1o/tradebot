@@ -339,7 +339,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("PAPER mode: balance=%.2f, equity=%.2f (no real orders will be placed).",
                         account_info.balance, account_info.equity)
 
-        daily_risk_tracker.check_and_update(account_info.equity)
+        daily_risk_tracker.check_and_update(account_info.equity, account_info.login)
 
         strategy = XauusdOrbLiquiditySweepStrategy(config=XauusdOrbLiquiditySweepConfig())
         position_sizer = PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
