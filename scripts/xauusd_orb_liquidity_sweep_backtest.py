@@ -297,10 +297,12 @@ def run_backtest(
                     disp_ok = _is_displacement(o[i - 1], h[i - 1], l[i - 1], c[i - 1], atr[i], bullish=True)
                     if l[i] - h[i - 2] >= min_gap and disp_ok:
                         zone_top = float(l[i])
-                        entry_price = float(o[i + 1]) if entry_fill_mode == "next_open" and i + 1 < n else zone_top
+                        fills_next_open = entry_fill_mode == "next_open" and i + 1 < n
+                        entry_price = float(o[i + 1]) if fills_next_open else zone_top
+                        entry_i = i + 1 if fills_next_open else i
                         sl = sweep_down_low - sl_buffer_atr * atr[i]
                         liq_target = or_high if reversal_tp_mode == "liquidity" else None
-                        if open_trade("LONG", "reversal", sweep_down_i, i, entry_price, float(sl), liq_target):
+                        if open_trade("LONG", "reversal", sweep_down_i, entry_i, entry_price, float(sl), liq_target):
                             funnel["buy_reversal_fvg_ok"] += 1
                         setup_used["buy_reversal"] = True
                         sweep_down_i = sweep_down_low = None
@@ -321,10 +323,12 @@ def run_backtest(
                     disp_ok = _is_displacement(o[i - 1], h[i - 1], l[i - 1], c[i - 1], atr[i], bullish=False)
                     if l[i - 2] - h[i] >= min_gap and disp_ok:
                         zone_bottom = float(h[i])
-                        entry_price = float(o[i + 1]) if entry_fill_mode == "next_open" and i + 1 < n else zone_bottom
+                        fills_next_open = entry_fill_mode == "next_open" and i + 1 < n
+                        entry_price = float(o[i + 1]) if fills_next_open else zone_bottom
+                        entry_i = i + 1 if fills_next_open else i
                         sl = sweep_up_high + sl_buffer_atr * atr[i]
                         liq_target = or_low if reversal_tp_mode == "liquidity" else None
-                        if open_trade("SHORT", "reversal", sweep_up_i, i, entry_price, float(sl), liq_target):
+                        if open_trade("SHORT", "reversal", sweep_up_i, entry_i, entry_price, float(sl), liq_target):
                             funnel["sell_reversal_fvg_ok"] += 1
                         setup_used["sell_reversal"] = True
                         sweep_up_i = sweep_up_high = None
