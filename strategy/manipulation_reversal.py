@@ -198,17 +198,34 @@ class ManipulationReversalStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.NO_LATEST_BAR)
 
         local_dt = latest_bar.timestamp.astimezone(self._session_tz)
-
-        # --- Rule 1: Reference candle capture / day reset ---
-        if is_in_session(
+        in_reference_window = is_in_session(
             latest_bar.timestamp, self.reference_time, self._reference_window_end, self._session_tz
-        ):
-            if local_dt.date() != self._last_reference_date:
-                self._reset_day_state()
-                self._last_reference_date = local_dt.date()
-                self._reference_high = latest_bar.high
-                self._reference_low = latest_bar.low
-                self._reference_ready = True
+        )
+
+        # --- Rule 1: Day reset / reference candle capture ---
+        # Day-boundary reset is decoupled from the narrow reference window on
+        # purpose: gating the reset itself on "this bar happens to land in
+        # the 1-minute reference window" means a single missed/gapped
+        # reference bar (a connector hiccup, an unusual holiday session
+        # open, etc.) leaves _last_reference_date stuck on the prior day for
+        # the rest of THIS day (and every subsequent day, until a bar
+        # finally lands in that window again) -- silently evaluating every
+        # bar in between against a stale prior-day reference high/low
+        # instead of correctly refusing to trade without one. Resetting on
+        # the first bar of any new calendar date, independent of the
+        # window, still requires the genuine reference-window bar to ever
+        # set _reference_ready -- a missed reference bar correctly yields a
+        # no-reference (no trade) day rather than a wrong one.
+        if local_dt.date() != self._last_reference_date:
+            self._reset_day_state()
+            self._last_reference_date = local_dt.date()
+
+        if not self._reference_ready and in_reference_window:
+            self._reference_high = latest_bar.high
+            self._reference_low = latest_bar.low
+            self._reference_ready = True
+
+        if in_reference_window:
             return self._reject(RejectionReason.REFERENCE_CANDLE_NOT_READY)
 
         if not self._reference_ready:

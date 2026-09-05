@@ -173,6 +173,29 @@ def _ensure_demo_trade_mode(account_info: AccountInfo) -> None:
         )
 
 
+# Every setup_id NasdaqMidlineSweepStrategy emits starts with
+# "setup_midline_sweep_" (see strategy/nasdaq_midline_sweep.py), and
+# TradeManager.open_trade sends the setup_id as the order comment, so it
+# travels back on the open Position. Already <=20 chars, so no truncation
+# concern -- see run_live_xauusd_orb.py's STRATEGY_TAG docstring for the
+# full MT5Broker._mt5_comment()-truncation rationale that constant exists
+# to survive.
+STRATEGY_TAG = "setup_midline_sweep"
+
+
+def _partition_positions(
+    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
+) -> tuple[list[Position], list[Position]]:
+    """Splits this symbol's open positions into (ours, someone-else's) --
+    see run_live_sr_bias.py's identical function for the full multi-bot-on-
+    one-account rationale.
+    """
+    same_symbol = [p for p in positions if p.symbol == symbol]
+    mine = [p for p in same_symbol if p.comment.startswith(tag)]
+    foreign = [p for p in same_symbol if not p.comment.startswith(tag)]
+    return mine, foreign
+
+
 def _direction_from_order_type(order_type: OrderType) -> SignalDirection:
     """Maps a Position's OrderType back to the SignalDirection TradeManager tracks."""
     return SignalDirection.BUY if order_type == OrderType.BUY_MARKET else SignalDirection.SELL
@@ -411,17 +434,22 @@ def run_once(
     )
     check_data_quality_and_alert(bars, symbol, timeframe, timeframe_str)
 
-    open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
+    mine, foreign = _partition_positions(broker.get_open_positions(), symbol)
 
-    if len(open_positions) > 1:
+    if len(mine) > 1:
         logger.error(
-            "Ambiguous open positions for %s (%d found); skipping this tick.", symbol, len(open_positions)
+            "Ambiguous open positions for %s (%d found); skipping this tick.", symbol, len(mine)
         )
-        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
         return
 
-    if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
+    if len(mine) == 1:
+        _manage_open_trade(trade_manager, broker, mine[0], bars[-1])
+        return
+
+    if foreign:
+        logger.info("Skipping %s: %d position(s) held by another strategy.", symbol, len(foreign))
+        _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe)

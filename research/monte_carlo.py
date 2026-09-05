@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from backtest.models import BacktestResult
+from core.validation import require_positive
 from utils.logging import setup_logger
 from utils.paths import get_artifacts_dir
 
@@ -20,7 +21,17 @@ class MonteCarloSimulator:
 
         Args:
             n: Number of simulation trials to run.
+
+        Raises:
+            ValueError: If n is not strictly positive. run() would otherwise
+                skip its trial loop entirely on n=0 and crash later --
+                np.max() on the resulting empty max_drawdowns list raises
+                ValueError, and risk_of_ruin's `ruin_count / self.n` raises
+                ZeroDivisionError -- both deep inside run(), long after a
+                clear error at construction would have been far easier to
+                diagnose.
         """
+        require_positive(n, "n")
         self.n = n
 
     def run(self, result: BacktestResult, pip_size: float = 0.0001) -> dict[str, Any]:

@@ -38,7 +38,7 @@ session.
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from core.models import Bar, SignalDirection, Timeframe
@@ -173,7 +173,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         self._session_tz = ZoneInfo(self.session_timezone)
         self.diagnostics = StrategyDiagnostics()
         self._reset_session_state()
-        self._was_in_session = False
+        self._last_session_date: date | None = None
 
     def _reset_session_state(self) -> None:
         """Resets the Pine `var` session-scoped state (mirrors `if newSession`)."""
@@ -189,7 +189,7 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
         """Resets diagnostics and all session-scoped state (fresh backtest run)."""
         self.diagnostics.reset()
         self._reset_session_state()
-        self._was_in_session = False
+        self._last_session_date = None
 
     def recommended_max_holding_bars(self, timeframe: Timeframe) -> int | None:
         """Bar count for [session_start, session_end) if limit_holding_to_session
@@ -258,10 +258,22 @@ class AccumulationBreakoutStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.NO_LATEST_BAR)
 
         in_session = self._in_session(latest_bar.timestamp)
-        new_session = in_session and not self._was_in_session
+        local_date = latest_bar.timestamp.astimezone(self._session_tz).date()
+        # Calendar-date comparison, not a "was the previous bar in-session"
+        # transition flag: the latter misfires after a gap that skips
+        # straight from one day's in-session bars to a LATER day's
+        # in-session bars without ever observing an out-of-session bar in
+        # between (e.g. a connector outage spanning the exact window this
+        # session starts/ends in) -- the transition would never dip back to
+        # False, so a full day boundary crossing silently never triggers a
+        # reset. See strategy/opening_range_breakout.py's identical
+        # day-reset note for the one-sided-window version of this same
+        # lesson.
+        new_session = in_session and self._last_session_date != local_date
         if new_session:
             self._reset_session_state()
-        self._was_in_session = in_session
+        if in_session:
+            self._last_session_date = local_date
 
         recent_bars = market_state.bars_view()
         prev_bar = recent_bars[-2] if len(recent_bars) >= 2 else None

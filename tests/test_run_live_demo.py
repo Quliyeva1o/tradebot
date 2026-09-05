@@ -386,6 +386,74 @@ class TestAmbiguousOpenPositions:
         broker.close_position.assert_not_called()
 
 
+class TestPartitionPositions:
+    """A same-symbol position NOT opened by this strategy (comment doesn't
+    start with STRATEGY_TAG -- e.g. a different bot trading the same
+    symbol, or a manually-placed order) must be classified as "foreign", not
+    "ours" -- run_once() then neither manages/closes it nor treats the
+    symbol as free to open a new position on."""
+
+    def test_own_position_is_classified_as_mine(self) -> None:
+        own = Position(
+            id="p1", symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1,
+            open_price=100.0, current_price=100.0,
+            comment=f"{run_live_demo.STRATEGY_TAG}_USTEC_M5_BUY_abc123_20260101_000000_000000",
+        )
+
+        mine, foreign = run_live_demo._partition_positions([own], "USTEC")
+
+        assert mine == [own]
+        assert foreign == []
+
+    def test_other_strategys_position_is_classified_as_foreign(self) -> None:
+        other = Position(
+            id="p2", symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1,
+            open_price=100.0, current_price=100.0, comment="setup_some_other_bot_12345",
+        )
+
+        mine, foreign = run_live_demo._partition_positions([other], "USTEC")
+
+        assert mine == []
+        assert foreign == [other]
+
+    def test_different_symbol_is_excluded_entirely(self) -> None:
+        other_symbol = Position(
+            id="p3", symbol="XAUUSD", order_type=OrderType.BUY_MARKET, volume=0.1,
+            open_price=100.0, current_price=100.0, comment=run_live_demo.STRATEGY_TAG,
+        )
+
+        mine, foreign = run_live_demo._partition_positions([other_symbol], "USTEC")
+
+        assert mine == []
+        assert foreign == []
+
+    def test_foreign_position_run_once_neither_manages_it_nor_opens_a_new_one(self) -> None:
+        connector = _fake_connector([[_neutral_bar()]])
+        broker = Mock()
+        broker.get_open_positions.return_value = [
+            Position(
+                id="foreign-1", symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1,
+                open_price=100.0, current_price=100.0, comment="setup_some_other_bot_12345",
+            ),
+        ]
+        trade_manager = TradeManager()
+
+        run_live_demo.run_once(
+            connector=connector,
+            broker=broker,
+            trade_manager=trade_manager,
+            strategy=_strategy(),
+            symbol="USTEC",
+            timeframe=Timeframe.M5,
+            timeframe_str="M5",
+            lookback_bars=1000,
+        )
+
+        broker.close_position.assert_not_called()
+        broker.place_order.assert_not_called()
+        assert trade_manager.has_open_trade is False
+
+
 class TestDemoAccountSafetyRail:
     """Isolated tests for the two-layer demo-account safety rail.
 
@@ -551,6 +619,11 @@ class TestUnmanageablePosition:
                 current_price=100.0,
                 stop_loss=None,
                 take_profit=None,
+                # STRATEGY_TAG-prefixed so this is recognized as OUR position
+                # (see TestManageOpenTradeCloseFailure._position()) -- this
+                # test is specifically about the missing-SL/TP skip path, not
+                # the foreign-position skip path.
+                comment=run_live_demo.STRATEGY_TAG + "_test",
             )
         ]
         trade_manager = TradeManager()
@@ -589,6 +662,13 @@ class TestManageOpenTradeCloseFailure:
             "current_price": 95.0,
             "stop_loss": 90.0,
             "take_profit": 156.0,
+            # STRATEGY_TAG-prefixed, matching every real Position this
+            # strategy's own TradeManager.open_trade() would produce (the
+            # comment is always the originating setup_id) -- see
+            # run_live_demo.STRATEGY_TAG/_partition_positions(), which
+            # would otherwise classify a comment-less test fixture as
+            # "someone else's" position and block every test in this class.
+            "comment": run_live_demo.STRATEGY_TAG + "_test",
         }
         defaults.update(overrides)
         return Position(**defaults)  # type: ignore[arg-type]

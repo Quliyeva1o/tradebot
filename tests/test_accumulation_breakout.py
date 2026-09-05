@@ -246,9 +246,9 @@ class TestOneTradePerSession:
         assert setup is not None
         assert strategy._trade_taken is True
 
-        # Out-of-session bar so _was_in_session becomes False before next day.
+        # Out-of-session bar -- must not update _last_session_date (still day 5).
         _feed(state, strategy, _bar(11, 0, 1.1030, 1.1031, 1.1029, 1.1030, volume=100.0))
-        assert strategy._was_in_session is False
+        assert strategy._last_session_date == datetime(2026, 1, 5, tzinfo=UTC).date()
 
         # Next day's session start must reset count/range/breakout/tradeTaken.
         next_day_bar = _bar(9, 30, 1.1030, 1.1040, 1.1025, 1.1035, volume=100.0, day=6)
@@ -259,6 +259,36 @@ class TestOneTradePerSession:
         assert strategy._range_ready is False
         assert strategy._count == 1
         assert strategy.diagnostics.rejections[RejectionReason.ACCUMULATION_NOT_READY] >= 1
+
+    def test_day_reset_survives_a_gap_straight_from_one_in_session_bar_to_the_next_days(self) -> None:
+        """Regression test: the OLD "was the previous bar in-session"
+        transition flag never dips back to False if a data gap skips
+        straight from one day's in-session bar to a LATER day's in-session
+        bar (no out-of-session bar ever observed in between) -- so the
+        day-2 bar's session state incorrectly carries the day-1 accumulation
+        range/trade_taken forward instead of resetting. Calendar-date
+        comparison (the fix) is immune to this regardless of how bars are
+        gapped.
+        """
+        state = _new_state()
+        strategy = AccumulationBreakoutStrategy(sma_period=5, session_timezone="UTC")
+        _feed_accumulation(state, strategy)
+
+        breakout_bar = _bar(10, 45, 1.1005, 1.1032, 1.1004, 1.1030, volume=200.0)
+        setup = _feed(state, strategy, breakout_bar)
+        assert setup is not None
+        assert strategy._trade_taken is True
+
+        # Gap straight to the NEXT day's in-session bar -- no out-of-session
+        # bar observed in between (unlike test_new_session_resets_state_and_
+        # allows_a_new_trade above, which does see one first).
+        next_day_bar = _bar(9, 30, 1.1030, 1.1040, 1.1025, 1.1035, volume=100.0, day=6)
+        result = _feed(state, strategy, next_day_bar)
+
+        assert result is None  # first bar of a fresh accumulation run
+        assert strategy._trade_taken is False
+        assert strategy._range_ready is False
+        assert strategy._count == 1
 
 
 class TestDiagnosticsAndConfig:

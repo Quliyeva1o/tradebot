@@ -122,6 +122,29 @@ def _ensure_demo_trade_mode(account_info: AccountInfo) -> None:
         )
 
 
+# Every setup_id NyOpenAccumulationBreakoutStrategy emits starts with
+# "setup_ny_accum_breakout_" (see strategy/ny_open_accumulation_breakout.py),
+# and TradeManager.open_trade sends the setup_id as the order comment, so it
+# travels back on the open Position. Truncated to <=20 chars (here, to a
+# whole-word boundary) for the same reason as run_live_xauusd_orb.py's own
+# STRATEGY_TAG -- see that module's docstring for the full
+# MT5Broker._mt5_comment()-truncation rationale this must survive.
+STRATEGY_TAG = "setup_ny_accum_break"
+
+
+def _partition_positions(
+    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
+) -> tuple[list[Position], list[Position]]:
+    """Splits this symbol's open positions into (ours, someone-else's) --
+    see run_live_sr_bias.py's identical function for the full multi-bot-on-
+    one-account rationale.
+    """
+    same_symbol = [p for p in positions if p.symbol == symbol]
+    mine = [p for p in same_symbol if p.comment.startswith(tag)]
+    foreign = [p for p in same_symbol if not p.comment.startswith(tag)]
+    return mine, foreign
+
+
 def _direction_from_order_type(order_type: OrderType) -> SignalDirection:
     return SignalDirection.BUY if order_type == OrderType.BUY_MARKET else SignalDirection.SELL
 
@@ -171,10 +194,6 @@ def _evaluate_for_new_trade(
     timeframe: Timeframe,
     kill_switch_flag_path: Path | None = None,
 ) -> None:
-    market_state = MarketState(symbol=symbol, timeframe=timeframe)
-    for b in bars:
-        market_state.append_bar(b)
-
     for_date = bars[-1].timestamp.astimezone(ZoneInfo("America/New_York")).date()
     ctx = compute_daily_context(bars=bars, for_date=for_date)
     if ctx is not None:
@@ -182,7 +201,23 @@ def _evaluate_for_new_trade(
     else:
         logger.info("No DailyContext available yet for %s (insufficient history) -- no trade possible today.", for_date)
 
-    setup = strategy.evaluate(market_state)
+    # evaluate() is a per-bar state machine (accumulation window, engulf
+    # breakout, retest -- see its own docstring): it reads ONLY
+    # market_state.get_latest_bar() and accumulates its OWN internal state
+    # (e.g. self._accum_bars) ACROSS separate calls, exactly like
+    # run_live_sr_bias.py/run_live_xauusd_orb.py/run_live_nasdaq_orb.py's
+    # identical per-bar replay loops. Feeding the whole `bars` history into
+    # market_state first and calling evaluate() only ONCE afterward (the
+    # previous bug here) means get_latest_bar() only ever returns the very
+    # LAST bar of the batch, so the accumulation window -- which needs at
+    # least 2 bars appended via separate evaluate() calls -- can never fill:
+    # every run would silently and permanently reject with
+    # ACCUMULATION_NOT_READY, indistinguishable from a genuine "no signal".
+    market_state = MarketState(symbol=symbol, timeframe=timeframe)
+    setup = None
+    for b in bars:
+        market_state.append_bar(b)
+        setup = strategy.evaluate(market_state)
 
     if setup is None:
         reasons = top_rejection_reasons({"strategy": strategy.diagnostics.summary()})
@@ -227,13 +262,18 @@ def run_once(
     bars = connector.fetch_recent_bars(symbol, timeframe_str, lookback_bars)
     logger.info("Fetched %d bar(s) for %s [%s]: %s -> %s", len(bars), symbol, timeframe_str, bars[0].timestamp, bars[-1].timestamp)
 
-    open_positions = [p for p in broker.get_open_positions() if p.symbol == symbol]
-    if len(open_positions) > 1:
-        logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(open_positions))
-        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(open_positions))
+    mine, foreign = _partition_positions(broker.get_open_positions(), symbol)
+    if len(mine) > 1:
+        logger.error("Ambiguous open positions for %s (%d found); skipping.", symbol, len(mine))
+        _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
         return
-    if len(open_positions) == 1:
-        _manage_open_trade(trade_manager, broker, open_positions[0], bars[-1])
+    if len(mine) == 1:
+        _manage_open_trade(trade_manager, broker, mine[0], bars[-1])
+        return
+
+    if foreign:
+        logger.info("Skipping %s: %d position(s) held by another strategy.", symbol, len(foreign))
+        _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
     _evaluate_for_new_trade(

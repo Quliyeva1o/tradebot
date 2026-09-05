@@ -67,6 +67,31 @@ class TestReferenceCandle:
         assert strategy._reference_ready is False
         assert strategy.diagnostics.rejections[RejectionReason.REFERENCE_CANDLE_NOT_READY] == 1
 
+    def test_missed_reference_window_on_a_new_day_does_not_carry_over_stale_state(self) -> None:
+        """Regression test: if the 09:30-09:31 reference bar is itself
+        gapped/missing on a given day (a connector hiccup, an unusual
+        session open), the day boundary must still reset -- a bar arriving
+        AFTER the window on the new day must not silently keep evaluating
+        against the PREVIOUS day's reference high/low and scenario state."""
+        state = _new_state()
+        strategy = _new_strategy()
+        _feed(state, strategy, REFERENCE_BAR)  # day 5's real reference candle
+        assert strategy._reference_ready is True
+
+        # Day 6's reference bar never arrives -- first bar seen is 09:35,
+        # already past the 09:30-09:31 window.
+        late_bar = _bar(9, 35, 100.0, 100.2, 99.8, 100.1, day=6)
+        result = _feed(state, strategy, late_bar)
+
+        assert result is None
+        assert strategy._last_reference_date == datetime(2026, 1, 6, tzinfo=UTC).date()
+        # No genuine reference candle was ever captured for day 6 -- day 5's
+        # stale reference_high/low/scenario state must be cleared, not reused.
+        assert strategy._reference_ready is False
+        assert strategy._reference_high is None
+        assert strategy._reference_low is None
+        assert strategy.diagnostics.rejections[RejectionReason.REFERENCE_CANDLE_NOT_READY] >= 1
+
 
 class TestBullishFullCycle:
     """Full bullish scenario: breakout -> running max -> trap freeze -> reversal -> BUY."""

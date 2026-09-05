@@ -96,6 +96,16 @@ class TelegramNotifier:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
+            # body.get() below assumes body is a dict, which is only true for
+            # Telegram's DOCUMENTED response shape. A malformed intermediary
+            # (proxy, CDN) could hand back a JSON array/null/string instead --
+            # keeping this inside the try means that still degrades to a
+            # logged False, not an uncaught AttributeError breaking this
+            # method's documented "never raises" contract.
+            if not isinstance(body, dict) or body.get("ok") is not True:
+                logger.warning("Telegram API reported failure (or an unexpected response shape).")
+                return False
+            return True
         except urllib.error.HTTPError as exc:
             # Status code + Telegram's own "description" field (e.g. "Bad
             # Request: chat not found") -- both safe to log in full, unlike
@@ -119,9 +129,3 @@ class TelegramNotifier:
         except Exception as exc:  # noqa: BLE001 - last-resort safety net, must never propagate
             logger.warning("Telegram send failed: %s", type(exc).__name__)
             return False
-
-        if body.get("ok") is True:
-            return True
-
-        logger.warning("Telegram API reported failure (ok=false).")
-        return False

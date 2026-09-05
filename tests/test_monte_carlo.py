@@ -187,3 +187,14 @@ class TestNoTradesEdgeCase:
 
         assert summary["expected_return"] == 0.0
         assert summary["risk_of_ruin"] == 0.0
+
+
+class TestNonPositiveTrialCount:
+    """n=0 (or negative) used to crash deep inside run() -- np.max() on an
+    empty max_drawdowns list (ValueError) or ruin_count / self.n
+    (ZeroDivisionError) -- instead of failing clearly at construction."""
+
+    @pytest.mark.parametrize("bad_n", [0, -1, -100])
+    def test_non_positive_n_raises_at_construction(self, bad_n: int) -> None:
+        with pytest.raises(ValueError, match="n must be positive"):
+            MonteCarloSimulator(n=bad_n)

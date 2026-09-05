@@ -90,6 +90,22 @@ class TestSuccessfulSend:
 
         assert result is False
 
+    @pytest.mark.parametrize("malformed_body", [[], None, "unexpected string", 42])
+    def test_non_dict_response_body_returns_false_instead_of_raising(self, malformed_body) -> None:
+        """Regression test: a malformed intermediary (proxy, CDN) could hand
+        back valid JSON that isn't Telegram's documented {"ok": ...} shape --
+        body.get("ok") on a list/None/str/int must degrade to a logged
+        False, not an uncaught AttributeError breaking send_message()'s
+        documented "never raises" contract."""
+        notifier = TelegramNotifier(bot_token=FAKE_TOKEN, chat_id=FAKE_CHAT_ID)
+        with patch(
+            "notifications.telegram.urllib.request.urlopen",
+            return_value=_fake_response(malformed_body),
+        ):
+            result = notifier.send_message("test")  # must not raise
+
+        assert result is False
+
 
 class TestSanitizedErrorLogging:
     """The bot token lives in the request URL -- error handling must never log
