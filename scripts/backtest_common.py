@@ -21,6 +21,7 @@ their own modules until someone deliberately decides which one is correct.
 from __future__ import annotations
 
 import csv
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -56,7 +57,26 @@ def load_m1(path: str) -> pd.DataFrame:
                  float(row["close"]), float(row["volume"]))
             )
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
-    return df.set_index("ts").sort_index()
+    df = df.set_index("ts").sort_index()
+
+    # Sanity check: MT5 exports can silently come back short (e.g. the
+    # terminal's chart history/depth cap not fully scrolled back before
+    # export) with no error -- this file parses fine either way, so nothing
+    # upstream would ever notice. Print the actual loaded span so a run
+    # against a quietly-truncated CSV is obvious in the console output
+    # instead of being mistaken for a full-history result (see the 2026-09-05
+    # NASDAQ ORB refresh, which was committed as "full history" while the
+    # CSV it actually read only went back ~2 years).
+    if len(df) == 0:
+        print(f"[load_m1] WARNING: {path} has 0 bars", file=sys.stderr)
+    else:
+        span_years = (df.index[-1] - df.index[0]).days / 365.25
+        print(
+            f"[load_m1] {path}: {len(df)} bars, {df.index[0].date()} -> "
+            f"{df.index[-1].date()} ({span_years:.1f}y)",
+            file=sys.stderr,
+        )
+    return df
 
 
 def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
