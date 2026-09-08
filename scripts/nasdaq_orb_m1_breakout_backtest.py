@@ -52,7 +52,7 @@ import argparse
 import csv
 import sys
 from dataclasses import dataclass
-from datetime import date, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -82,11 +82,36 @@ class Trade:
     r_multiple: float
 
 
-def run_backtest(input_csv: str, stop_mode: str, spread_points: float, tp_r: float = TP_R, direction: str = "both") -> list[Trade]:
+def run_backtest(
+    input_csv: str,
+    stop_mode: str,
+    spread_points: float,
+    tp_r: float = TP_R,
+    direction: str = "both",
+    or_minutes: int = 15,
+    scan_minutes: int = 1,
+) -> list[Trade]:
+    """Runs the ORB backtest.
+
+    or_minutes/scan_minutes default to the spec's own 15-minute opening range
+    and M1 breakout scan; other values let a caller sweep the timeframe pair.
+    A coarser scan bar also coarsens SL/TP hit detection (both can fall inside
+    one bar), which is the inherent cost of scanning on anything above M1.
+    """
     m1 = load_m1(input_csv)
-    m15 = resample(m1, 15)
-    m15.index = m15.index.tz_convert(NY)
-    m1_ny = m1.copy()
+    # Both grids are anchored so a bar starts exactly on the time that matters
+    # (09:30 for the opening range, the scan's own start for the breakout
+    # bars); without this a 60-minute grid lands on 09:00 and the 09:30
+    # opening-range candle simply never exists.
+    or_anchor = OR_START.hour * 60 + OR_START.minute
+    or_bars = resample(m1, or_minutes, offset_minutes=or_anchor % or_minutes)
+    or_bars.index = or_bars.index.tz_convert(NY)
+
+    scan_start = (datetime.combine(date(2000, 1, 1), OR_START) + timedelta(minutes=or_minutes)).time()
+
+    scan_anchor = scan_start.hour * 60 + scan_start.minute
+    scan = m1 if scan_minutes == 1 else resample(m1, scan_minutes, offset_minutes=scan_anchor % scan_minutes)
+    m1_ny = scan.copy()
     m1_ny.index = m1_ny.index.tz_convert(NY)
 
     o1, h1, l1, c1 = (m1_ny[c].to_numpy() for c in ("open", "high", "low", "close"))
@@ -96,7 +121,7 @@ def run_backtest(input_csv: str, stop_mode: str, spread_points: float, tp_r: flo
     times1 = idx1.time
 
     or_by_day: dict[date, tuple[float, float]] = {}
-    for ts, row in m15.iterrows():
+    for ts, row in or_bars.iterrows():
         if ts.time() == OR_START:
             or_by_day[ts.date()] = (float(row.high), float(row.low))
 
@@ -137,7 +162,7 @@ def run_backtest(input_csv: str, stop_mode: str, spread_points: float, tp_r: flo
             i += 1
             continue
 
-        if day_or is None or day_trade_taken or t < SCAN_START:
+        if day_or is None or day_trade_taken or t < scan_start:
             i += 1
             continue
 

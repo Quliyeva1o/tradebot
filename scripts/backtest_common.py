@@ -79,18 +79,24 @@ def load_m1(path: str) -> pd.DataFrame:
     return df
 
 
-def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+def resample(df: pd.DataFrame, minutes: int, offset_minutes: int = 0) -> pd.DataFrame:
     """Aggregates to `minutes` bars, labelled by the bar's START time.
 
     NOTE the labelling: a bar labelled 09:00 covers [09:00, 10:00) and its
     high/low/close are only known at 09:59. Anything that samples a
     HIGHER-timeframe bar from a lower-timeframe one MUST go through
     `htf_bias_known_from` first -- see the warning on that function.
+
+    offset_minutes shifts the bin grid, which otherwise anchors to midnight:
+    a 60-minute grid lands on 09:00/10:00 and can never produce the 09:30
+    bar an opening-range strategy needs, so such a caller passes
+    offset_minutes=30. The default of 0 is pandas' own behaviour, so
+    existing callers are unaffected.
     """
     rule = f"{minutes}min"
-    out = df.resample(rule, label="left", closed="left").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    )
+    out = df.resample(
+        rule, label="left", closed="left", offset=f"{offset_minutes}min"
+    ).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
     return out.dropna(subset=["open"])
 
 
