@@ -272,7 +272,10 @@ def test_bullish_continuation_success() -> None:
     assert setup.symbol == "EURUSD"
     assert setup.timeframe == Timeframe.M15
     assert setup.direction == SignalDirection.BUY
-    assert setup.entry_zone == (1.0990, 1.1010)
+    # entry_zone collapsed to OB High (1.1010): resolve_entry_price()'s BUY
+    # low-edge pick must land on the same reference the R:R gate uses, not
+    # on stop_zone's own edge below (see strategy/continuation.py comment).
+    assert setup.entry_zone == (1.1010, 1.1010)
     # Stop zone: OB Low (1.0990) minus buffer (5 pips = 0.0005) -> (1.0985, 1.0990)
     assert setup.stop_zone == (1.0985, 1.0990)
     # Target zone: Recent high (1.1200) -> (1.1200, 1.1205)
@@ -295,7 +298,10 @@ def test_bearish_continuation_success() -> None:
     assert setup.symbol == "EURUSD"
     assert setup.timeframe == Timeframe.M15
     assert setup.direction == SignalDirection.SELL
-    assert setup.entry_zone == (1.0990, 1.1010)
+    # entry_zone collapsed to OB Low (1.0990): resolve_entry_price()'s SELL
+    # high-edge pick must land on the same reference the R:R gate uses, not
+    # on stop_zone's own edge below (see strategy/continuation.py comment).
+    assert setup.entry_zone == (1.0990, 1.0990)
     # Stop zone: OB High (1.1010) plus buffer (5 pips = 0.0005) -> (1.1010, 1.1015)
     assert setup.stop_zone == (1.1010, 1.1015)
     # Target zone: Recent low (1.0800) -> (1.0795, 1.0800)

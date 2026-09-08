@@ -75,33 +75,27 @@ class TestContinuationRegression:
         metrics = tester.run(_continuation_factory, backtest_config, DEFAULT_PIP_SIZE)
 
         # total_trades and every diagnostics count below are unchanged, but
-        # the dollar figures shifted again here: BacktestEngine.run() used to
-        # simulate a resting LIMIT order at the entry_zone's edge (BUY =
-        # high, SELL = low -- backwards from strategy.risk_reward's own
-        # convention besides), filled only if a later bar's price actually
-        # revisited that exact level. It now places an unconditional MARKET
-        # order that fills at the very next bar's own open, exactly like
-        # execution/trade_manager.py's open_trade() always does live (see
-        # execution/fill_simulator.simulate_market_fill()) -- entry_zone is
-        # now used ONLY to size the position (resolve_entry_price(), the
-        # same call TradeManager makes), never to gate whether/when a trade
-        # fills. BullishContinuationStrategy/BearishContinuationStrategy
-        # build a real (non-degenerate) entry_zone from their matched order
-        # block's low/high, so this fixture's fills move for real, unlike
-        # the 3 currently-live ORB/SR-Bias strategies (single-price zones,
-        # unaffected).
+        # the dollar figures shifted again here: strategy/continuation.py's
+        # entry_zone used to span (ob.low, ob.high), and resolve_entry_price()
+        # picks entry_zone's low edge for a BUY -- which equaled stop_zone's
+        # own edge, so PositionSizer saw a risk distance of just stop_buffer
+        # instead of the strategy's own R:R-gate risk distance
+        # ((ob.high-ob.low)+buffer), oversizing every position. entry_zone is
+        # now collapsed to the same edge the gate already uses (ob.high for
+        # BUY, ob.low for SELL), fixing the sizing without touching whether/
+        # when a trade fires.
         assert metrics["baseline"]["total_trades"] == 3
-        assert metrics["baseline"]["net_profit"] == pytest.approx(-744.1635856000445)
-        assert metrics["baseline"]["max_drawdown"] == pytest.approx(0.07441635856000449)
+        assert metrics["baseline"]["net_profit"] == pytest.approx(-251.01172872704828)
+        assert metrics["baseline"]["max_drawdown"] == pytest.approx(0.025101172872704774)
 
-        assert metrics["high_spread"]["net_profit"] == pytest.approx(-857.7277280000274)
-        assert metrics["high_commission"]["net_profit"] == pytest.approx(-758.7750176000445)
-        assert metrics["high_slippage"]["net_profit"] == pytest.approx(-857.7277280000274)
+        assert metrics["high_spread"]["net_profit"] == pytest.approx(-288.8716391131168)
+        assert metrics["high_commission"]["net_profit"] == pytest.approx(-265.90733492173854)
+        assert metrics["high_slippage"]["net_profit"] == pytest.approx(-288.8716391131168)
 
         # Skip-stress scenarios use unseeded random.random() internally --
         # only reproducible because random.seed(1234) was set immediately above.
-        assert metrics["skipped_10pct"]["net_profit"] == pytest.approx(-670.2114107520392)
-        assert metrics["skipped_25pct"]["net_profit"] == pytest.approx(-589.35486076803)
+        assert metrics["skipped_10pct"]["net_profit"] == pytest.approx(-225.3161113080041)
+        assert metrics["skipped_25pct"]["net_profit"] == pytest.approx(-198.9601088466579)
 
         # Diagnostics: exact rejection-reason counts, unchanged from the captured baseline,
         # EXCEPT no_trend (5913 -> 5890): a later fix to SwingDetector.detect_incremental

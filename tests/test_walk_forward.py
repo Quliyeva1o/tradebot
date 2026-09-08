@@ -80,12 +80,12 @@ class TestContinuationRegression:
         # train_trades/win_rate and every diagnostics count below are
         # unchanged, but train_net_profit shifted again: see
         # tests/test_robustness.py's TestContinuationRegression for the full
-        # explanation -- BacktestEngine.run() no longer simulates a resting
-        # LIMIT order at the entry_zone's edge, it places an unconditional
-        # MARKET order filling at the very next bar's own open, exactly like
-        # live's TradeManager.open_trade() always does.
+        # explanation -- continuation.py's entry_zone is now collapsed to the
+        # same edge its own R:R gate already uses, instead of overlapping
+        # stop_zone's edge and starving PositionSizer of the real risk
+        # distance.
         assert fold["train_trades"] == 2
-        assert fold["train_net_profit"] == pytest.approx(-491.95440000002407)
+        assert fold["train_net_profit"] == pytest.approx(-189.58010989013272)
         assert fold["train_win_rate"] == pytest.approx(0.0)
         assert fold["val_trades"] == 0
         assert fold["val_net_profit"] == 0

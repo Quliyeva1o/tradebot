@@ -282,7 +282,12 @@ class BullishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.NO_DISPLACEMENT)
 
         # --- Calculate Zones ---
-        entry_zone = (round(matching_ob.low, 5), round(matching_ob.high, 5))
+        # Collapsed to ob.high (not (ob.low, ob.high)): resolve_entry_price()'s
+        # BUY convention picks the low edge, which used to equal stop_zone's
+        # own edge below -- sizing then saw a risk distance of just
+        # stop_buffer instead of the R:R gate's real (ob.high-ob.low)+buffer,
+        # blowing up position size on wide-range instruments.
+        entry_zone = (round(matching_ob.high, 5), round(matching_ob.high, 5))
         stop_buffer = self.stop_buffer_pips * self.pip_size
         stop_zone = (round(matching_ob.low - stop_buffer, 5), round(matching_ob.low, 5))
 
@@ -506,7 +511,12 @@ class BearishContinuationStrategy(TradeSetupStrategy):
             return self._reject(RejectionReason.NO_DISPLACEMENT)
 
         # --- Calculate Zones ---
-        entry_zone = (round(matching_ob.low, 5), round(matching_ob.high, 5))
+        # Collapsed to ob.low (not (ob.low, ob.high)): resolve_entry_price()'s
+        # SELL convention picks the high edge, which used to equal stop_zone's
+        # own edge below -- sizing then saw a risk distance of just
+        # stop_buffer instead of the R:R gate's real (ob.high-ob.low)+buffer,
+        # blowing up position size on wide-range instruments.
+        entry_zone = (round(matching_ob.low, 5), round(matching_ob.low, 5))
         stop_buffer = self.stop_buffer_pips * self.pip_size
         stop_zone = (round(matching_ob.high, 5), round(matching_ob.high + stop_buffer, 5))
 
