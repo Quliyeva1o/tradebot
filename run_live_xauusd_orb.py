@@ -35,6 +35,8 @@ Usage:
 
 import argparse
 import sys
+from dataclasses import replace
+from datetime import time as dtime
 from pathlib import Path
 
 import MetaTrader5 as mt5  # noqa: N813
@@ -80,6 +82,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--symbol", default="XAUUSD", help="MT5 symbol name (this account's ticker, see module docstring)")
     parser.add_argument("--timeframe", default="M15")
+    parser.add_argument(
+        "--entry-window-end", default=None, metavar="HH:MM",
+        help="NY local time after which no NEW setup may start. Defaults to "
+             "XauusdOrbLiquiditySweepConfig's own 11:00. The 2026-09-09 sweep found "
+             "12:00 stronger on XAUUSD (PF 1.365 vs 1.246) and JP225 (1y PF 1.854 vs "
+             "1.578) by allowing setups an extra hour to form; it also roughly doubles "
+             "the drawdown on JP225, so it is opt-in rather than the new default.",
+    )
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
@@ -341,7 +351,11 @@ def main(argv: list[str] | None = None) -> None:
 
         daily_risk_tracker.check_and_update(account_info.equity, account_info.login)
 
-        strategy = XauusdOrbLiquiditySweepStrategy(config=XauusdOrbLiquiditySweepConfig())
+        sweep_config = XauusdOrbLiquiditySweepConfig()
+        if args.entry_window_end:
+            hh, mm = (int(p) for p in args.entry_window_end.split(":"))
+            sweep_config = replace(sweep_config, entry_window_end=dtime(hh, mm))
+        strategy = XauusdOrbLiquiditySweepStrategy(config=sweep_config)
         position_sizer = PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
         trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
         run_once(
