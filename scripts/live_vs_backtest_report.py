@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -33,14 +34,43 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 import MetaTrader5 as mt5  # noqa: N813
 
 import scripts.nasdaq_orb_m1_breakout_backtest as orb_mod
+import scripts.xauusd_orb_liquidity_sweep_backtest as sweep_mod
 from scripts.consistency_analysis import _cached_load_m1, agg, consistency
 from scripts.two_strategy_symbol_sweep import DATA_DIR, recent_spread
+from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
 
 orb_mod.load_m1 = _cached_load_m1
+sweep_mod.load_m1 = _cached_load_m1
 
 REPO = Path(__file__).parent.parent
 BREAKOUT_TAG = "setup_nasdaq_orb_m1"     # STRATEGY_TAG in run_live_nasdaq_orb.py
 SWEEP_TAG = "setup_xauusd_orb"           # STRATEGY_TAG in run_live_xauusd_orb.py
+
+
+def _flag(text: str, name: str, default: str | None = None) -> str | None:
+    m = re.search(rf"--{name}\s+(\S+)", text)
+    return m.group(1) if m else default
+
+
+def _task_states() -> dict[str, str]:
+    """Scheduled Task state per task name, so a bot whose .bat still exists but
+    whose task is disabled is not reported as if it were trading."""
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             "Get-ScheduledTask | Where-Object { $_.TaskName -match '^Orb' } | "
+             "ForEach-Object { $_.TaskName + '=' + $_.State }"],
+            capture_output=True, text=True, timeout=60, check=False).stdout
+    except Exception:  # noqa: BLE001 - state is a nicety; the report still works without it
+        return {}
+    return dict(line.strip().split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def _task_name(bat: str) -> str:
+    """run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo"""
+    stem = bat.removeprefix("run_live_orb_").removesuffix(".bat")
+    family, symbol, mode = stem.split("_")
+    return f"Orb{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
 
 
 def live_configs() -> dict[str, dict]:
@@ -48,15 +78,36 @@ def live_configs() -> dict[str, dict]:
     out = {}
     for bat in sorted(REPO.glob("run_live_orb_breakout_*_demo.bat")):
         text = bat.read_text(encoding="utf-8", errors="replace")
-        def flag(name: str, default: str | None = None) -> str | None:
-            m = re.search(rf"--{name}\s+(\S+)", text)
-            return m.group(1) if m else default
-        sym = flag("symbol")
+        sym = _flag(text, "symbol")
         if not sym:
             continue
-        out[sym] = dict(tp_r=float(flag("tp-r", "3.0")),
-                        or_minutes=int(flag("or-minutes", "15")),
-                        risk_pct=float(flag("risk-per-trade-pct", "0.005")),
+        out[sym] = dict(tp_r=float(_flag(text, "tp-r", "3.0")),
+                        or_minutes=int(_flag(text, "or-minutes", "15")),
+                        risk_pct=float(_flag(text, "risk-per-trade-pct", "0.005")),
+                        bat=bat.name)
+    return out
+
+
+def sweep_configs() -> dict[str, dict]:
+    """Same for the Sweep bots.
+
+    Only symbol/timeframe/risk live in the .bat -- the strategy parameters come
+    from XauusdOrbLiquiditySweepConfig's defaults, so they are read from the
+    class rather than restated here, and the baseline follows if those defaults
+    ever change.
+    """
+    defaults = XauusdOrbLiquiditySweepConfig()
+    out = {}
+    for bat in sorted(REPO.glob("run_live_orb_sweep_*_demo.bat")):
+        text = bat.read_text(encoding="utf-8", errors="replace")
+        sym = _flag(text, "symbol")
+        if not sym:
+            continue
+        tf = _flag(text, "timeframe", "M15")
+        out[sym] = dict(bar_minutes=int(str(tf).lstrip("Mm")),
+                        entry_end=defaults.entry_window_end,
+                        tp_r=defaults.fixed_tp_r,
+                        risk_pct=float(_flag(text, "risk-per-trade-pct", "0.005")),
                         bat=bat.name)
     return out
 
@@ -95,6 +146,26 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
         mt5.shutdown()
 
 
+def sweep_baseline(symbol: str, cfg: dict) -> dict:
+    csv = DATA_DIR / f"{symbol}_M1.csv"
+    if not csv.exists():
+        return {}
+    sp = recent_spread(csv)
+    tr, _ = sweep_mod.run_backtest(str(csv), tp_r=cfg["tp_r"], spread_points=sp,
+                                   enable_breakout=False, bar_minutes=cfg["bar_minutes"],
+                                   entry_window_end=cfg["entry_end"],
+                                   entry_fill_mode="next_open")
+    t = [(date.fromisoformat(str(x.day)[:10]), x.r_multiple) for x in tr]
+    if not t:
+        return {}
+    n, wr, pf, net = agg([v for _, v in t])
+    since = date.today() - timedelta(days=365)
+    n1, wr1, pf1, net1 = agg([v for d, v in t if d >= since])
+    span_months = max((max(d for d, _ in t) - min(d for d, _ in t)).days / 30.4, 1)
+    return dict(n=n, wr=wr, pf=pf, net=net, wr_1y=wr1, pf_1y=pf1,
+                green=consistency(t)["green_pct"], per_month=len(t) / span_months)
+
+
 def backtest_baseline(symbol: str, cfg: dict, days: int) -> dict:
     csv = DATA_DIR / f"{symbol}_M1.csv"
     if not csv.exists():
@@ -116,23 +187,35 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=30, help="canli tarixceden nece gun geriye baxilsin")
     args = ap.parse_args()
 
-    cfgs = live_configs()
     live = closed_live_trades(args.days)
+    deployed: list[tuple[str, str, str, dict]] = []
+    for sym, cfg in live_configs().items():
+        deployed.append(("Breakout", sym,
+                         f"{cfg['or_minutes']}m OR / M1 / {cfg['tp_r']:g}R", cfg))
+    for sym, cfg in sweep_configs().items():
+        deployed.append(("Sweep", sym,
+                         f"{cfg['bar_minutes']}m OR / {cfg['entry_end']:%H:%M} / {cfg['tp_r']:g}R", cfg))
 
     print("=" * 104)
     print(f"CANLI vs BACKTEST -- son {args.days} gun            {datetime.now(UTC):%Y-%m-%d %H:%M} UTC")
     print("=" * 104)
 
-    if not cfgs:
-        print("Deploy olunmus Breakout konfiqurasiyasi tapilmadi (run_live_orb_breakout_*_demo.bat)")
+    if not deployed:
+        print("Deploy olunmus konfiqurasiya tapilmadi (run_live_orb_*_demo.bat)")
         return
 
     total_profit = 0.0
     total_n = 0
-    for sym, cfg in cfgs.items():
-        rows = [r for r in live.get(sym, []) if r["strategy"] == "Breakout"]
-        base = backtest_baseline(sym, cfg, args.days)
-        print(f"\n### {sym}   ({cfg['or_minutes']}m OR / M1 / {cfg['tp_r']:g}R, risk {cfg['risk_pct']*100:g}%)")
+    states = _task_states()
+    for family, sym, label, cfg in sorted(deployed):
+        state = states.get(_task_name(cfg["bat"]), "?")
+        if state == "Disabled":
+            print(f"\n### {sym} / {family}   -- SONDURULUB (task disabled), atlanir")
+            continue
+        rows = [r for r in live.get(sym, []) if r["strategy"] == family]
+        base = (backtest_baseline(sym, cfg, args.days) if family == "Breakout"
+                else sweep_baseline(sym, cfg))
+        print(f"\n### {sym} / {family}   ({label}, risk {cfg['risk_pct']*100:g}%)")
         if not base:
             print("   backtest datasi yoxdur")
             continue
