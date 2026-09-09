@@ -41,6 +41,7 @@ from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
 from strategy.nasdaq_orb_m1_breakout import NasdaqOrbM1BreakoutConfig, NasdaqOrbM1BreakoutStrategy
+from strategy.risk_reward import resolve_stop_and_target
 from utils.logging import setup_logger, setup_structured_logger
 from market_structure.structure_models import MarketState
 
@@ -225,7 +226,13 @@ def _evaluate_for_new_trade(
     if order.status is OrderStatus.FILLED:
         assert order.fill_price is not None
         logger.info("Trade opened for %s: order_id=%s fill_price=%.5f", symbol, order.order_id, order.fill_price)
-        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id, fill_price=order.fill_price)
+        # stop/target are recorded here so a later live-vs-backtest comparison can
+        # compute this trade's real R-multiple; the broker's own close comment
+        # only carries whichever level was hit, which is not enough on its own.
+        sl, tp = resolve_stop_and_target(setup)
+        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id,
+                         order_id=order.order_id, fill_price=order.fill_price,
+                         stop_loss=sl, take_profit=tp)
     else:
         open_result = trade_manager.last_open_result
         reason = open_result.comment if open_result is not None else "unknown"
