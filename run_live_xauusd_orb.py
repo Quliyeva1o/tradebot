@@ -38,6 +38,7 @@ import sys
 from dataclasses import replace
 from datetime import time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5  # noqa: N813
 
@@ -57,6 +58,8 @@ from strategy.diagnostics import top_rejection_reasons
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig, XauusdOrbLiquiditySweepStrategy
 from utils.logging import setup_logger, setup_structured_logger
 from market_structure.structure_models import MarketState
+
+NY = ZoneInfo("America/New_York")
 
 logger = setup_logger("run_live_xauusd_orb", log_to_file=True)
 trade_events_logger = setup_structured_logger("trade_events")
@@ -277,12 +280,22 @@ def _evaluate_for_new_trade(
         if found is not None:
             setup, bars_since_signal = found, len(bars) - 1 - i
 
-    if setup is not None and bars_since_signal > grace_bars:
-        logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
-                    symbol, bars_since_signal, grace_bars)
-        _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
-                         bars_since_signal=bars_since_signal)
-        setup = None
+    # A multi-day replay legitimately produces one setup per day (the strategy
+    # resets its per-day latch at each date change), so the newest setup found
+    # can belong to YESTERDAY when today has not broken out yet. Those are not
+    # near-misses and must not be logged as such -- on 2026-09-09 the first
+    # version of this guard reported XAUUSD 1349 bars and SPX500 2156 bars stale
+    # on every single poll, which is noise that would bury a real one.
+    if setup is not None:
+        same_day = setup.timestamp.astimezone(NY).date() == bars[-1].timestamp.astimezone(NY).date()
+        if not same_day:
+            setup = None
+        elif bars_since_signal > grace_bars:
+            logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
+                        symbol, bars_since_signal, grace_bars)
+            _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
+                             bars_since_signal=bars_since_signal)
+            setup = None
 
     if setup is None:
         reasons = top_rejection_reasons({"strategy": strategy.diagnostics.summary()})

@@ -118,3 +118,44 @@ def test_grace_is_wall_clock_not_a_bar_count():
 def test_both_runners_use_the_same_grace_policy():
     """The sweep strategy latches `_trades_today` the same way; the fix is shared."""
     assert nasdaq_runner.SIGNAL_GRACE_MINUTES == sweep_runner.SIGNAL_GRACE_MINUTES
+
+
+def test_yesterdays_setup_is_dropped_silently_not_reported_as_expired():
+    """A 2-day replay yields one setup per day; only today's may be considered.
+
+    The strategy resets its per-day latch at each date change, so on a morning
+    that has not broken out yet the newest setup in the window belongs to
+    yesterday. The first version of this guard treated those as near-misses and
+    logged signal_expired on every poll -- XAUUSD at 1349 bars stale, SPX500 at
+    2156 -- which is noise that would bury a real one.
+    """
+    from datetime import date
+
+    yesterday = _orb_day(breakout_minute=7, tail_bars=200)
+    # Shift the whole day back 24h so its setup lands on the previous date.
+    shifted = [
+        _bar(b.timestamp - timedelta(days=1), b.open, b.high, b.low, b.close)
+        for b in yesterday
+    ]
+    today_quiet = [
+        _bar(datetime(2026, 9, 9, 9, 30, tzinfo=NY) + timedelta(minutes=i),
+             100.5, 101.0, 100.0, 100.5)
+        for i in range(40)
+    ]
+    bars = shifted + today_quiet
+
+    strategy = NasdaqOrbM1BreakoutStrategy(
+        config=NasdaqOrbM1BreakoutConfig(or_minutes=15, tp_r=4.0, direction="long")
+    )
+    state = MarketState(symbol="JP225", timeframe=Timeframe.M1)
+    setup = None
+    for b in bars:
+        state.append_bar(b)
+        found = strategy.evaluate(state)
+        if found is not None:
+            setup = found
+
+    assert setup is not None, "the replay should still surface yesterday's setup"
+    assert setup.timestamp.astimezone(NY).date() == date(2026, 9, 8)
+    # The runner's own same-day test is what rejects it.
+    assert setup.timestamp.astimezone(NY).date() != bars[-1].timestamp.astimezone(NY).date()
