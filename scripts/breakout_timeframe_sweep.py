@@ -28,7 +28,10 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 from scripts.nasdaq_orb_m1_breakout_backtest import run_backtest as orb_backtest
 from scripts.two_strategy_symbol_sweep import SYMBOLS, DATA_DIR, recent_spread, window_stats, fmt
 
-GRID = [(5, 1), (5, 5), (15, 1), (15, 5), (30, 1), (30, 5), (30, 15), (60, 5), (60, 15)]
+# (60, 1) was missing from the original grid, which is the pair XAUUSD, SPX500
+# and DJI30 actually run live -- this sweep could not see its own deployments.
+GRID = [(5, 1), (5, 5), (15, 1), (15, 5), (30, 1), (30, 5), (30, 15),
+        (60, 1), (60, 5), (60, 15)]
 
 
 def main() -> None:
