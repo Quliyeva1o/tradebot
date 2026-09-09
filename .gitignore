@@ -41,6 +41,11 @@ risk/daily_risk_state_first_fvg_15m_paper.json
 risk/first_fvg_15m_daily_resolved.json
 risk/first_fvg_15m_daily_resolved_paper.json
 risk/daily_risk_state_xauusd_orb_*_paper.json
+risk/daily_risk_state_nasdaq_orb_*_paper.json
+# msvcrt lock handles created by execution/paper_broker.py's _StateFileLock:
+# always 0 bytes, recreated on demand, and five of them were tracked by
+# accident -- a checked-out lock file serves no purpose.
+risk/*.json.lock
 
 # Superseded backtest outputs, archived locally on 2026-08-27 (see
 # SESSION_HANDOFF.md). Kept out of git deliberately: they were produced
