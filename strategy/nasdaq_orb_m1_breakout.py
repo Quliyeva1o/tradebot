@@ -61,10 +61,15 @@ M1 data, same position-open gating pattern as backtest_xauusd_orb_live_class.py)
 NOT YET forward/paper-validated -- fresh backtest-to-live port like
 XauusdOrbLiquiditySweepStrategy was. Route through a Paper runner first.
 
-Timeframe assumption: this class assumes it is fed M1 bars specifically (the
-Opening Range is built by accumulating M1 bars over a 15-minute window) --
-feeding it any other timeframe computes a wrong-sized range that was never
-backtested.
+Timeframe: M1 is the spec's own scan bar and the default, but the class is not
+limited to it. The Opening Range accumulates by WALL-CLOCK (`local_time <
+scan_start`), not by counting bars, so any bar size produces the same range over
+the same window, and the breakout test reads whatever bar it is fed. Measured
+2026-09-09 by scripts/backtest_orb_breakout_live_class.py: driven over M1, M5
+and M15, this class proposes a setup on 100% of the days its backtest trades
+(676/676, 603/603, 542/542). An earlier version of this note claimed M1 was
+required -- that was true when the range was gated on a bar COUNT, and stopped
+being true when cd69d3b made it time-gated.
 
 Safety: this class only ever RETURNS a TradeSetup candidate; it never places
 an order.

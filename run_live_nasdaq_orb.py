@@ -71,6 +71,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--symbol", required=True, help="MT5 symbol name (this account's ticker)")
     parser.add_argument("--tp-r", type=float, required=True, help="Take-profit R multiple (symbol-specific, see module docstring)")
     parser.add_argument(
+        "--scan-timeframe", default="M1", choices=["M1", "M5", "M15"],
+        help="Bar size the breakout scan runs on. M1 is the spec's own and the "
+             "default. The strategy is timeframe-agnostic despite what its docstring "
+             "used to say -- the opening range accumulates by wall-clock, not bar "
+             "count -- and scripts/backtest_orb_breakout_live_class.py measures 100%% "
+             "agreement with the backtest on M1, M5 and M15 alike.",
+    )
+    parser.add_argument(
         "--or-minutes", type=int, default=15,
         help="Opening Range width in minutes. 15 is the original spec; the 2026-09-09 "
              "walk-forward found XAUUSD's 60 keeps the same return (+179R vs +173R) at "
@@ -347,7 +355,8 @@ def main(argv: list[str] | None = None) -> None:
         trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
         run_once(
             connector=connector, broker=broker, trade_manager=trade_manager, strategy=strategy,
-            symbol=args.symbol, timeframe=timeframe, timeframe_str="M1",
+            symbol=args.symbol, timeframe=Timeframe[args.scan_timeframe],
+            timeframe_str=args.scan_timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
         )
     finally:
