@@ -64,12 +64,32 @@ XauusdOrbLiquiditySweepStrategy was. Route through a Paper runner first.
 Timeframe: M1 is the spec's own scan bar and the default, but the class is not
 limited to it. The Opening Range accumulates by WALL-CLOCK (`local_time <
 scan_start`), not by counting bars, so any bar size produces the same range over
-the same window, and the breakout test reads whatever bar it is fed. Measured
-2026-09-09 by scripts/backtest_orb_breakout_live_class.py: driven over M1, M5
-and M15, this class proposes a setup on 100% of the days its backtest trades
-(676/676, 603/603, 542/542). An earlier version of this note claimed M1 was
-required -- that was true when the range was gated on a bar COUNT, and stopped
-being true when cd69d3b made it time-gated.
+the same window, and the breakout test reads whatever bar it is fed. An earlier
+version of this note claimed M1 was required -- that was true when the range was
+gated on a bar COUNT, and stopped being true when cd69d3b made it time-gated.
+
+How closely it tracks its backtest (scripts/backtest_orb_breakout_live_class.py,
+re-measured 2026-09-09 under the runner's one-position gate):
+
+    XAUUSD 60m/M1 3R   agreement 75.8%   (592 shared days, 84 backtest-only, 105 live-only)
+    DJI30  60m/M1 4R   agreement 64.7%   (326 shared,       56 backtest-only, 122 live-only)
+    NDX100 30m/M5 4R   agreement 62.0%   (394 shared,       95 backtest-only, 146 live-only)
+    SPX500 60m/M1 4R   agreement 58.5%   (316 shared,       72 backtest-only, 152 live-only)
+
+An earlier revision of that script reported 100% on all three. It was measuring
+recall against the backtest's day list only, with no position gate, so a live
+side that fired on 2.5x more days still scored perfectly. These figures are the
+symmetric (Jaccard) ones and are the honest description.
+
+The gap is NOT timeframe-dependent (M1 scores highest and lowest here) -- it is
+the entry-price convention compounding. The backtest fills at the next bar's
+open, this class reports the breakout bar's close; that few-cent difference
+moves which bar resolves SL/TP, which moves when the single allowed position
+frees up, which changes whether the NEXT day is even eligible. One divergent
+trade re-phases everything after it. Using the next bar's open here would be a
+real lookahead bug, so the gap is accepted rather than closed -- but it means
+the backtest PF is a guide, not a forecast. Quote the walk-forward's honest
+PF 1.1-1.3 band, not the backtest's 1.3-1.5.
 
 Safety: this class only ever RETURNS a TradeSetup candidate; it never places
 an order.

@@ -81,8 +81,12 @@ def live_configs() -> dict[str, dict]:
         sym = _flag(text, "symbol")
         if not sym:
             continue
+        # scan-timeframe must be read, not assumed: NDX100 runs --scan-timeframe
+        # M5 live, and benchmarking it against an M1 backtest would report a
+        # divergence that is purely this script's own.
         out[sym] = dict(tp_r=float(_flag(text, "tp-r", "3.0")),
                         or_minutes=int(_flag(text, "or-minutes", "15")),
+                        scan_minutes=int(str(_flag(text, "scan-timeframe", "M1")).lstrip("Mm")),
                         risk_pct=float(_flag(text, "risk-per-trade-pct", "0.005")),
                         bat=bat.name)
     return out
@@ -166,13 +170,14 @@ def sweep_baseline(symbol: str, cfg: dict) -> dict:
                 green=consistency(t)["green_pct"], per_month=len(t) / span_months)
 
 
-def backtest_baseline(symbol: str, cfg: dict, days: int) -> dict:
+def backtest_baseline(symbol: str, cfg: dict) -> dict:
     csv = DATA_DIR / f"{symbol}_M1.csv"
     if not csv.exists():
         return {}
     sp = recent_spread(csv)
     tr = orb_mod.run_backtest(str(csv), "full", sp, cfg["tp_r"], "long",
-                              or_minutes=cfg["or_minutes"], scan_minutes=1)
+                              or_minutes=cfg["or_minutes"],
+                              scan_minutes=cfg["scan_minutes"])
     t = [(date.fromisoformat(str(x.day)[:10]), x.r_multiple) for x in tr]
     n, wr, pf, net = agg([v for _, v in t])
     since = date.today() - timedelta(days=365)
@@ -191,7 +196,8 @@ def main() -> None:
     deployed: list[tuple[str, str, str, dict]] = []
     for sym, cfg in live_configs().items():
         deployed.append(("Breakout", sym,
-                         f"{cfg['or_minutes']}m OR / M1 / {cfg['tp_r']:g}R", cfg))
+                         f"{cfg['or_minutes']}m OR / M{cfg['scan_minutes']} / "
+                         f"{cfg['tp_r']:g}R", cfg))
     for sym, cfg in sweep_configs().items():
         deployed.append(("Sweep", sym,
                          f"{cfg['bar_minutes']}m OR / {cfg['entry_end']:%H:%M} / {cfg['tp_r']:g}R", cfg))
@@ -213,7 +219,7 @@ def main() -> None:
             print(f"\n### {sym} / {family}   -- SONDURULUB (task disabled), atlanir")
             continue
         rows = [r for r in live.get(sym, []) if r["strategy"] == family]
-        base = (backtest_baseline(sym, cfg, args.days) if family == "Breakout"
+        base = (backtest_baseline(sym, cfg) if family == "Breakout"
                 else sweep_baseline(sym, cfg))
         print(f"\n### {sym} / {family}   ({label}, risk {cfg['risk_pct']*100:g}%)")
         if not base:

@@ -18,6 +18,19 @@ fills at the next bar's open; the live class can only know the breakout bar's
 close when the signal fires, and the real fill lands on the following poll --
 a documented, deliberate gap (see the class's own module docstring).
 
+THE ONE-POSITION GATE IS PART OF THE COMPARISON. The backtest holds at most one
+position at a time and keeps it open ACROSS days until SL or TP is hit (`if
+in_position: ... continue` skips every entry check meanwhile); at 4R that can
+be many days. run_live_nasdaq_orb.run_once enforces the same thing -- it returns
+after _manage_open_trade whenever this strategy already owns a position on the
+symbol. An earlier version of this script drove the strategy class with no such
+gate and so counted a setup on every breakout day, including the days the
+backtest was still holding. It reported "100% agreement" on the strength of
+recall alone: NDX100 30m/M5 scored 489/489 matched while the ungated class also
+proposed on 717 further days. Both directions are now reported, and the
+headline number is the symmetric one (Jaccard), so an inflated live-side count
+can no longer read as perfect agreement.
+
 Usage:
     python -m scripts.backtest_orb_breakout_live_class --symbol XAUUSD --or-minutes 60 --scan-minutes 5
 """
@@ -59,20 +72,36 @@ class _State:
 
 def run_live_class(df, or_minutes: int, tp_r: float, symbol: str,
                    timeframe: Timeframe) -> list[tuple[date, str, float, float]]:
+    """Drives the live class bar by bar under the runner's one-position gate.
+
+    While a setup's virtual position is open, the bar is only checked against
+    that position's SL/TP -- the strategy is not consulted, exactly as
+    run_once() skips _evaluate_for_new_trade whenever it already owns a
+    position. The position is priced off the setup itself (entry = the
+    breakout close the class reports, SL = its stop) rather than the
+    backtest's next-bar open, which is the honest live-side price.
+    """
     strategy = NasdaqOrbM1BreakoutStrategy(
         config=NasdaqOrbM1BreakoutConfig(or_minutes=or_minutes, tp_r=tp_r, direction="long")
     )
     state = _State(symbol, timeframe)
     out = []
+    open_sl = open_tp = None
     for ts, row in df.iterrows():
-        state.set(Bar(timestamp=ts, open=float(row.open), high=float(row.high),
-                      low=float(row.low), close=float(row.close),
-                      volume=float(row.volume), spread=0.0))
+        high, low = float(row.high), float(row.low)
+        if open_sl is not None:
+            # LONG-only, matching the swept/deployed direction.
+            if low <= open_sl or high >= open_tp:
+                open_sl = open_tp = None
+            continue
+
+        state.set(Bar(timestamp=ts, open=float(row.open), high=high, low=low,
+                      close=float(row.close), volume=float(row.volume), spread=0.0))
         setup = strategy.evaluate(state)
         if setup is not None:
-            sl, _ = setup.stop_zone, setup.target_zone
-            out.append((ts.astimezone(NY).date(), setup.direction.name,
-                        setup.entry_zone[0], setup.stop_zone[0]))
+            entry, stop = setup.entry_zone[0], setup.stop_zone[0]
+            out.append((ts.astimezone(NY).date(), setup.direction.name, entry, stop))
+            open_sl, open_tp = stop, entry + tp_r * abs(entry - stop)
     return out
 
 
@@ -112,8 +141,13 @@ def main() -> None:
     print(f"  hər ikisinde        : {len(both)}")
     print(f"  yalniz backtest-de  : {len(only_bt)}")
     print(f"  yalniz canli sinifde: {len(only_live)}")
-    denom = max(len(bt_days), 1)
-    print(f"  uygunluq            : {len(both) / denom * 100:.1f}%")
+    # Jaccard, not recall: |both| / |union|. Recall alone reads 100% whenever
+    # the live side is a superset, which is exactly the failure this script
+    # used to hide -- see the module docstring.
+    union = max(len(bt_days | live_days), 1)
+    print(f"  uygunluq (Jaccard)  : {len(both) / union * 100:.1f}%")
+    print(f"  ...bundan tutum     : {len(both) / max(len(bt_days), 1) * 100:.1f}% "
+          f"(backtest gunlerinin nece faizini tutur)")
     for label, days in (("yalniz backtest", only_bt), ("yalniz canli", only_live)):
         if days:
             sample = sorted(days)[:8]

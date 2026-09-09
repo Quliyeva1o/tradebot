@@ -73,18 +73,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--scan-timeframe", default="M1", choices=["M1", "M5", "M15"],
         help="Bar size the breakout scan runs on. M1 is the spec's own and the "
-             "default. The strategy is timeframe-agnostic despite what its docstring "
-             "used to say -- the opening range accumulates by wall-clock, not bar "
-             "count -- and scripts/backtest_orb_breakout_live_class.py measures 100%% "
-             "agreement with the backtest on M1, M5 and M15 alike.",
+             "default. The strategy is timeframe-agnostic -- the opening range "
+             "accumulates by wall-clock, not bar count -- so any of these is valid. "
+             "Agreement with the backtest is 58-76%% of trading days on every scan "
+             "size alike (see the strategy module docstring); M5 is not worse than "
+             "M1 on that measure.",
     )
     parser.add_argument(
         "--or-minutes", type=int, default=15,
         help="Opening Range width in minutes. 15 is the original spec; the 2026-09-09 "
              "walk-forward found XAUUSD's 60 keeps the same return (+179R vs +173R) at "
              "less than half the drawdown (22.0R vs 50.1R) and is green in 9/9 folds. "
-             "Only the OR widens -- the breakout scan stays on M1, which is the only "
-             "timeframe this strategy class accepts.",
+             "This widens only the OR; the breakout scan bar is --scan-timeframe's "
+             "separate concern.",
     )
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
@@ -283,7 +284,6 @@ def run_once(
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    timeframe = Timeframe.M1
 
     global _CURRENT_MODE
     _CURRENT_MODE = "paper" if args.paper else "live"
