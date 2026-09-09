@@ -196,6 +196,38 @@ def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: P
         _log_trade_event("closed", symbol=symbol, position_id=position.id, outcome=action.value)
 
 
+def _log_sizing(symbol: str, trade_manager: TradeManager, setup_id: str) -> None:
+    """Records what the position sizer actually did, and warns when it had to
+    exceed the risk budget.
+
+    The volume_min clamp can only ever raise risk: when the budget buys less
+    than one minimum lot the venue has no smaller size to sell, so the trade
+    goes on at more than the requested percentage. Nothing surfaced that before
+    2026-09-09, when an NDX100 Demo entry sized 0.01 lots against a 172.5-point
+    stop and risked 0.688% of a $5,008 account instead of 0.5%. Only NDX100 is
+    affected at this account size, and it stops being affected once equity is
+    large enough to buy a lot inside the budget -- so this logs the condition
+    rather than blocking the trade.
+    """
+    sizer = trade_manager._position_sizer
+    s = getattr(sizer, "last_sizing", None) if sizer is not None else None
+    if s is None:
+        return
+    _log_trade_event("sizing", symbol=symbol, setup_id=setup_id, volume=s.volume,
+                     wanted_volume=round(s.wanted_volume, 4),
+                     risk_amount=round(s.risk_amount, 2),
+                     actual_risk=round(s.actual_risk, 2),
+                     risk_multiple=round(s.risk_multiple, 3),
+                     clamped_to_min=s.clamped_to_min)
+    if s.clamped_to_min:
+        want_pct = sizer.risk_per_trade_pct * 100
+        logger.warning(
+            "RISK BUDCESI ASILDI %s: %.4f lot lazim idi, minimum %.2f verildi -- "
+            "risk $%.2f evezine $%.2f (%.2fx; hedef %.3f%%, faktiki %.3f%%)",
+            symbol, s.wanted_volume, s.volume, s.risk_amount, s.actual_risk,
+            s.risk_multiple, want_pct, want_pct * s.risk_multiple,
+        )
+
 def _evaluate_for_new_trade(
     trade_manager: TradeManager,
     broker: IBroker,
@@ -242,6 +274,7 @@ def _evaluate_for_new_trade(
         _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id,
                          order_id=order.order_id, fill_price=order.fill_price,
                          stop_loss=sl, take_profit=tp)
+        _log_sizing(symbol, trade_manager, setup.setup_id)
     else:
         open_result = trade_manager.last_open_result
         reason = open_result.comment if open_result is not None else "unknown"

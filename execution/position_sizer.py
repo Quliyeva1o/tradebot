@@ -8,10 +8,48 @@ IBroker.get_symbol_constraints().
 """
 
 import math
+from dataclasses import dataclass
 
 from config.settings import Settings
 from core.models import SymbolConstraints
 from core.validation import require_positive
+
+
+@dataclass(frozen=True)
+class SizingOutcome:
+    """What the last calculate_size() call actually did.
+
+    Exists because the volume_min clamp is silent and can only ever raise risk.
+    When the risk budget buys less than one minimum lot there is no way to
+    honour it -- the venue has no smaller size -- so the sizer returns the
+    minimum and the trade risks more than asked. Nothing recorded that.
+
+    Measured live 2026-09-09: NDX100 on a $5,008 account at 0.5% wanted 0.0073
+    lots against a 172.5-point stop; the 0.01 minimum made the real risk $34.50,
+    or 0.688%. Across the deployed symbols only NDX100 is affected (median
+    min-lot risk 0.829% against a 0.5% target); the others sit at 0.004-0.408%.
+    On a prop account with a daily-loss limit, an unintended 1.7x on one symbol
+    is exactly what breaches it, so it needs to be visible rather than inferred
+    afterwards from the P&L.
+
+    Attributes:
+        volume: The lot size returned.
+        wanted_volume: The unrounded size the risk budget actually bought.
+        risk_amount: The intended risk in account currency.
+        actual_risk: What `volume` really risks if the stop is hit.
+        clamped_to_min: True when volume_min raised the size above the budget.
+    """
+
+    volume: float
+    wanted_volume: float
+    risk_amount: float
+    actual_risk: float
+    clamped_to_min: bool
+
+    @property
+    def risk_multiple(self) -> float:
+        """actual_risk / risk_amount -- 1.0 when the budget was honoured."""
+        return self.actual_risk / self.risk_amount if self.risk_amount > 0 else 1.0
 
 
 class PositionSizer:
@@ -33,6 +71,9 @@ class PositionSizer:
             risk_per_trade_pct if risk_per_trade_pct is not None else Settings.load().RISK_PER_TRADE_PCT
         )
         require_positive(self.risk_per_trade_pct, "risk_per_trade_pct")
+        # Set by every calculate_size() call; read by the live runners so a
+        # clamped (over-budget) size is logged instead of passing silently.
+        self.last_sizing: SizingOutcome | None = None
 
     def calculate_size(
         self,
@@ -63,14 +104,26 @@ class PositionSizer:
 
         distance_price = abs(entry_price - stop_loss)
         if distance_price == 0.0:
+            self.last_sizing = None
             return 0.0
 
         risk_amount = balance * self.risk_per_trade_pct
         distance_ticks = distance_price / constraints.tick_size
         loss_per_lot = distance_ticks * constraints.tick_value
         if loss_per_lot == 0.0:
+            self.last_sizing = None
             return 0.0
 
         raw_volume = risk_amount / loss_per_lot
         stepped_volume = math.floor(raw_volume / constraints.volume_step) * constraints.volume_step
-        return max(constraints.volume_min, min(stepped_volume, constraints.volume_max))
+        volume = max(constraints.volume_min, min(stepped_volume, constraints.volume_max))
+        self.last_sizing = SizingOutcome(
+            volume=volume,
+            wanted_volume=raw_volume,
+            risk_amount=risk_amount,
+            actual_risk=volume * loss_per_lot,
+            # Only the LOW clamp is a risk problem. volume_max clamps downward,
+            # which under-risks -- undesirable but never dangerous.
+            clamped_to_min=volume > stepped_volume,
+        )
+        return volume
