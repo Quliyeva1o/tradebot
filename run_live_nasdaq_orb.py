@@ -69,6 +69,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--symbol", required=True, help="MT5 symbol name (this account's ticker)")
     parser.add_argument("--tp-r", type=float, required=True, help="Take-profit R multiple (symbol-specific, see module docstring)")
+    parser.add_argument(
+        "--or-minutes", type=int, default=15,
+        help="Opening Range width in minutes. 15 is the original spec; the 2026-09-09 "
+             "walk-forward found XAUUSD's 60 keeps the same return (+179R vs +173R) at "
+             "less than half the drawdown (22.0R vs 50.1R) and is green in 9/9 folds. "
+             "Only the OR widens -- the breakout scan stays on M1, which is the only "
+             "timeframe this strategy class accepts.",
+    )
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
@@ -324,7 +332,9 @@ def main(argv: list[str] | None = None) -> None:
         daily_risk_tracker.check_and_update(account_info.equity, account_info.login)
 
         strategy = NasdaqOrbM1BreakoutStrategy(
-            config=NasdaqOrbM1BreakoutConfig(tp_r=args.tp_r, direction=args.direction)
+            config=NasdaqOrbM1BreakoutConfig(
+                tp_r=args.tp_r, direction=args.direction, or_minutes=args.or_minutes
+            )
         )
         position_sizer = PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
         trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
