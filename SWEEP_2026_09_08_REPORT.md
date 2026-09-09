@@ -1,6 +1,6 @@
 # Strategiya/Simvol/Timeframe/R Sweep Hesabatı — 2026-09-08
 
-Bu sessiyada **168+ backtest case** işlədildi: üç strategiya × 7 simvol × müxtəlif
+Bu sessiyada **195 backtest case** işlədildi: üç strategiya × 7 simvol × müxtəlif
 R-hədəfləri və timeframe kombinasiyaları. Bütün qaçışlar FundingPips-Trial
 hesabının öz M1 datası üzərindədir (bu gün 13:47-13:53 UTC-yə qədər yenilənib),
 hər simvol **öz 2026 orta spread-i** ilə yüklənib (paylaşılan sabit deyil).
@@ -26,7 +26,7 @@ PF/win-rate/netR eynidir. Sizing ayrıca (Monte Carlo / ruin-riski) qərarıdır
 
 ## 1. Breakout (NASDAQ ORB M1 Breakout) — açıq lider
 
-**30 müsbət konfiqurasiya.** Ən yaxşı 5-i (hamısı XAUUSD):
+**40 müsbət konfiqurasiya.** Ən yaxşı 5-i (hamısı XAUUSD):
 
 | # | OR / skan | n | PF | netR | Son 1 il PF |
 |---|---|---|---|---|---|
@@ -56,15 +56,36 @@ Breakout üçün **R artdıqca nəticə yaxşılaşır** (XAUUSD/GER40/JP225-də
 
 ### Simvol verdikti (son 1 il də daxil)
 
-| Simvol | Status |
-|---|---|
-| **XAUUSD** | ✅ ən güclü — bütün R və timeframe-lərdə müsbət |
-| **GER40** | ✅ müsbət (3R/4R, uzun OR-lar daha yaxşı) |
-| **JP225** | ✅ 4R-də müsbət (1.181 / 1.063) |
-| **FTSE100** | ✅ 3R/4R-də müsbət (1.104 / 1.129) |
-| NDX100 | ⚠️ 30m/M5 və 30m/M15-də müsbət, amma 15m/M1-də son 1 il **0.915** |
-| DJI30 | ⚠️ yalnız 5m və 60m/M5-də, digərlərində son 1 il mənfi |
-| SPX500 | ❌ son 1 il demək olar hər konfiqurasiyada mənfi (0.73-0.77) |
+| Simvol | Status | Ən yaxşı timeframe cütlüyü |
+|---|---|---|
+| **XAUUSD** | ✅ ən güclü — hər R və timeframe-də müsbət | 60m/M15 → 1.558 / 1.604 |
+| **GER40** | ✅ müsbət | 30m/M1 → 1.264 / 1.106 |
+| **SPX500** | ✅ **yalnız uzun OR ilə** (aşağıda) | 60m/M5 → 1.260 / **1.298** |
+| **JP225** | ✅ müsbət | 15m/M5 → 1.211 / 1.065 |
+| **FTSE100** | ✅ müsbət | 15m/M5 → 1.100 / **1.191** |
+| NDX100 | ⚠️ 30m-də müsbət, 15m/M1-də son 1 il **0.915** | 30m/M15 → 1.328 / 1.285 |
+| DJI30 | ⚠️ yalnız 5m və 60m/M5-də | 5m/M1 → 1.233 / 1.078 |
+
+### SPX500 — ilkin rədd qərarı SƏHV idi
+
+Bu hesabatın ilk versiyasında SPX500 "son 1 ildə demək olar hər konfiqurasiyada
+mənfi" deyə rədd edilmişdi. Həmin qiymətləndirmə **yalnız 15m/M1 konfiqurasiyasına**
+əsaslanırdı — timeframe grid tamamlananda mənzərə tərsinə çevrildi:
+
+| OR / skan | Tam | Son 1 il |
+|---|---|---|
+| 5m/M1 · 15m/M1 | 1.108 · 1.124 | **0.763 · 0.719** ❌ |
+| 30m/M5 | 1.248 | **1.243** ✅ |
+| 30m/M15 | **1.302** | **1.172** ✅ |
+| 60m/M5 | 1.260 | **1.298** ✅ |
+
+### Ümumi qanunauyğunluq: uzun opening range üstündür
+
+XAUUSD, SPX500, GER40, NDX100 və FTSE100-də eyni nümunə təkrarlanır — 30-60
+dəqiqəlik opening range 5-15 dəqiqəlikdən yaxşıdır. Bu, tək bir xananın
+təsadüfü deyil, 5 simvolda müstəqil təkrarlanan effektdir. Yeganə istisna
+JP225-dir (60m-də mənfiyə düşür). **Hazırkı canlı konfiqurasiya (15m OR) bu
+spektrin zəif ucundadır.**
 
 ---
 
@@ -165,29 +186,56 @@ bütün 60m sətirləri `n=0` verirdi. İndi şəbəkə 09:30-a bağlanır.
 
 ## 5. Nəticə və növbəti addımlar
 
-1. **Breakout hər üç ölçüdə (say, PF, sübut möhkəmliyi) liderdir** — 30 müsbət
-   konfiqurasiya, ən yaxşıları n=465-839 nümunə ilə.
+1. **Breakout hər üç ölçüdə (say, PF, sübut möhkəmliyi) liderdir** — 40 müsbət
+   konfiqurasiya, ən yaxşıları n=465-839 nümunə ilə. Ümumi 48-dən 40-ı onundur.
 2. **Canlı konfiqurasiyaların heç biri optimal deyil:**
    - Breakout XAUUSD: 15m/M1 (PF 1.241) yerinə **60m/M15** (PF 1.558) və ya
      **15m/M5** (netR +205R)
    - LiqSweep XAUUSD: 5m/10:00 (son 1 il **0.969**) yerinə **15m/12:00**
      (son 1 il 1.398)
-3. **Yeni namizəd simvollar:** JP225 4R və FTSE100 4R Breakout üçün hər iki
-   pəncərədə müsbətdir; NDX100 15m/2R First FVG üçün.
-4. **SPX500 rədd edilir** — son 1 ildə demək olar bütün konfiqurasiyalarda mənfi.
+3. **Ən mühüm struktural tapıntı: uzun opening range (30-60m) qısa olandan
+   üstündür** — 5 simvolda müstəqil təkrarlanır. Canlı qurulum 15m ilə bu
+   spektrin zəif ucundadır.
+4. **Simvol siyahısı genişləndi:** XAUUSD və GER40-a əlavə olaraq **SPX500
+   (yalnız 30-60m OR), JP225 və FTSE100** da Breakout üçün hər iki pəncərədə
+   müsbətdir. NDX100 və DJI30 marjinaldır (yalnız bəzi timeframe-lərdə).
+   First FVG üçün isə yalnız NDX100 15m/2R.
+
+**Növbəti addım tövsiyəsi:** ən yaxşı 3-5 namizədi (XAUUSD 60m/M15, XAUUSD
+15m/M5, SPX500 60m/M5) walk-forward + bootstrap-dan keçirmək. Yalnız o
+testlərdən sonra canlı konfiqurasiyanı dəyişmək məsələsi müzakirə edilməlidir.
 
 ### Vacib xəbərdarlıq — çoxlu müqayisə
 
-38 müsbət nəticə **168+ case**-dən seçilib. Ən yuxarıdakı PF-lər bu səbəbdən
+48 müsbət nəticə **195 case**-dən seçilib. Ən yuxarıdakı PF-lər bu səbəbdən
 bir qədər şişikdir (grid-in ən yaxşı xanasını seçmək edge-i sistematik
 şişirdir). **Heç bir konfiqurasiya bu hesabata əsasən birbaşa canlıya
 çıxarılmamalıdır** — əvvəlcə walk-forward / bootstrap / out-of-sample təsdiqi
 lazımdır, bu layihənin öz metodologiyasına (`ADVANCED_VALIDATION_REPORT.md`,
 `ROBUSTNESS_VALIDATION_REPORT.md`) uyğun olaraq.
 
-### Tamamlanmamış hissə
+SPX500 nümunəsi bu xəbərdarlığın əks tərəfini də göstərir: dar grid **yanlış
+mənfi** də verə bilər — bir konfiqurasiyaya baxıb simvolu rədd etmək, onun
+işləyən konfiqurasiyasını gözdən qaçırmaq deməkdir.
 
-Breakout timeframe sweep 7 simvoldan **4.5-ində** tamamlandı (XAUUSD, GER40,
-NDX100, DJI30 tam; SPX500 6/9). **JP225 və FTSE100 üçün timeframe grid
-işlədilməyib** — onlar yalnız R-grid-də (15m/M1) test olunub. Təkrar işə salmaq
-üçün: `python -m scripts.breakout_timeframe_sweep --symbols JP225,FTSE100`.
+---
+
+## 6. Canlı hesabın real nəticəsi (ilk 2 gün)
+
+| Tarix | Simvol | Nəticə | P&L |
+|---|---|---|---|
+| 2026-09-07 | XAUUSD (Breakout) | TP | +$118.56 |
+| 2026-09-08 | XAUUSD (Breakout) | SL | −$99.96 |
+| | | **Net** | **+$18.60** |
+
+Balans $5,000 → $5,013.92. İki trade statistik olaraq heç nə sübut etmir; texniki
+tərəf isə tam işləyir (siqnal → market order → broker tərəfində SL/TP icrası).
+
+**Qeyd — əl müdaxiləsi:** 08.09 mövqeyinin (ticket 12149514) stop-u açıldıqdan
+sonra 4387.38-dən 4390.38-ə (düz +3.00) dəyişib. Nə bot, nə də bu sessiya
+etməyib — canlı kodda SL dəyişdirən heç bir yol yoxdur (`TradeManager.on_new_bar`
+yalnız səviyyələri yoxlayır, `TRADE_ACTION_SLTP` çağırışı yalnız 07.09-un TP
+düzəlişində istifadə olunub). Ehtimal ki terminalda əl ilə dartılıb. Nəticəyə
+təsiri olmayıb — qiymət 4341.27-yə qədər düşüb, yəni hər iki stop səviyyəsi
+vurulacaqdı; hündür stop itkini ~$18 azaldıb. **Canlı nəticəni backtest ilə
+müqayisə edərkən bu cür əl müdaxilələri nəzərə alınmalıdır.**
