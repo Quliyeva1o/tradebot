@@ -56,6 +56,20 @@ DEFAULT_LOOKBACK_DAYS = 2
 DEFAULT_VOLUME = 0.1
 DEFAULT_RISK_PER_TRADE_PCT = 0.005
 
+# How long after the breakout a setup may still be acted on, in WALL-CLOCK
+# minutes rather than bars -- a fixed bar count means 3 minutes on M1 and 45 on
+# M15, and only one of those is defensible. 4 minutes comfortably covers the
+# 2-minute poll cadence plus jitter (the gap that used to make even-minute M1
+# breakouts unreachable, see _evaluate_for_new_trade) while keeping a real fill
+# close to the backtest's next-bar-open assumption. Always at least one bar.
+SIGNAL_GRACE_MINUTES = 4
+
+
+def _grace_bars(timeframe_str: str) -> int:
+    """SIGNAL_GRACE_MINUTES converted to this timeframe's bar count."""
+    per_bar = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}.get(timeframe_str, 1)
+    return max(1, SIGNAL_GRACE_MINUTES // per_bar)
+
 _CURRENT_MODE = "live"
 
 
@@ -235,18 +249,53 @@ def _evaluate_for_new_trade(
     bars: list[Bar],
     symbol: str,
     timeframe: Timeframe,
+    grace_bars: int,
     kill_switch_flag_path: Path | None = None,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (a fresh strategy instance only ever sees ONE bar per evaluate() call
-    otherwise, so its day-scoped state would never accumulate), and acts
-    only on the setup -- if any -- returned for the FINAL (newest) bar.
+    otherwise, so its day-scoped state would never accumulate), and acts on the
+    newest setup produced within the last SIGNAL_GRACE_BARS bars.
+
+    THE GRACE WINDOW IS A BUG FIX, NOT A CONVENIENCE. This loop used to keep
+    only the setup returned for the FINAL bar, and the strategy latches
+    `_day_trade_taken` the moment it sees the breakout -- so every bar after it
+    returns None and the signal existed for exactly ONE bar. A poll whose newest
+    bar was not that exact bar could never see it.
+
+    That is fatal on M1, because the polls are phase-locked. The Scheduled Tasks
+    fire every 2 minutes while M1 bars close every minute, so a given bot's
+    newest bar is always the same parity: measured over 200 real polls on
+    2026-09-09, XAUUSD/DJI30/SPX500/JP225/GER40 saw an odd-minute bar as their
+    newest 98-100% of the time. An even-minute breakout was therefore not
+    unlucky, it was unreachable -- half of all signals, deterministically.
+
+    Caught when JP225 broke its opening range at 09:52 NY on 2026-09-09 (M1
+    close 64839.99 against an OR high of 64815.01) and the bot logged 340
+    consecutive no_signal events. NDX100 was unaffected the same day and traded
+    normally, because an M5 bar stays newest across two or three polls.
+
+    The grace window is deliberately small. Acting on a setup a few bars old
+    means entering later than the backtest's next-bar-open assumption, which is
+    a real cost; chasing a breakout twenty bars later is a different trade
+    altogether, and skipping it is correct. The delay is logged on every entry
+    so the cost stays measurable.
     """
     market_state = MarketState(symbol=symbol, timeframe=timeframe)
     setup = None
-    for b in bars:
+    bars_since_signal = 0
+    for i, b in enumerate(bars):
         market_state.append_bar(b)
-        setup = strategy.evaluate(market_state)
+        found = strategy.evaluate(market_state)
+        if found is not None:
+            setup, bars_since_signal = found, len(bars) - 1 - i
+
+    if setup is not None and bars_since_signal > grace_bars:
+        logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
+                    symbol, bars_since_signal, grace_bars)
+        _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
+                         bars_since_signal=bars_since_signal)
+        setup = None
 
     if setup is None:
         reasons = top_rejection_reasons({"strategy": strategy.diagnostics.summary()})
@@ -273,7 +322,8 @@ def _evaluate_for_new_trade(
         sl, tp = resolve_stop_and_target(setup)
         _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id,
                          order_id=order.order_id, fill_price=order.fill_price,
-                         stop_loss=sl, take_profit=tp)
+                         stop_loss=sl, take_profit=tp,
+                         bars_since_signal=bars_since_signal)
         _log_sizing(symbol, trade_manager, setup.setup_id)
     else:
         open_result = trade_manager.last_open_result
@@ -312,7 +362,8 @@ def run_once(
         _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
-    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path)
+    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
+                            _grace_bars(timeframe_str), kill_switch_flag_path)
 
 
 def main(argv: list[str] | None = None) -> None:

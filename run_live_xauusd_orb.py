@@ -68,6 +68,21 @@ DEFAULT_LOOKBACK_DAYS = 3
 DEFAULT_VOLUME = 0.1
 DEFAULT_RISK_PER_TRADE_PCT = 0.005  # 0.5% -- the strategy's own validated default, see module docstring
 
+# See run_live_nasdaq_orb.py's SIGNAL_GRACE_MINUTES for the full account of the
+# bug this closes. Same shape here: XauusdOrbLiquiditySweepStrategy latches
+# `_trades_today` on the entry bar, so the setup existed for exactly one bar and
+# a poll whose newest bar was not that bar could never see it. These bots run
+# M15, where one bar spans seven polls, so the phase lock that cost the M1 bots
+# half their signals does not bite -- but a single missed or slow poll still
+# loses the day, and there is no reason to leave that open.
+SIGNAL_GRACE_MINUTES = 4
+
+
+def _grace_bars(timeframe_str: str) -> int:
+    """SIGNAL_GRACE_MINUTES converted to this timeframe's bar count."""
+    per_bar = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}.get(timeframe_str, 15)
+    return max(1, SIGNAL_GRACE_MINUTES // per_bar)
+
 _CURRENT_MODE = "live"
 
 
@@ -244,18 +259,30 @@ def _evaluate_for_new_trade(
     bars: list[Bar],
     symbol: str,
     timeframe: Timeframe,
+    grace_bars: int,
     kill_switch_flag_path: Path | None = None,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (a fresh strategy instance only ever sees ONE bar per evaluate() call
-    otherwise, so its day-scoped state would never accumulate), and acts
-    only on the setup -- if any -- returned for the FINAL (newest) bar.
+    otherwise, so its day-scoped state would never accumulate), and acts on the
+    newest setup produced within the last `grace_bars` bars -- see
+    SIGNAL_GRACE_MINUTES above for why the final bar alone is not enough.
     """
     market_state = MarketState(symbol=symbol, timeframe=timeframe)
     setup = None
-    for b in bars:
+    bars_since_signal = 0
+    for i, b in enumerate(bars):
         market_state.append_bar(b)
-        setup = strategy.evaluate(market_state)
+        found = strategy.evaluate(market_state)
+        if found is not None:
+            setup, bars_since_signal = found, len(bars) - 1 - i
+
+    if setup is not None and bars_since_signal > grace_bars:
+        logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
+                    symbol, bars_since_signal, grace_bars)
+        _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
+                         bars_since_signal=bars_since_signal)
+        setup = None
 
     if setup is None:
         reasons = top_rejection_reasons({"strategy": strategy.diagnostics.summary()})
@@ -276,7 +303,9 @@ def _evaluate_for_new_trade(
     if order.status is OrderStatus.FILLED:
         assert order.fill_price is not None
         logger.info("Trade opened for %s: order_id=%s fill_price=%.5f", symbol, order.order_id, order.fill_price)
-        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id, fill_price=order.fill_price)
+        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id,
+                         order_id=order.order_id, fill_price=order.fill_price,
+                         bars_since_signal=bars_since_signal)
         _log_sizing(symbol, trade_manager, setup.setup_id)
     else:
         open_result = trade_manager.last_open_result
@@ -315,7 +344,8 @@ def run_once(
         _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
-    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe, kill_switch_flag_path)
+    _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
+                            _grace_bars(timeframe_str), kill_switch_flag_path)
 
 
 def main(argv: list[str] | None = None) -> None:
