@@ -220,7 +220,41 @@ if warnings:
     print(f"\n({len(warnings)} xeberdarliq, bloklayici deyil:)")
     for w in warnings:
         print(f"   - {w}")
-print("\nNovbeti addim:")
-print("  powershell -ExecutionPolicy Bypass -File .\\deploy\\install_tasks.ps1 -PaperOnly")
-print("  bir sessiya izleyin, sonra Demo-lari acin.")
+# Report what IS running rather than a generic next step. This used to close
+# with "next: install the paper tasks" on every run, including on a healthy
+# machine mid-session -- which reads as "your Demo bots are not on yet" and
+# invites a pointless re-install.
+try:
+    import subprocess
+    _q = ("Get-ScheduledTask | Where-Object { $_.TaskName -match '^Orb' } | "
+          "ForEach-Object { $_.TaskName + '=' + $_.State }")
+    _out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", _q],
+                          capture_output=True, text=True, timeout=30).stdout
+    _tasks = dict(l.strip().split("=", 1) for l in _out.splitlines() if "=" in l)
+except Exception as exc:  # noqa: BLE001 - cosmetic; never block on this
+    print(f"\n(task siyahisi oxunmadi: {type(exc).__name__})")
+    _tasks = {}
+
+if _tasks:
+    _demo = {k: v for k, v in _tasks.items() if k.endswith("_Demo")}
+    _paper = {k: v for k, v in _tasks.items() if k.endswith("_Paper")}
+    _live = sum(1 for v in _demo.values() if v != "Disabled")
+    print(f"\nQURULU TASKLAR: {_live}/{len(_demo)} Demo aciq, "
+          f"{sum(1 for v in _paper.values() if v != 'Disabled')}/{len(_paper)} Paper aciq")
+    for k in sorted(_demo):
+        print(f"   {'ACIQ  ' if _demo[k] != 'Disabled' else 'bagli '} {k}")
+    if _live == 0:
+        # Every Demo off is the normal state for a machine that handed its bots
+        # over to another one -- the workstation looks exactly like this after
+        # the 2026-09-10 VPS migration. Saying "the rest are intentionally off"
+        # here would be wrong and would hide a genuinely dead machine.
+        print("\nBu masinda HEC BIR Demo bot islemir -- baska masina verilibse normaldir,")
+        print("olmasa acin: powershell -ExecutionPolicy Bypass -File .\\deploy\\install_tasks.ps1")
+    else:
+        print("\nBagli olanlar qesdendir -- simvolu basqa bot tutub, bax deploy/demo_roster.txt")
+        print("Elave addim lazim deyil.")
+else:
+    print("\nHec bir Orb task qurulmayib. Evvelce YALNIZ paper:")
+    print("  powershell -ExecutionPolicy Bypass -File .\\deploy\\install_tasks.ps1 -PaperOnly")
+    print("  bir sessiya izleyin, sonra -PaperOnly-siz tekrarlayin.")
 sys.exit(0)
