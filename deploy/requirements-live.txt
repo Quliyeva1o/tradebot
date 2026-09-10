@@ -1,0 +1,27 @@
+# Runtime-only dependencies for a trading VPS.
+#
+# The full requirements.txt also pulls pytest, mypy, ruff, black, matplotlib,
+# reportlab and the stub packages. Those exist for development and for the
+# backtest/analysis scripts, none of which run on the VPS -- the live bots only
+# fetch bars from MT5, evaluate a strategy and place orders. Installing them
+# anyway costs install time and adds packages that can break an upgrade for no
+# benefit, so the VPS gets this list instead.
+#
+# Install:
+#   .venv\Scripts\pip install -r deploy\requirements-live.txt
+#
+# If you ever want to run a backtest ON the VPS (you normally should not -- the
+# ~1GB of history CSVs live on the workstation), install the full
+# requirements.txt there instead.
+
+pandas>=2.2.0
+numpy>=1.26.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Windows ships no IANA tz database, and every strategy here is defined against
+# America/New_York via zoneinfo. Without this the bots cannot resolve the
+# session at all -- they do not degrade, they raise.
+tzdata>=2024.1
+
+MetaTrader5>=5.0.45; sys_platform == 'win32'
