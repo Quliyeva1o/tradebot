@@ -1,0 +1,33 @@
+# Which *_Demo tasks may place real orders. One bot per symbol, no exceptions.
+#
+# WHY THIS FILE EXISTS: a .bat exists for every strategy/symbol pair, so
+# install_tasks.ps1 registers eighteen tasks. Enabling all of them puts TWO
+# Demo bots on GER40, JP225 and XAUUSD, and two bots on one symbol do not
+# co-operate -- _partition_positions() sees the other's position as foreign and
+# blocks entry, so whichever polls first wins and the other logs
+# foreign_position_blocks_entry forever. That happened on XAUUSD on 2026-09-08
+# (37 blocked entries in the log) and again on the VPS build on 2026-09-10.
+#
+# The allocation was a real decision, made per symbol on the numbers, but it
+# lived only in Task Scheduler's enabled/disabled state -- nowhere in the repo.
+# Rebuild from scratch and it was silently lost. Now it is version-controlled.
+#
+# Anything NOT listed here is disabled by install_tasks.ps1. Paper tasks are
+# unaffected: they use per-strategy state files, never collide, and running
+# both sides on a symbol is how the losing config stays measurable.
+
+# --- Breakout owns these four ---
+OrbBreakout_XAUUSD_Demo      # 60m OR / M1 / 3R -- PF 1.389, 9/9 folds, DD 20.9R
+OrbBreakout_NDX100_Demo      # 30m OR / M5 / 4R -- PF 1.329, 7/9 folds
+OrbBreakout_SPX500_Demo      # 60m OR / M1 / 4R -- PF 1.326, 6/8 folds
+OrbBreakout_DJI30_Demo       # 60m OR / M1 / 4R -- PF 1.205, 7/9 folds
+
+# --- Sweep owns GER40 ---
+OrbSweep_GER40_Demo          # 15m OR / 11:00 / 2R -- PF 1.547, 1y 1.761, DD 6.6R
+
+# --- JP225 went to Breakout on 2026-09-09 (commit b7f87c5) ---
+# Neither family can be fold-tested on JP225 (2.4y of data, a 24+6 fold needs
+# 30 months), so this was slot allocation under acknowledged uncertainty:
+# Breakout has 336 trades to Sweep's 55, ~+20R/year to ~+3R, return/drawdown
+# 2.50 to 1.53. Sweep's small drawdown is an artifact of trading twice a month.
+OrbBreakout_JP225_Demo       # 15m OR / M1 / 4R

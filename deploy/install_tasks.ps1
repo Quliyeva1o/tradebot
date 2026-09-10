@@ -130,6 +130,50 @@ foreach ($bat in $bats) {
 }
 
 Write-Host "`n$made task qeydiyyatdan kecdi."
+
+# --- enforce one Demo bot per symbol -----------------------------------------
+# A .bat exists for every strategy/symbol pair, so the loop above registers a
+# Demo task for all of them -- which puts TWO on GER40, JP225 and XAUUSD. Two
+# bots on one symbol do not share: _partition_positions() reads the other's
+# position as foreign and refuses to enter, so one wins and the other logs
+# foreign_position_blocks_entry indefinitely. deploy/demo_roster.txt records
+# which one owns each symbol and why; anything absent from it is disabled here.
+$rosterFile = Join-Path $PSScriptRoot 'demo_roster.txt'
+if (-not (Test-Path $rosterFile)) { $rosterFile = Join-Path $RepoPath 'deploy\demo_roster.txt' }
+
+if (Test-Path $rosterFile) {
+    $roster = Get-Content $rosterFile |
+        ForEach-Object { ($_ -split '#')[0].Trim() } |
+        Where-Object { $_ }
+    Write-Host "`nDemo roster ($($roster.Count) simvol sahibi):"
+
+    $demoTasks = Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orb*_Demo' }
+    foreach ($t in $demoTasks) {
+        $wanted = $roster -contains $t.TaskName
+        if ($PSCmdlet.ShouldProcess($t.TaskName, $(if ($wanted) { 'Enable' } else { 'Disable' }))) {
+            if ($wanted) {
+                Enable-ScheduledTask -TaskName $t.TaskName | Out-Null
+                Write-Host ("  ACIQ    {0}" -f $t.TaskName)
+            } else {
+                Disable-ScheduledTask -TaskName $t.TaskName | Out-Null
+                Write-Host ("  sondu   {0}  (rosterde yoxdur -- simvolu basqa bot tutub)" -f $t.TaskName)
+            }
+        }
+    }
+
+    $dupes = Get-ScheduledTask |
+        Where-Object { $_.TaskName -like 'Orb*_Demo' -and $_.State -ne 'Disabled' } |
+        Group-Object { ($_.TaskName -split '_')[1] } |
+        Where-Object { $_.Count -gt 1 }
+    if ($dupes) {
+        Write-Warning ("BIR SIMVOLDA IKI DEMO BOT: " +
+            (($dupes | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', '))
+    } else {
+        Write-Host "  -> her simvolda tam bir Demo bot, toqqusma yoxdur"
+    }
+} else {
+    Write-Warning "demo_roster.txt tapilmadi -- Demo tasklar el ile yoxlanmalidir"
+}
 Write-Host @"
 
 BUNDAN SONRA, SIRA ILE:
