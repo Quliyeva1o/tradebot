@@ -110,6 +110,30 @@ if states:
 else:
     ok("daily_risk_state qaliqi yoxdur")
 
+# Paper broker state was TRACKED IN GIT until 2026-09-10, so `git clone` handed
+# a new machine the old one's virtual balance and, worse, its OPEN positions.
+# The first VPS build inherited an open NDX100 paper trade and closed it at SL
+# while the workstation still held the same one. Untracked now, but a machine
+# cloned before that fix still carries them, and the check costs nothing.
+import json as _json
+paper = list((REPO / "risk").glob("paper_broker_state_*.json")) if (REPO / "risk").exists() else []
+inherited = []
+for f in paper:
+    try:
+        d = _json.loads(f.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a corrupt file is not this check's business
+        continue
+    if d.get("positions"):
+        inherited.append(f"{f.name} ({len(d['positions'])} aciq movqe)")
+if inherited:
+    warn("paper state ACIQ MOVQE ile gelib -- basqa masinin islemleridir, silin: "
+         + ", ".join(inherited))
+elif paper:
+    warn(f"{len(paper)} paper state faylı var (aciq movqe yoxdur) -- kohne masindan "
+         "gelibse silin ki, forward qeydi temiz baslasin")
+else:
+    ok("paper state qaliqi yoxdur")
+
 # -------------------------------------------------------------------- 4. MT5
 print("\n4) MT5 terminal ve hesab")
 try:

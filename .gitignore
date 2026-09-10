@@ -46,6 +46,13 @@ risk/daily_risk_state_nasdaq_orb_*_paper.json
 # always 0 bytes, recreated on demand, and five of them were tracked by
 # accident -- a checked-out lock file serves no purpose.
 risk/*.json.lock
+# Paper-broker virtual balances and OPEN POSITIONS. Per-machine runtime
+# state, exactly like daily_risk_state above -- but these four were
+# tracked by accident, so the 2026-09-10 VPS migration inherited the
+# workstation's open NDX100 paper position through git clone and closed
+# it on the new box while the old one still held it. A clone must start
+# with an empty paper account, not somebody else's trades.
+risk/paper_broker_state_*.json
 
 # Superseded backtest outputs, archived locally on 2026-08-27 (see
 # SESSION_HANDOFF.md). Kept out of git deliberately: they were produced
