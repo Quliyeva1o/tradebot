@@ -304,10 +304,16 @@ def _evaluate_for_new_trade(
         if not same_day:
             setup = None
         elif bars_since_signal > grace_bars:
-            logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
-                        symbol, bars_since_signal, grace_bars)
-            _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
-                             bars_since_signal=bars_since_signal)
+            # Report only the near-miss window. Each poll re-derives the same
+            # setup, so an unactioned signal would otherwise log an expiry every
+            # two minutes until the session ends -- 748 lines on 2026-09-09,
+            # JP225 alone counting from 55 bars stale up to 424. The first few
+            # are the informative ones; after that it is the same fact repeated.
+            if bars_since_signal <= grace_bars * 5:
+                logger.info("Signal for %s is %d bars old (grace %d); too late to act on.",
+                            symbol, bars_since_signal, grace_bars)
+                _log_trade_event("signal_expired", symbol=symbol, setup_id=setup.setup_id,
+                                 bars_since_signal=bars_since_signal)
             setup = None
 
     if setup is None:

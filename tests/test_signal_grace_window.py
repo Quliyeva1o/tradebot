@@ -159,3 +159,20 @@ def test_yesterdays_setup_is_dropped_silently_not_reported_as_expired():
     assert setup.timestamp.astimezone(NY).date() == date(2026, 9, 8)
     # The runner's own same-day test is what rejects it.
     assert setup.timestamp.astimezone(NY).date() != bars[-1].timestamp.astimezone(NY).date()
+
+
+@pytest.mark.parametrize(
+    "age,should_log",
+    [(5, True), (10, True), (20, True), (21, False), (100, False)],
+)
+def test_expiry_is_logged_only_while_it_is_still_a_near_miss(age, should_log):
+    """Grace is 4 bars on M1, so expiries log from 5 to 20 and then go quiet.
+
+    Every poll re-derives the same setup, so an unactioned signal used to log an
+    expiry every two minutes for the rest of the session: 748 events on
+    2026-09-09, JP225 alone counting from 55 bars stale up to 424. The first few
+    carry the information; the rest bury it.
+    """
+    grace = nasdaq_runner._grace_bars("M1")
+    assert grace * 5 == 20
+    assert (grace < age <= grace * 5) is should_log
