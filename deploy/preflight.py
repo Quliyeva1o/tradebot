@@ -25,6 +25,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -103,24 +104,38 @@ if flags:
 else:
     ok("kill-switch flag yoxdur")
 
-states = list((REPO / "risk").glob("daily_risk_state*.json")) if (REPO / "risk").exists() else []
-if states:
-    warn(f"{len(states)} eded daily_risk_state faylı var -- kohne masindan gelibse "
-         "silin, kohne hesabin equity baseline-i yalanci kill-switch tetikleyir")
+# Paper state files are per-machine and are recreated on first poll, so their
+# mere presence means nothing -- warning about them every run just trained the
+# reader to ignore this section. The trap is narrower: the LIVE tracker's
+# day_start_equity carried over from a DIFFERENT account. On 2026-09-02 it held
+# 99998.14 against a ~5000 account, which reads as a 95% loss and halted every
+# real order for days. That is what gets checked, against the live equity.
+live_state = REPO / "risk" / "daily_risk_state.json"
+if live_state.exists():
+    try:
+        d = json.loads(live_state.read_text(encoding="utf-8"))
+        base = float(d.get("day_start_equity", 0))
+    except (OSError, ValueError, TypeError) as exc:
+        # Deliberately narrow. A bare `except Exception` here already swallowed
+        # a NameError once and silently turned this whole check into a no-op --
+        # a check that cannot fail loudly is worse than no check.
+        warn(f"daily_risk_state.json oxunmadi ({type(exc).__name__}) -- el ile baxin")
+        base = 0.0
+    _live_baseline = base          # compared against real equity in section 4
 else:
-    ok("daily_risk_state qaliqi yoxdur")
+    _live_baseline = None
+    ok("canli daily_risk_state yoxdur (ilk qacisda yaranacaq)")
 
 # Paper broker state was TRACKED IN GIT until 2026-09-10, so `git clone` handed
 # a new machine the old one's virtual balance and, worse, its OPEN positions.
 # The first VPS build inherited an open NDX100 paper trade and closed it at SL
 # while the workstation still held the same one. Untracked now, but a machine
 # cloned before that fix still carries them, and the check costs nothing.
-import json as _json
 paper = list((REPO / "risk").glob("paper_broker_state_*.json")) if (REPO / "risk").exists() else []
 inherited = []
 for f in paper:
     try:
-        d = _json.loads(f.read_text(encoding="utf-8"))
+        d = json.loads(f.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - a corrupt file is not this check's business
         continue
     if d.get("positions"):
@@ -147,6 +162,14 @@ try:
                 bad("MT5 hesaba giris edilmeyib")
             else:
                 ok(f"hesab {ai.login} @ {ai.server}  equity {ai.equity:.2f} {ai.currency}")
+                if _live_baseline:
+                    drift = abs(_live_baseline - ai.equity) / max(ai.equity, 1)
+                    if drift > 0.5:
+                        bad(f"KILL-SWITCH TELESI: daily_risk_state.json-da gun-baslangic "
+                            f"equity {_live_baseline:.2f}, hesabda ise {ai.equity:.2f} "
+                            f"({drift*100:.0f}% ferq) -- basqa hesabdan qalib, SILIN")
+                    else:
+                        ok(f"canli risk baseline hesabla uygundur ({_live_baseline:.2f})")
                 if ai.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
                     warn(f"hesab DEMO deyil (trade_mode={ai.trade_mode}) -- "
                          "runnerlerin demo qoruyucusu real orderi rədd edecek")
