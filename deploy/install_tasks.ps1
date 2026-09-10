@@ -183,10 +183,15 @@ BUNDAN SONRA, SIRA ILE:
      (Ctrl+E). Bagli qalarsa real orderler sessizce retcode 10027 ile redd
      olunur -- bu layihede artiq bir defe bas verib.
   2. .env faylini kopyalayin (git-de yoxdur: MT5_LOGIN/PASSWORD/SERVER/PATH).
-  3. python -m venv .venv;  .venv\Scripts\pip install -r requirements.txt
-  4. Yalniz PAPER tasklari acin, bir sessiya izleyin, sonra Demo-lari acin:
-       Get-ScheduledTask -TaskName 'Orb*_Demo' | Enable-ScheduledTask
-  5. Yoxlayin: logs\run_live_nasdaq_orb.log ve
+  3. python -m venv .venv
+     .venv\Scripts\pip install -r deploy\requirements-live.txt
+       (tam requirements.txt YOX -- pytest/matplotlib serverde islenmir)
+  4. Hazir olub-olmadigini yoxlayin -- hec ne deyismir, yalniz oxuyur:
+       .venv\Scripts\python.exe deploy\preflight.py
+  5. Demo tasklar deploy\demo_roster.txt-e gore acilir/sondurulur.
+     Simvolun sahibini deyismek ucun HEMIN FAYLI redakte edin, Task
+     Scheduler-i el ile deyil -- yoxsa novbeti qurulusda geri qayidir.
+  6. Yoxlayin: logs\run_live_nasdaq_orb.log ve
        Get-ScheduledTask | ? TaskName -match '^Orb' |
          % { '{0} {1}' -f `$_.TaskName, (`$_ | Get-ScheduledTaskInfo).LastTaskResult }
      Hamisinin neticesi 0 olmalidir.
