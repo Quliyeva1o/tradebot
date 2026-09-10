@@ -50,12 +50,29 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$RepoPath = (Split-Path -Parent $PSScriptRoot),
+    [string]$RepoPath,
     [int]$IntervalMinutes = 2,
     [switch]$PaperOnly
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolve the repo AFTER parameter binding, not as a param default.
+# $PSScriptRoot is empty while defaults are evaluated under
+# `powershell -File script.ps1`, which is exactly how this gets run on a fresh
+# VPS -- a clean Windows blocks .ps1 otherwise. Dot-invoking it from an open
+# session happens to work, which is why the first version passed here and
+# failed there.
+if (-not $RepoPath) {
+    $scriptDir = if ($PSScriptRoot) {
+        $PSScriptRoot
+    } elseif ($MyInvocation.MyCommand.Path) {
+        Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        throw "RepoPath tapilmadi -- -RepoPath C:	radebot seklinde acig verin"
+    }
+    $RepoPath = Split-Path -Parent $scriptDir
+}
 
 $vbs = Join-Path $RepoPath 'run_hidden.vbs'
 if (-not (Test-Path $vbs)) { throw "run_hidden.vbs tapilmadi: $vbs -- RepoPath duzgundurmu?" }
