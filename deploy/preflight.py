@@ -145,7 +145,14 @@ try:
                 if si is None:
                     bad(f"{s} TAPILMADI -- broker adlandirmasi ferqli ola biler")
                 elif not si.visible:
-                    warn(f"{s} Market Watch-da gorunmur -- symbol_select lazim ola biler")
+                    # Not blocking: MT5Connector.fetch_recent_bars calls
+                    # mt5.symbol_select(symbol, True) before every fetch
+                    # (mt5/connector.py:106), so the bot adds it to Market Watch
+                    # itself on first run. Reported only so a genuinely absent
+                    # symbol is not confused with a merely unselected one --
+                    # that case raises [XXX] above instead.
+                    warn(f"{s} Market Watch-da gorunmur -- bloklayici DEYIL, "
+                         "bot ilk qacisda ozu elave edir (connector.py:106)")
                 else:
                     ok(f"{s} hazir (trade_mode={si.trade_mode})")
         finally:
