@@ -37,6 +37,7 @@ from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
 from execution.trade_manager import TradeManager
+from execution.traded_setups import already_traded, record_traded
 from mt5.connector import MT5Connector
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
@@ -166,6 +167,14 @@ def _log_trade_event(event: str, **fields: object) -> None:
 STRATEGY_TAG = "setup_nasdaq_orb_m1"
 
 
+def _traded_setups_path(risk_dir: Path, symbol_tag: str, paper: bool) -> Path:
+    """Where this bot remembers the setups it has opened -- see execution/traded_setups.py.
+
+    The Paper and Demo twins open the same setup ids on purpose, so each keeps its own file.
+    """
+    return risk_dir / f"traded_setups_nasdaq_orb_{symbol_tag}{'_paper' if paper else ''}.json"
+
+
 def _partition_positions(
     positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
 ) -> tuple[list[Position], list[Position]]:
@@ -254,6 +263,7 @@ def _evaluate_for_new_trade(
     timeframe: Timeframe,
     grace_bars: int,
     kill_switch_flag_path: Path | None = None,
+    traded_setups_path: Path | None = None,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (a fresh strategy instance only ever sees ONE bar per evaluate() call
@@ -323,6 +333,15 @@ def _evaluate_for_new_trade(
         _log_trade_event("no_signal", symbol=symbol)
         return
 
+    # Nothing else remembers that this setup was already traded: a broker-side stop
+    # inside the grace window leaves the next poll with no position and the same
+    # setup still fresh -- see execution/traded_setups.py.
+    if traded_setups_path is not None and already_traded(traded_setups_path, setup.setup_id):
+        logger.info("Setup %s for %s was already traded; not opening it again.", setup.setup_id, symbol)
+        _log_trade_event("setup_already_traded", symbol=symbol, setup_id=setup.setup_id,
+                         bars_since_signal=bars_since_signal)
+        return
+
     logger.info("RESULT: SIGNAL %s %s @ %s", setup.symbol, setup.direction.name, setup.timestamp)
     _log_trade_event("signal_found", symbol=symbol, direction=setup.direction.name, setup_id=setup.setup_id)
 
@@ -334,6 +353,8 @@ def _evaluate_for_new_trade(
     order = trade_manager.open_trade(setup, broker)
     if order.status is OrderStatus.FILLED:
         assert order.fill_price is not None
+        if traded_setups_path is not None:
+            record_traded(traded_setups_path, setup.setup_id)
         logger.info("Trade opened for %s: order_id=%s fill_price=%.5f", symbol, order.order_id, order.fill_price)
         # stop/target are recorded here so a later live-vs-backtest comparison can
         # compute this trade's real R-multiple; the broker's own close comment
@@ -362,6 +383,7 @@ def run_once(
     timeframe_str: str,
     lookback_days: int,
     kill_switch_flag_path: Path | None = None,
+    traded_setups_path: Path | None = None,
 ) -> None:
     bars_per_day = {"M1": 1440, "M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6}.get(timeframe_str, 1440)
     lookback_bars = lookback_days * bars_per_day
@@ -382,7 +404,8 @@ def run_once(
         return
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
-                            _grace_bars(timeframe_str), kill_switch_flag_path)
+                            _grace_bars(timeframe_str), kill_switch_flag_path,
+                            traded_setups_path=traded_setups_path)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -461,6 +484,7 @@ def main(argv: list[str] | None = None) -> None:
             symbol=args.symbol, timeframe=Timeframe[args.scan_timeframe],
             timeframe_str=args.scan_timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
+            traded_setups_path=_traded_setups_path(risk_dir, symbol_tag, args.paper),
         )
     finally:
         connector.disconnect()

@@ -62,3 +62,7 @@ artifacts/old/
 
 # Claude Code local (machine-specific) permission overrides
 .claude/settings.local.json
+
+# Per-bot record of setups already opened (execution/traded_setups.py) -- runtime
+# state like the paper broker files above; never tracked, never cloned to a new machine.
+risk/traded_setups_*.json
