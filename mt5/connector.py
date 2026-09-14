@@ -156,11 +156,12 @@ class MT5Connector:
         """READ-ONLY: fetches `symbol`'s contract-size/tick-value/volume constraints.
 
         This method NEVER places orders, modifies positions, or calls any
-        MT5 trading function -- it only calls mt5.symbol_info(). Safe to
-        call against a live (non-demo) account. Used by execution.PositionSizer
-        to convert a risk percentage into a real lot size (see
-        execution/mt5_broker.py and execution/paper_broker.py's
-        get_symbol_constraints(), which both delegate here).
+        MT5 trading function -- it only calls mt5.symbol_info() and the
+        calculator mt5.order_calc_profit(). Safe to call against a live
+        (non-demo) account. Used by execution.PositionSizer to convert a risk
+        percentage into a real lot size (see execution/mt5_broker.py and
+        execution/paper_broker.py's get_symbol_constraints(), which both
+        delegate here).
 
         Args:
             symbol: Trading instrument symbol (e.g. "USTEC").
@@ -179,8 +180,51 @@ class MT5Connector:
             symbol=symbol,
             contract_size=info.trade_contract_size,
             tick_size=info.trade_tick_size,
-            tick_value=info.trade_tick_value,
+            tick_value=_tick_value(symbol, info),
             volume_min=info.volume_min,
             volume_max=info.volume_max,
             volume_step=info.volume_step,
         )
+
+
+def _tick_value(symbol: str, info) -> float:
+    """Account-currency value of one tick on one lot, as MT5 itself prices a trade.
+
+    trade_tick_value cannot be trusted on its own. FundingPips reports 0.01 for
+    XAUUSD (tick 0.01, 100 oz contract), i.e. $1 a point per lot, while
+    order_calc_profit() and the account's real fills say $100 -- on 2026-09-08
+    a 16.56-point stop on 0.06 lots lost $100.26. PositionSizer divided the risk
+    budget by the understated figure, asked for ~100x the lots, and only the 20%
+    margin ceiling cut that back, so gold traded at 0.8-1.9% risk against a 0.5%
+    setting (4-6% at the 60m config's wider stops). NDX100, GER40 and JP225 agree
+    between the two sources.
+
+    The value is derived over a 1%-of-price move rather than a single tick,
+    because order_calc_profit() rounds to account-currency cents: one JP225 tick
+    is $0.000648 per lot and would round to 0.00.
+
+    Falls back to trade_tick_value when there is no quote or the calculator
+    returns nothing usable, which is the pre-existing behaviour.
+    """
+    reported = info.trade_tick_value
+    tick_size = info.trade_tick_size
+    price = getattr(info, "ask", 0.0) or getattr(info, "bid", 0.0)
+    if not price or not tick_size or tick_size <= 0:
+        return reported
+
+    ticks = max(1, round(price * 0.01 / tick_size))
+    try:
+        profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, 1.0, price, price + ticks * tick_size)
+    except Exception as exc:  # a metadata calc must never break sizing
+        logger.warning("order_calc_profit failed for %s (%s); using reported tick_value.", symbol, type(exc).__name__)
+        return reported
+    if not isinstance(profit, int | float) or isinstance(profit, bool) or profit <= 0:
+        return reported
+
+    derived = profit / ticks
+    if not reported or abs(derived - reported) / derived > 0.01:
+        logger.warning(
+            "%s: broker trade_tick_value %s disagrees with order_calc_profit (%.6g per tick); using the latter.",
+            symbol, reported, derived,
+        )
+    return derived

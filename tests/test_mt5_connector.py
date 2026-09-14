@@ -25,8 +25,13 @@ def _symbol_constraints_info(
     volume_min: float = 0.01,
     volume_max: float = 100.0,
     volume_step: float = 0.01,
+    ask: float = 0.0,
 ) -> SimpleNamespace:
-    """Minimal stand-in for MT5's SymbolInfo, exposing the constraint fields read."""
+    """Minimal stand-in for MT5's SymbolInfo, exposing the constraint fields read.
+
+    `ask` defaults to 0.0 -- no live quote -- which leaves fetch_symbol_info() on
+    the broker-reported tick value without consulting mt5.order_calc_profit().
+    """
     return SimpleNamespace(
         trade_contract_size=contract_size,
         trade_tick_size=tick_size,
@@ -34,6 +39,8 @@ def _symbol_constraints_info(
         volume_min=volume_min,
         volume_max=volume_max,
         volume_step=volume_step,
+        ask=ask,
+        bid=ask,
     )
 
 
@@ -259,3 +266,60 @@ class TestFetchSymbolInfo:
         with patch("mt5.connector.mt5.symbol_info", return_value=None):
             with pytest.raises(RuntimeError, match="symbol_info"):
                 connector.fetch_symbol_info("USTEC")
+
+    def test_derives_tick_value_from_mt5_profit_calc_when_broker_misreports_it(self) -> None:
+        # FundingPips XAUUSD, 2026-09-14: symbol_info reports 0.01 per 0.01 tick on a
+        # 100 oz contract ($1 a point per lot); real fills and order_calc_profit()
+        # both say $100. Trusting the reported value sized entries ~100x too large.
+        connector = MT5Connector()
+        with (
+            patch(
+                "mt5.connector.mt5.symbol_info",
+                return_value=_symbol_constraints_info(
+                    contract_size=100.0, tick_size=0.01, tick_value=0.01, ask=4326.15
+                ),
+            ),
+            patch(
+                "mt5.connector.mt5.order_calc_profit",
+                side_effect=lambda _type, _sym, volume, open_, close: round((close - open_) * 100.0 * volume, 2),
+            ),
+            patch("mt5.connector.mt5.order_send") as mock_order_send,
+        ):
+            constraints = connector.fetch_symbol_info("XAUUSD")
+
+        assert constraints.tick_value == pytest.approx(1.0, rel=1e-3)
+        mock_order_send.assert_not_called()
+
+    def test_tick_value_survives_account_currency_rounding_on_tiny_tick_values(self) -> None:
+        # JP225 on a USD account: one 0.01 tick is worth $0.000648 per lot, which
+        # order_calc_profit() rounds to 0.00. The derivation must use a move large
+        # enough to survive that 2-decimal rounding.
+        connector = MT5Connector()
+        with (
+            patch(
+                "mt5.connector.mt5.symbol_info",
+                return_value=_symbol_constraints_info(
+                    contract_size=10.0, tick_size=0.01, tick_value=0.000648, ask=63512.51
+                ),
+            ),
+            patch(
+                "mt5.connector.mt5.order_calc_profit",
+                side_effect=lambda _type, _sym, volume, open_, close: round((close - open_) * 0.0648 * volume, 2),
+            ),
+        ):
+            constraints = connector.fetch_symbol_info("JP225")
+
+        assert constraints.tick_value == pytest.approx(0.000648, rel=1e-3)
+
+    def test_keeps_reported_tick_value_when_profit_calc_is_unavailable(self) -> None:
+        connector = MT5Connector()
+        with (
+            patch(
+                "mt5.connector.mt5.symbol_info",
+                return_value=_symbol_constraints_info(tick_size=0.01, tick_value=0.2, ask=28990.08),
+            ),
+            patch("mt5.connector.mt5.order_calc_profit", return_value=None),
+        ):
+            constraints = connector.fetch_symbol_info("NDX100")
+
+        assert constraints.tick_value == 0.2
