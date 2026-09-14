@@ -193,6 +193,43 @@ def backtest_baseline(symbol: str, cfg: dict) -> dict:
                 per_month=len(t) / max((max(d for d, _ in t) - min(d for d, _ in t)).days / 30.4, 1))
 
 
+def _report_bot(sym: str, family: str, label: str, cfg: dict, rows: list[dict], base: dict) -> tuple[int, float]:
+    """Prints one bot's section and returns (closed trades, P&L) for the totals.
+
+    Live trades are printed whether or not a backtest baseline exists. The VPS
+    has no data/history CSVs on purpose, and while a missing baseline also
+    skipped the live trades, a run there on 2026-09-14 reported "0 trades" for
+    an account that had closed seven. Only the verdict needs the baseline.
+    """
+    print(f"\n### {sym} / {family}   ({label}, risk {cfg['risk_pct']*100:g}%)")
+    if base:
+        print(f"   BACKTEST gozlentisi : PF {base['pf']:.3f} (son 1 il {base['pf_1y']:.3f})  "
+              f"WR {base['wr']:.1f}%  yasil ay {base['green']:.0f}%  ~{base['per_month']:.1f} trade/ay")
+    else:
+        print("   BACKTEST            : backtest datasi yoxdur (bu masinda data/history yoxdur) -- yalniz canli")
+    if not rows:
+        print("   CANLI               : bu dovrde bagli trade yoxdur")
+        return 0, 0.0
+    wins = [r for r in rows if r["profit"] > 0]
+    pnl = sum(r["profit"] for r in rows)
+    gp = sum(r["profit"] for r in wins)
+    gl = abs(sum(r["profit"] for r in rows if r["profit"] <= 0))
+    pf_live = (gp / gl) if gl > 0 else float("inf")
+    print(f"   CANLI               : PF {pf_live:.3f}  WR {len(wins)/len(rows)*100:.1f}%  "
+          f"n={len(rows)}  P&L ${pnl:+,.2f}")
+    for r in sorted(rows, key=lambda x: x["day"]):
+        print(f"      {r['day']}  {r['reason']:2}  giris {r['entry']:>10.2f}  "
+              f"cixis {r['exit']:>10.2f}  ${r['profit']:>+8.2f}")
+
+    # Loose consistency check -- see module docstring on why the band is wide.
+    if base and len(rows) >= 5:
+        if pf_live < 0.7 * base["pf_1y"]:
+            print("   >>> DIQQET: canli PF gozlentinin xeyli altindadir, arasdirilmalidir")
+        elif pf_live > 1.0:
+            print("   >>> gozlenti ile uyusur")
+    return len(rows), pnl
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30, help="canli tarixceden nece gun geriye baxilsin")
@@ -226,34 +263,9 @@ def main() -> None:
         rows = [r for r in live.get(sym, []) if r["strategy"] == family]
         base = (backtest_baseline(sym, cfg) if family == "Breakout"
                 else sweep_baseline(sym, cfg))
-        print(f"\n### {sym} / {family}   ({label}, risk {cfg['risk_pct']*100:g}%)")
-        if not base:
-            print("   backtest datasi yoxdur")
-            continue
-        print(f"   BACKTEST gozlentisi : PF {base['pf']:.3f} (son 1 il {base['pf_1y']:.3f})  "
-              f"WR {base['wr']:.1f}%  yasil ay {base['green']:.0f}%  ~{base['per_month']:.1f} trade/ay")
-        if not rows:
-            print("   CANLI               : bu dovrde bagli trade yoxdur")
-            continue
-        wins = [r for r in rows if r["profit"] > 0]
-        pnl = sum(r["profit"] for r in rows)
-        gp = sum(r["profit"] for r in wins)
-        gl = abs(sum(r["profit"] for r in rows if r["profit"] <= 0))
-        pf_live = (gp / gl) if gl > 0 else float("inf")
+        n, pnl = _report_bot(sym, family, label, cfg, rows, base)
+        total_n += n
         total_profit += pnl
-        total_n += len(rows)
-        print(f"   CANLI               : PF {pf_live:.3f}  WR {len(wins)/len(rows)*100:.1f}%  "
-              f"n={len(rows)}  P&L ${pnl:+,.2f}")
-        for r in sorted(rows, key=lambda x: x["day"]):
-            print(f"      {r['day']}  {r['reason']:2}  giris {r['entry']:>10.2f}  "
-                  f"cixis {r['exit']:>10.2f}  ${r['profit']:>+8.2f}")
-
-        # Loose consistency check -- see module docstring on why the band is wide.
-        if len(rows) >= 5:
-            if pf_live < 0.7 * base["pf_1y"]:
-                print("   >>> DIQQET: canli PF gozlentinin xeyli altindadir, arasdirilmalidir")
-            elif pf_live > 1.0:
-                print("   >>> gozlenti ile uyusur")
 
     print("\n" + "-" * 104)
     print(f"CEMI: {total_n} bagli trade, P&L ${total_profit:+,.2f}")
