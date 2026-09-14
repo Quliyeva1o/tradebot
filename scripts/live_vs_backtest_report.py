@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -52,18 +51,25 @@ def _flag(text: str, name: str, default: str | None = None) -> str | None:
     return m.group(1) if m else default
 
 
-def _task_states() -> dict[str, str]:
-    """Scheduled Task state per task name, so a bot whose .bat still exists but
-    whose task is disabled is not reported as if it were trading."""
+def _roster(path: Path = REPO / "deploy" / "demo_roster.txt") -> set[str] | None:
+    """Demo bots the version-controlled roster says are live -- the same file
+    install_tasks.ps1 enables tasks from, so a bot whose .bat exists but is not
+    deployed is not reported as if it were trading.
+
+    This used to ask Task Scheduler on the machine running the report. That
+    stopped meaning anything on 2026-09-10: the bots moved to the VPS, every bot
+    task on this workstation was disabled on purpose, and the 2026-09-14 report
+    skipped all nine while the account had closed five trades that week.
+
+    Returns None when the file is missing, so the report shows every bot rather
+    than none.
+    """
     try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             "Get-ScheduledTask | Where-Object { $_.TaskName -match '^Orb' } | "
-             "ForEach-Object { $_.TaskName + '=' + $_.State }"],
-            capture_output=True, text=True, timeout=60, check=False).stdout
-    except Exception:  # noqa: BLE001 - state is a nicety; the report still works without it
-        return {}
-    return dict(line.strip().split("=", 1) for line in out.splitlines() if "=" in line)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    names = (line.split("#", 1)[0].split() for line in lines)
+    return {parts[0] for parts in names if parts}
 
 
 def _task_name(bat: str) -> str:
@@ -212,11 +218,10 @@ def main() -> None:
 
     total_profit = 0.0
     total_n = 0
-    states = _task_states()
+    roster = _roster()
     for family, sym, label, cfg in sorted(deployed):
-        state = states.get(_task_name(cfg["bat"]), "?")
-        if state == "Disabled":
-            print(f"\n### {sym} / {family}   -- SONDURULUB (task disabled), atlanir")
+        if roster is not None and _task_name(cfg["bat"]) not in roster:
+            print(f"\n### {sym} / {family}   -- demo_roster.txt-de yoxdur, atlanir")
             continue
         rows = [r for r in live.get(sym, []) if r["strategy"] == family]
         base = (backtest_baseline(sym, cfg) if family == "Breakout"
