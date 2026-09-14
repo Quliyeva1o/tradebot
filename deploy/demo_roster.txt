@@ -17,7 +17,7 @@
 # both sides on a symbol is how the losing config stays measurable.
 
 # --- Breakout owns these four ---
-OrbBreakout_XAUUSD_Demo      # 60m OR / M1 / 3R -- PF 1.389, 9/9 folds, DD 20.9R
+OrbBreakout_XAUUSD_Demo      # 15m OR / M1 / 4R -- PF 1.235, DD 50.2R; last 2y PF 1.496 (swapped with Paper's 60m/3R 2026-09-14)
 OrbBreakout_NDX100_Demo      # 30m OR / M5 / 4R -- PF 1.329, 7/9 folds
 OrbBreakout_SPX500_Demo      # 60m OR / M1 / 4R -- PF 1.326, 6/8 folds
 OrbBreakout_DJI30_Demo       # 60m OR / M1 / 4R -- PF 1.205, 7/9 folds
