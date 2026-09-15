@@ -226,7 +226,7 @@ if warnings:
 # invites a pointless re-install.
 try:
     import subprocess
-    _q = ("Get-ScheduledTask | Where-Object { $_.TaskName -match '^Orb' } | "
+    _q = ("Get-ScheduledTask | Where-Object { $_.TaskName -match '^(Orb|Fvg)' } | "
           "ForEach-Object { $_.TaskName + '=' + $_.State }")
     _out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", _q],
                           capture_output=True, text=True, timeout=30).stdout

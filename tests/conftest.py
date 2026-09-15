@@ -75,6 +75,8 @@ _ISOLATED_LOGGER_NAMES = (
     "live_signal_check",
     "trade_manager",
     "mt5_broker",
+    # tests/test_run_live_first_fvg_window.py drives run_once() with fake orders.
+    "run_live_first_fvg_window",
 )
 
 

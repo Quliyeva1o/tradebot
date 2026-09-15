@@ -12,8 +12,8 @@
     happened once in this project, producing tasks that ran with a missing .bat
     argument.
 
-    This derives the whole set from the run_live_orb_*.bat files actually
-    present, so the tasks can never drift from the launchers.
+    This derives the whole set from the run_live_orb_*.bat and run_live_fvg_*.bat
+    files actually present, so the tasks can never drift from the launchers.
 
     The live bots do NOT need data/history/*.csv (~1GB): they fetch bars from
     MT5 directly. Only the backtest and analysis scripts read those files, so a
@@ -77,19 +77,20 @@ if (-not $RepoPath) {
 $vbs = Join-Path $RepoPath 'run_hidden.vbs'
 if (-not (Test-Path $vbs)) { throw "run_hidden.vbs tapilmadi: $vbs -- RepoPath duzgundurmu?" }
 
-$bats = Get-ChildItem -Path $RepoPath -Filter 'run_live_orb_*.bat' | Sort-Object Name
+$bats = @(Get-ChildItem -Path $RepoPath -Filter 'run_live_orb_*.bat') +
+        @(Get-ChildItem -Path $RepoPath -Filter 'run_live_fvg_*.bat') | Sort-Object Name
 if ($PaperOnly) { $bats = $bats | Where-Object { $_.Name -like '*_paper.bat' } }
-if (-not $bats) { throw "run_live_orb_*.bat tapilmadi: $RepoPath" }
+if (-not $bats) { throw "run_live_orb_*.bat / run_live_fvg_*.bat tapilmadi: $RepoPath" }
 
 function Get-TaskNameFromBat {
     # run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo
+    # run_live_fvg_window_ndx100_paper.bat  -> FvgWindow_NDX100_Paper
     param([string]$Name)
-    $stem = $Name -replace '^run_live_orb_', '' -replace '\.bat$', ''
+    $stem = $Name -replace '^run_live_', '' -replace '\.bat$', ''
     $parts = $stem -split '_'
-    if ($parts.Count -ne 3) { return $null }
-    $family = $parts[0].Substring(0,1).ToUpper() + $parts[0].Substring(1)
-    $mode = $parts[2].Substring(0,1).ToUpper() + $parts[2].Substring(1)
-    return "Orb$family`_$($parts[1].ToUpper())`_$mode"
+    if ($parts.Count -ne 4) { return $null }
+    $cap = { param($s) $s.Substring(0,1).ToUpper() + $s.Substring(1) }
+    return "$(& $cap $parts[0])$(& $cap $parts[1])`_$($parts[2].ToUpper())`_$(& $cap $parts[3])"
 }
 
 Write-Host "Repo    : $RepoPath"
