@@ -77,6 +77,10 @@ _ISOLATED_LOGGER_NAMES = (
     "mt5_broker",
     # tests/test_run_live_first_fvg_window.py drives run_once() with fake orders.
     "run_live_first_fvg_window",
+    # tests/live_replay/test_runner_equivalence.py and tests/test_no_reentry_after_stopout.py
+    # call the ORB runners' own _evaluate_for_new_trade with fake orders.
+    "run_live_nasdaq_orb",
+    "run_live_xauusd_orb",
 )
 
 
