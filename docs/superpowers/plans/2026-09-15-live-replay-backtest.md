@@ -2732,3 +2732,19 @@ Report to the user in Azerbaijani: the gate results, the main table, which bots 
 **Spec coverage:** §2 scope → Task 1; §3 data → Tasks 2, 3, 5; §4.1-4.2 clock and signals → Tasks 6, 7, 8; §4.3-4.4 entry and sizing → Tasks 4, 8; §4.5 exits → Tasks 4, 8; §4.6 gaps → Tasks 5, 8; §4.7 swap → Tasks 4, 8; §5 architecture → the file layout of Tasks 1-11; §6 gates G1 → Tasks 1-6, 8, 10, 11, G2 → Task 7, G3 → Task 9, G4 → Task 11 (`spread_ratio`), G5 → Task 11 (`RECORDED_OLD_PF`); §7 outputs → Tasks 11, 12; §8 limitations → `render_report`.
 
 **Known gaps, deliberately:** the sweep's own unit coverage is thin (its synthetic setups are hard to hand-build) and rests on Task 7's equivalence test against the real runner; `OrbSweep_XAUUSD_Paper` and `OrbBreakout_GER40_Paper` have no recorded old PF, so G5 skips them; the report's `end` date is the newest bar, so "last year" moves with the data refresh.
+
+## Execution notes (2026-09-15)
+
+Deviations made while executing, each forced by a gate:
+
+- **Entries fill at a tick, not the bar open (found by G3, commit c67f21c).** Filling at the
+  M1 bar's open missed two of the ten real 2026-09-10..14 Demo entries by 10-15 points. The real
+  orders were stamped :04-:06 into their minute and MT5 truncates deal times to the second, so the
+  true mean latency is ~5.8 s. `TickCache.entry_quote` and `engine.POLL_OFFSET_SECONDS = 6` now
+  fill at the first tick six seconds into the poll's minute where ticks exist, falling back to the
+  bar open elsewhere; `Flags.entry_ticks` makes it ablatable and the report lists it.
+- **G3 judges entries by the quote range, not a point tolerance (commit aad5e94).** No fixed
+  latency reproduces every fill: the real orders landed anywhere in :04-:07, and JP225/NDX100 moved
+  up to 15 points inside that window. The test asserts the replay's entry lies within that window's
+  quote range plus ~0.3 spread of slippage; exits keep the one-spread tolerance.
+- The spec's §4.3 and §6 G3 were updated to match (same commit as the entry change).
