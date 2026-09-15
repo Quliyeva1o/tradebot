@@ -66,8 +66,36 @@ def test_a_stop_after_a_trading_break_fills_at_the_break_bars_close() -> None:
     assert (trade.exit, trade.exit_reason) == (99.2, "SL_GAP_PROXY")
 
 
+class _EntryTicks:
+    """Quotes a bid/ask of 101.7/101.8 five seconds into every minute; no gap ticks."""
+
+    def entry_quote(self, symbol, minute_start, offset_seconds):
+        return (101.7, 101.8)
+
+    def first_crossing(self, symbol, start, direction, level, seconds=300):
+        return None
+
+
+def test_with_ticks_a_buy_fills_at_the_ask_five_seconds_into_the_poll() -> None:
+    trade = _run(_session(DAY, FLAT), ticks=_EntryTicks())[0]
+    assert trade.entry == pytest.approx(101.8)
+
+
+def test_the_entry_tick_flag_falls_back_to_the_bar_open() -> None:
+    trade = _run(_session(DAY, FLAT), ticks=_EntryTicks(), flags=Flags(entry_ticks=False))[0]
+    assert trade.entry == pytest.approx(101.6)
+
+
+def test_without_the_spread_a_tick_entry_takes_the_bid() -> None:
+    trade = _run(_session(DAY, FLAT), ticks=_EntryTicks(), flags=Flags(spread=False))[0]
+    assert trade.entry == pytest.approx(101.7)
+
+
 def test_real_ticks_override_the_gap_proxy() -> None:
     class _Ticks:
+        def entry_quote(self, symbol, minute_start, offset_seconds):
+            return None
+
         def first_crossing(self, symbol, start, direction, level, seconds=300):
             return 99.6
 

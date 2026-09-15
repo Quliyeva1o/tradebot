@@ -29,6 +29,11 @@ from backtest.live_replay.ticks import TickCache
 POLL_SECONDS = 120            # the VPS Scheduled Task interval
 TRADING_BREAK_SECONDS = 1800  # execution/paper_broker.py's _TRADING_BREAK
 GAP_TICK_WINDOW_SECONDS = 300
+# How far into its minute a poll's market order fills: the Scheduled Task has to start Python,
+# fetch bars and send the order. The real Demo entries were stamped :04-:06 (16:46:04, 17:10:06,
+# 18:46:05); MT5 truncates deal times to the second, so the true average is ~5.8 s. Against those
+# ten fills, 6 s gives the smallest mean error (2.4 points; 5 s gives 2.7).
+POLL_OFFSET_SECONDS = 6
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,7 @@ class Flags:
 
     poll_clock: bool = True   # False: act on the bar after the signal, as the batch backtests do
     spread: bool = True       # False: fills and short exits at the bid
+    entry_ticks: bool = True  # False: fill at the bar open even where real ticks exist
     gap_ticks: bool = True    # False: never price a post-break stop from real ticks
     gap_proxy: bool = True    # False: a post-break stop fills at its level (the batch assumption)
     swap: bool = True
@@ -182,7 +188,15 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         if volume <= 0:
             continue  # the live sizer would reject it locally and retry at the next poll
         stop, target = resolve_stop_and_target(setup)
-        fill = entry_price(setup.direction, m1.bar(j), spread_at(j))
+        # A poll served by a later bar (its own minute had none) fills at that bar's first tick.
+        offset = POLL_OFFSET_SECONDS if poll == int(m1.ts[j]) else 0
+        quote = (ticks.entry_quote(config.symbol, int(m1.ts[j]), offset)
+                 if flags.entry_ticks and ticks is not None else None)
+        if quote is None:
+            fill = entry_price(setup.direction, m1.bar(j), spread_at(j))
+        else:
+            bid, ask = quote
+            fill = ask if setup.direction == SignalDirection.BUY and flags.spread else bid
         position = _Position(
             setup=setup, direction=setup.direction, entry_index=j, fill=fill, stop=stop,
             target=target, volume=volume,

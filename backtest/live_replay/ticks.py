@@ -81,6 +81,23 @@ class TickCache:
             writer.writerows(rows)
         return rows
 
+    def entry_quote(self, symbol: str, minute_start: int,
+                    offset_seconds: int) -> tuple[float, float] | None:
+        """(bid, ask) of the first tick at least `offset_seconds` into the poll's minute.
+
+        The VPS polls fire a few seconds into the minute -- the real open deals were stamped
+        :04 to :06 -- and the market order fills at that moment's quote, not at the bar's open.
+        On the ten 2026-09-10..14 Demo entries this matched nine within 2.5 points; the bar
+        open missed by up to 15.
+        """
+        if not self.has_history(symbol, minute_start):
+            return None
+        at = (minute_start + offset_seconds) * 1000
+        for time_msc, bid, ask in self.window(symbol, minute_start, 60):
+            if time_msc >= at:
+                return bid, ask
+        return None
+
     def first_crossing(self, symbol: str, start: int, direction: SignalDirection, level: float,
                        seconds: int = 300) -> float | None:
         """The price of the first tick that reaches `level`, or None when there is no tick history."""

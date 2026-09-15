@@ -91,9 +91,12 @@ effekti, xəbər filtri, requote/reject, VPS kəsintiləri, 2026-09-15-də əlav
   (Poll-lar arasında yeni bar yoxdursa nəticə dəyişmir, ona görə hər poll-da təkrar lazım deyil.)
 
 ### 4.3 Giriş
-- Market order poll anında: BUY **ask**, SELL **bid** = poll anını ehtiva edən M1 bar-ın
-  açılışı (+ həmin bar-ın spread-i BUY üçün). Tick olan dövrdə poll anına ən yaxın tick
-  ilə müqayisə olunur (§6 G4).
+- Market order poll anında: BUY **ask**, SELL **bid**. Tick olan dövrdə (indekslər 2025-03+,
+  XAUUSD 2026-05+) fill poll dəqiqəsinin 6-cı saniyəsindən sonrakı ilk tick-in ask/bid-idir.
+  Real Demo deal-ları :04–:06 möhürlüdür və MT5 saniyəni kəsir, yəni orta real gecikmə ~5.8 s-dir;
+  bu model 2026-09-10..14-ün 10 girişindən 9-unu 2.5 punkt dəqiqliklə verir, bar açılışı isə
+  15 punkta qədər yanılırdı (G3 tapıntısı, 2026-09-15). Tick yoxdursa: poll-u ehtiva edən M1
+  bar-ın açılışı + həmin bar-ın spread-i.
 - SL/TP setup-dan olduğu kimi götürülür: Breakout-da SL = OR low, TP siqnal bar-ının
   close-undan; Sweep-də giriş/TP FVG kənarından. Fill fərqli olduğu üçün real R ≠ nominal R —
   canlıdakı kimi.
@@ -154,7 +157,7 @@ Yeni paket `backtest/live_replay/`, hər modul bir iş görür:
 - `scripts/live_replay_backtest.py` — CLI (`--configs`, `--data-dir`, `--start/--end`,
   `--ablate`), CSV və hesabat yazır.
 - `scripts/capture_symbol_specs.py` — MT5-dən snapshot (yalnız oxuyur).
-- **Realizm bayraqları** (`flags`): poll/grace saatı, ask/bid spread, boşluq fill-i, swap,
+- **Realizm bayraqları** (`flags`): poll/grace saatı, ask/bid spread, tick ilə giriş, boşluq fill-i, swap,
   komissiya — hər biri ayrıca söndürülə bilər. Hamısı sönük olanda model köhnə batch
   fərziyyələrinə yaxınlaşır; fərqin parçalanması (§7) bununla ölçülür.
 - **Performans hədəfi:** konfiqurasiya başına < 5 dəqiqə. Mövqe yoxdursa və NY sessiya
@@ -181,7 +184,8 @@ Yeni paket `backtest/live_replay/`, hər modul bir iş görür:
   - Pəncərə 2026-09-10..14 (VPS, sabit roster). Konfiqurasiya tarixə görə: XAUUSD Demo
     09-13-ə qədər 60m/3R, 09-14-dən 15m/4R; XAUUSD Paper əksinə (commit 190b319).
   - Keçmə meyarı: həmin günlərdə hər bot üçün eyni setup-lar (artıq/əskik yox); giriş
-    realdan ≤ 1 bar spread + 0.05 qiymət; SL/TP 0.01 dəqiqliklə eyni; çıxış növü eyni; SL fill-i
+    realdan həmin dəqiqənin :04–:07 kotirovka aralığı + ~0.3 spread sürüşmədən çox fərqlənmir
+    (sabit punkt dözümlülüyü yanlışdır: JP225/NDX100 bu 3 saniyədə 15 punkta qədər hərəkət edib); SL/TP 0.01 dəqiqliklə eyni; çıxış növü eyni; SL fill-i
     ≤ 1 spread; boşluq stopları (12480723, 12494940) tick modeli ilə real R-dən ≤ 0.3R;
     swap (12377152 −1.19, 12494940 −3.59, 12480723 −1.97) ≤ 5% fərq.
 - **G4 — spread kalibrasiyası:** tick olan dövrdə simulyasiya giriş anlarında bar spread-i

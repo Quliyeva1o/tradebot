@@ -48,6 +48,27 @@ def test_gold_ticks_start_later_than_the_indices(tmp_path: Path) -> None:
     assert cache.has_history("XAUUSD", march_2026) is False
 
 
+def test_the_entry_quote_is_the_first_tick_a_few_seconds_into_the_minute(tmp_path: Path) -> None:
+    # Real 2026-09-14 NDX100 ticks around the 17:10 server poll: the order filled at 29061.45,
+    # while the minute opened on an ask of 29051.20.
+    minute = int(datetime(2026, 9, 14, 14, 10, tzinfo=UTC).timestamp())
+    rows = [(minute * 1000 + 100, 29048.20, 29051.20), (minute * 1000 + 4200, 29057.70, 29060.70),
+            (minute * 1000 + 5300, 29058.08, 29061.08)]
+    cache = TickCache(tmp_path, lambda s, a, b: rows)
+    assert cache.entry_quote("NDX100", minute, 5) == (29058.08, 29061.08)
+
+
+def test_there_is_no_entry_quote_before_the_tick_history(tmp_path: Path) -> None:
+    cache = TickCache(tmp_path, lambda *a: pytest.fail("must not fetch"))
+    before = int(datetime(2024, 1, 8, 15, 0, tzinfo=UTC).timestamp())
+    assert cache.entry_quote("NDX100", before, 5) is None
+
+
+def test_there_is_no_entry_quote_when_the_minute_has_no_tick_after_the_offset(tmp_path: Path) -> None:
+    cache = TickCache(tmp_path, lambda s, a, b: [(a * 1000 + 1000, 100.0, 101.0)])
+    assert cache.entry_quote("GER40", MONDAY_OPEN, 5) is None
+
+
 def test_an_empty_window_is_cached_too(tmp_path: Path) -> None:
     calls: list[int] = []
 
