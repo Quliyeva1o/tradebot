@@ -192,8 +192,8 @@ BUNDAN SONRA, SIRA ILE:
   5. Demo tasklar deploy\demo_roster.txt-e gore acilir/sondurulur.
      Simvolun sahibini deyismek ucun HEMIN FAYLI redakte edin, Task
      Scheduler-i el ile deyil -- yoxsa novbeti qurulusda geri qayidir.
-  6. Yoxlayin: logs\run_live_nasdaq_orb.log ve
-       Get-ScheduledTask | ? TaskName -match '^Orb' |
+  6. Yoxlayin: logs\run_live_nasdaq_orb.log, logs\run_live_first_fvg_window.log ve
+       Get-ScheduledTask | ? TaskName -match '^(Orb|Fvg)' |
          % { '{0} {1}' -f `$_.TaskName, (`$_ | Get-ScheduledTaskInfo).LastTaskResult }
      Hamisinin neticesi 0 olmalidir.
 

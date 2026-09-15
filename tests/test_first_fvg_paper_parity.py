@@ -8,7 +8,7 @@ from core.models import Bar, OrderType, SymbolConstraints
 from execution.models import OrderRequest
 from execution.paper_broker import PaperBroker
 from mt5.connector import MT5Connector
-from scripts.first_fvg_paper_parity import PaperTrade, compare, paper_trades_from_state
+from scripts.first_fvg_paper_parity import PaperTrade, compare, comparison_start, paper_trades_from_state
 from scripts.first_fvg_window_backtest import FvgTrade
 
 SID = "setup_fvg_window_NDX100_20260914_BUY"
@@ -48,6 +48,33 @@ class TestCompare:
     def test_paper_trade_still_open_is_not_called_a_mismatch(self) -> None:
         [row] = compare([], [_paper(exit_price=None)])
         assert row.status == "open"
+
+
+class TestComparisonStart:
+    """Setups from before the bot existed must not be reported as trades it missed."""
+
+    def test_explicit_since_is_used(self, tmp_path: Path) -> None:
+        start = comparison_start(tmp_path / "missing.json", first_covered=date(2026, 8, 1), since=date(2026, 9, 15))
+        assert start == date(2026, 9, 15)
+
+    def test_since_before_the_fetched_bars_is_clamped_to_them(self, tmp_path: Path) -> None:
+        start = comparison_start(tmp_path / "missing.json", first_covered=date(2026, 8, 1), since=date(2026, 7, 1))
+        assert start == date(2026, 8, 1)
+
+    def test_defaults_to_the_setup_date_of_the_bots_first_order(self, tmp_path: Path) -> None:
+        state = tmp_path / "paper_broker_state_fvg_window_ndx100.json"
+        broker = PaperBroker(connector=Mock(spec=MT5Connector), timeframe="M1", level_fills=True, state_file=state)
+        for day in (15, 14):  # placed out of order: the earliest setup date must win
+            broker.place_order(OrderRequest(
+                symbol="NDX100", order_type=OrderType.BUY_LIMIT, volume=1.0, price=100.0, stop_loss=90.0,
+                take_profit=130.0, comment=f"setup_fvg_window_NDX100_202609{day}_BUY",
+                valid_from=datetime(2026, 9, day, 14, 30, tzinfo=UTC),
+                expires_at=datetime(2026, 9, day + 1, 4, 0, tzinfo=UTC)))
+
+        assert comparison_start(state, first_covered=date(2026, 8, 1), since=None) == date(2026, 9, 14)
+
+    def test_nothing_to_compare_before_the_bot_has_ordered(self, tmp_path: Path) -> None:
+        assert comparison_start(tmp_path / "missing.json", first_covered=date(2026, 8, 1), since=None) is None
 
 
 def test_reads_filled_and_closed_trades_from_a_real_paper_broker_state(tmp_path: Path) -> None:
