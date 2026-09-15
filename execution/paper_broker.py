@@ -17,13 +17,14 @@ import msvcrt
 import time as _time
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from core.models import AccountInfo, OrderType, SymbolConstraints
+from core.models import AccountInfo, OrderType, SignalDirection, SymbolConstraints
 from core.validation import require_non_negative, require_positive
 from execution.event_log import log_fill
 from execution.fill_simulator import simulate_market_fill
+from execution.level_fill import exit_fill, limit_fill
 from execution.interfaces import IBroker
 from execution.models import OrderRequest, OrderResult, Position
 from execution.order import Order, OrderStatus
@@ -128,8 +129,14 @@ def _order_to_dict(order: Order) -> dict:
             "take_profit": request.take_profit,
             "deviation": request.deviation,
             "comment": request.comment,
+            "valid_from": request.valid_from.isoformat() if request.valid_from is not None else None,
+            "expires_at": request.expires_at.isoformat() if request.expires_at is not None else None,
         },
     }
+
+
+def _parse_optional_datetime(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value is not None else None
 
 
 def _order_from_dict(data: dict) -> Order:
@@ -152,6 +159,9 @@ def _order_from_dict(data: dict) -> Order:
         take_profit=request_data["take_profit"],
         deviation=request_data["deviation"],
         comment=request_data["comment"],
+        # .get(): state written before order windows existed has neither key.
+        valid_from=_parse_optional_datetime(request_data.get("valid_from")),
+        expires_at=_parse_optional_datetime(request_data.get("expires_at")),
     )
     order = Order(
         order_id=data["order_id"],
@@ -225,6 +235,7 @@ class PaperBroker(IBroker):
         slippage: float = 0.0,
         timeframe: str = "M5",
         state_file: Path | None = None,
+        level_fills: bool = False,
     ) -> None:
         """Initializes the PaperBroker, loading any persisted state from state_file.
 
@@ -260,6 +271,9 @@ class PaperBroker(IBroker):
         self._initial_balance = initial_balance
         self._slippage = slippage
         self._timeframe = timeframe
+        # Opt-in so the paper bots already mid-forward-test keep their poll-price closes;
+        # see _work_levels.
+        self._level_fills = level_fills
         self._state_file = state_file if state_file is not None else STATE_FILE
         self._lock_file = self._state_file.with_name(self._state_file.name + ".lock")
         self._balance: float = initial_balance
@@ -286,6 +300,8 @@ class PaperBroker(IBroker):
             always 0.0 -- margin/leverage modeling is not implemented this
             sprint, so free_margin always equals equity.
         """
+        if self._level_fills:
+            self._work_levels()
         with _StateFileLock(self._lock_file):
             self._load_state()
             balance = self._balance
@@ -555,10 +571,126 @@ class PaperBroker(IBroker):
             RuntimeError: If real price data cannot be fetched for an open
                 position's symbol (propagated from MT5Connector.fetch_recent_bars()).
         """
+        if self._level_fills:
+            self._work_levels()
         with _StateFileLock(self._lock_file):
             self._load_state()
             positions = list(self._positions.values())
         return [self._mark_to_market(position) for position in positions]
+
+    # ~7 trading days of M1: a limit working a whole NY day plus a position held
+    # over a weekend both stay inside one fetch.
+    _LEVEL_LOOKBACK_BARS = 10_080
+    _TRADING_BREAK = timedelta(minutes=30)
+
+    def _work_levels(self) -> None:
+        """Fills resting limit orders, and closes positions at their stop or target, from bars.
+
+        Only for PaperBroker(level_fills=True). A real broker holds these levels itself.
+        Without this, paper notices a hit only on its next poll and closes at whatever
+        price that poll sees -- minutes and points away from the level. Bars come from
+        self._timeframe (pass "M1") and are priced by execution/level_fill.py, the same
+        rules the First FVG window backtest uses, so a paper trade can be matched to its
+        backtest twin exactly.
+
+        A limit fills on the first bar at or after its valid_from (else its creation) and
+        before its expires_at; once the bars reach expires_at unfilled, it is cancelled.
+        """
+        with _StateFileLock(self._lock_file):
+            self._load_state()
+            pending = [o for o in self._orders.values()
+                       if o.status is OrderStatus.PENDING
+                       and o.request.order_type in (OrderType.BUY_LIMIT, OrderType.SELL_LIMIT)]
+            positions = list(self._positions.values())
+        if not pending and not positions:
+            return
+
+        symbols = {o.request.symbol for o in pending} | {p.symbol for p in positions}
+        bars = {s: self._connector.fetch_recent_bars(s, self._timeframe, count=self._LEVEL_LOOKBACK_BARS)
+                for s in symbols}
+
+        fills: list[tuple[str, Position]] = []
+        cancels: list[str] = []
+        for order in pending:
+            request = order.request
+            assert request.price is not None  # OrderRequest's pending types require one to be sent
+            series = bars[request.symbol]
+            start = request.valid_from or order.created_at
+            filled: Position | None = None
+            for bar in series:
+                if bar.timestamp < start:
+                    continue
+                if request.expires_at is not None and bar.timestamp >= request.expires_at:
+                    break
+                price = limit_fill(request.order_type, request.price, bar)
+                if price is not None:
+                    filled = Position(
+                        id=order.order_id, symbol=request.symbol,
+                        order_type=(OrderType.BUY_MARKET if request.order_type == OrderType.BUY_LIMIT
+                                    else OrderType.SELL_MARKET),
+                        volume=request.volume, open_price=price, current_price=price,
+                        stop_loss=request.stop_loss, take_profit=request.take_profit,
+                        timestamp=bar.timestamp, comment=request.comment,
+                    )
+                    break
+            if filled is not None:
+                fills.append((order.order_id, filled))
+                positions.append(filled)
+            elif request.expires_at is not None and series and series[-1].timestamp >= request.expires_at:
+                cancels.append(order.order_id)
+
+        closes: list[tuple[Position, float, datetime]] = []
+        for position in positions:
+            if position.stop_loss is None or position.take_profit is None:
+                continue
+            direction = SignalDirection.BUY if position.order_type == OrderType.BUY_MARKET else SignalDirection.SELL
+            series = bars[position.symbol]
+            for i, bar in enumerate(series):
+                if bar.timestamp < position.timestamp:
+                    continue
+                after_break = i > 0 and bar.timestamp - series[i - 1].timestamp > self._TRADING_BREAK
+                hit = exit_fill(direction, position.stop_loss, position.take_profit, bar,
+                                entry_bar=bar.timestamp == position.timestamp, after_break=after_break)
+                if hit is not None:
+                    closes.append((position, hit[0], bar.timestamp))
+                    break
+
+        if not fills and not cancels and not closes:
+            return
+
+        with _StateFileLock(self._lock_file):
+            self._load_state()
+            for order_id, position in fills:
+                order = self._orders.get(order_id)
+                if order is None or order.status is not OrderStatus.PENDING:
+                    continue  # another process got there first
+                order.fill(position.open_price, filled_at=position.timestamp)
+                self._positions[position.id] = position
+                logger.info("Limit %s for %s filled @ %.5f at %s", order_id, position.symbol,
+                            position.open_price, position.timestamp)
+            for order_id in cancels:
+                order = self._orders.get(order_id)
+                if order is not None and order.status is OrderStatus.PENDING:
+                    order.cancel()
+                    logger.info("Limit %s expired unfilled; cancelled.", order_id)
+            for position, price, at in closes:
+                if position.id not in self._positions:
+                    continue
+                closing_type = (OrderType.SELL_MARKET if position.order_type == OrderType.BUY_MARKET
+                                else OrderType.BUY_MARKET)
+                closing = Order(
+                    order_id=str(uuid.uuid4()),
+                    request=OrderRequest(symbol=position.symbol, order_type=closing_type,
+                                         volume=position.volume, comment=position.comment),
+                )
+                closing.fill(price, filled_at=at)
+                self._orders[closing.order_id] = closing
+                pnl = self._compute_pnl(position, price)
+                self._balance += pnl
+                del self._positions[position.id]
+                logger.info("Closed paper position %s for %s at its level @ %.5f (pnl=%.2f)",
+                            position.id, position.symbol, price, pnl)
+            self._save_state()
 
     def _simulate_fill(self, symbol: str, order_type: OrderType) -> tuple[float, float]:
         """Fetches the latest real bar for symbol and simulates a market fill against it.

@@ -28,14 +28,19 @@ class OrderRequest:
     take_profit: float | None = None
     deviation: int = 10
     comment: str = ""
+    valid_from: datetime | None = None
+    """A pending order may only fill on bars from this moment on (timezone-aware)."""
+    expires_at: datetime | None = None
+    """A pending order still unfilled at this moment is cancelled (timezone-aware)."""
 
     def __post_init__(self) -> None:
         """Validates parameter ranges.
 
         Raises:
             ValueError: If volume is not strictly positive, deviation is
-                negative, or price/stop_loss/take_profit is provided but
-                not strictly positive.
+                negative, price/stop_loss/take_profit is provided but not
+                strictly positive, valid_from/expires_at is naive, or
+                expires_at is not after valid_from.
         """
         require_positive(self.volume, "volume")
         require_non_negative(self.deviation, "deviation")
@@ -45,6 +50,12 @@ class OrderRequest:
             require_positive(self.stop_loss, "stop_loss")
         if self.take_profit is not None:
             require_positive(self.take_profit, "take_profit")
+        for name in ("valid_from", "expires_at"):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is None:
+                raise ValueError(f"{name} must carry a timezone, got naive {value!r}")
+        if self.valid_from is not None and self.expires_at is not None and self.expires_at <= self.valid_from:
+            raise ValueError(f"expires_at ({self.expires_at}) must be after valid_from ({self.valid_from})")
 
 
 @dataclass(frozen=True)

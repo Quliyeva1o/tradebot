@@ -282,6 +282,14 @@ class MT5Broker(IBroker):
             ValueError: If order.order_type is a pending order type
                 (*_LIMIT/*_STOP) and order.price is not set.
         """
+        if order.valid_from is not None or order.expires_at is not None:
+            # Not mapped to MT5's type_time/expiration yet. Sending the order without
+            # them would leave a limit working past the session it was defined for.
+            raise ValueError(
+                "MT5Broker does not support valid_from/expires_at yet; refusing to send "
+                f"{order.order_type.name} for {order.symbol} without its order window."
+            )
+
         if not mt5.symbol_select(order.symbol, True):
             raise RuntimeError(f"Symbol {order.symbol} is not available in the MT5 terminal.")
 

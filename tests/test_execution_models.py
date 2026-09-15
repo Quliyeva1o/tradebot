@@ -6,6 +6,8 @@ OrderResult/Position fails fast at construction instead of being sent to
 a broker or silently accepted from one.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from core.models import OrderType
@@ -48,6 +50,21 @@ class TestOrderRequest:
         order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1)
         assert order.stop_loss is None
         assert order.take_profit is None
+
+    def test_expiry_before_the_order_becomes_valid_raises(self) -> None:
+        with pytest.raises(ValueError, match="expires_at"):
+            OrderRequest(
+                symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.1, price=100.0,
+                valid_from=datetime(2026, 9, 14, 14, 30, tzinfo=UTC),
+                expires_at=datetime(2026, 9, 14, 14, 0, tzinfo=UTC),
+            )
+
+    def test_naive_order_window_timestamps_raise(self) -> None:
+        with pytest.raises(ValueError, match="timezone"):
+            OrderRequest(
+                symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.1, price=100.0,
+                valid_from=datetime(2026, 9, 14, 14, 30),
+            )
 
 
 class TestOrderResult:

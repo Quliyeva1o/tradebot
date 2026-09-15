@@ -390,6 +390,114 @@ class TestStatePersistenceAcrossRestarts:
         assert broker2.cancel_order(result.order_id) is True
 
 
+def _m1(hh: int, mm: int, o: float, h: float, l: float, c: float, day: int = 14) -> Bar:
+    return Bar(timestamp=datetime(2026, 9, day, hh, mm, tzinfo=UTC), open=o, high=h, low=l, close=c,
+               volume=10.0, spread=0.0)
+
+
+def _limit_buy_100(valid_from: datetime | None = None, expires_at: datetime | None = None) -> OrderRequest:
+    return OrderRequest(
+        symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=1.0, price=100.0,
+        stop_loss=90.0, take_profit=150.0, comment="setup_fvg_window_USTEC_20260914_BUY",
+        valid_from=valid_from if valid_from is not None else datetime(2026, 9, 14, 14, 30, tzinfo=UTC),
+        expires_at=expires_at if expires_at is not None else datetime(2026, 9, 15, 4, 0, tzinfo=UTC),
+    )
+
+
+class TestLevelFills:
+    """PaperBroker(level_fills=True): limits fill when bars reach them, stops and targets at their price.
+
+    Tick size and value are both 1.0 and volume 1.0, so P&L equals the price move.
+    """
+
+    def test_limit_order_fills_on_the_first_bar_that_reaches_it_after_valid_from(self) -> None:
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [
+            _m1(14, 29, 102, 103, 95, 101),     # reaches 100, but before valid_from
+            _m1(14, 30, 103, 105, 101, 104),
+            _m1(14, 31, 103, 104, 99.5, 101),   # first eligible touch
+            _m1(14, 32, 101, 106, 100.5, 105),
+        ]
+        broker = PaperBroker(connector=connector, timeframe="M1", level_fills=True)
+        broker.place_order(_limit_buy_100())
+
+        positions = broker.get_open_positions()
+
+        assert len(positions) == 1
+        assert positions[0].open_price == 100.0
+        assert positions[0].timestamp == datetime(2026, 9, 14, 14, 31, tzinfo=UTC)
+        assert (positions[0].stop_loss, positions[0].take_profit) == (90.0, 150.0)
+        assert positions[0].comment == "setup_fvg_window_USTEC_20260914_BUY"
+
+    def test_unfilled_limit_order_is_cancelled_at_expiry_and_never_fills_after_it(self) -> None:
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [
+            _m1(14, 31, 103, 104, 101, 102),
+            _m1(4, 0, 98, 99, 95, 96, day=15),  # reaches 100 exactly at expiry
+        ]
+        broker = PaperBroker(connector=connector, timeframe="M1", level_fills=True)
+        broker.place_order(_limit_buy_100())
+
+        assert broker.get_open_positions() == []
+        state = json.loads(paper_broker_module.STATE_FILE.read_text())
+        assert [o["status"] for o in state["orders"].values()] == ["CANCELLED"]
+
+    def test_open_position_closes_at_its_stop_price_not_the_poll_price(self) -> None:
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [
+            _m1(14, 31, 103, 104, 99.5, 101),   # fills at 100
+            _m1(14, 40, 95, 96, 89, 91),        # stop 90 hit
+            _m1(14, 45, 80, 81, 79, 80),        # latest bar: a poll-price close would book 80
+        ]
+        broker = PaperBroker(connector=connector, timeframe="M1", level_fills=True, initial_balance=10_000.0)
+        broker.place_order(_limit_buy_100())
+
+        info = broker.get_account_info()
+
+        assert broker.get_open_positions() == []
+        assert info.balance == 9_990.0          # 10_000 + (90 - 100) * 1.0
+
+    def test_closing_leg_carries_the_setup_id_and_the_stop_price(self) -> None:
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [
+            _m1(14, 31, 103, 104, 99.5, 101),
+            _m1(14, 40, 95, 96, 89, 91),
+        ]
+        broker = PaperBroker(connector=connector, timeframe="M1", level_fills=True)
+        broker.place_order(_limit_buy_100())
+
+        broker.get_open_positions()
+
+        state = json.loads(paper_broker_module.STATE_FILE.read_text())
+        closing = [o for o in state["orders"].values() if o["request"]["order_type"] == "SELL_MARKET"]
+        assert len(closing) == 1
+        assert closing[0]["fill_price"] == 90.0
+        assert closing[0]["request"]["comment"] == "setup_fvg_window_USTEC_20260914_BUY"
+
+    def test_stop_touched_on_the_entry_bar_closes_the_trade_at_the_stop(self) -> None:
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [_m1(14, 31, 103, 104, 89, 92)]
+        broker = PaperBroker(connector=connector, timeframe="M1", level_fills=True, initial_balance=10_000.0)
+        broker.place_order(_limit_buy_100())
+
+        assert broker.get_open_positions() == []
+        assert broker.get_account_info().balance == 9_990.0
+
+    def test_order_window_survives_a_restart(self) -> None:
+        PaperBroker(connector=_connector(), timeframe="M1", level_fills=True).place_order(_limit_buy_100())
+
+        connector = _connector()
+        connector.fetch_recent_bars.return_value = [
+            _m1(14, 29, 102, 103, 95, 101),     # before valid_from: must not fill
+            _m1(14, 33, 103, 104, 99, 102),     # fills here -- only if valid_from was restored
+        ]
+        restarted = PaperBroker(connector=connector, timeframe="M1", level_fills=True)
+
+        positions = restarted.get_open_positions()
+
+        assert [p.timestamp for p in positions] == [datetime(2026, 9, 14, 14, 33, tzinfo=UTC)]
+
+
 class TestFailOpen:
     """Corrupted/malformed state must never raise -- always fail open to a fresh account."""
 

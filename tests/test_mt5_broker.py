@@ -7,6 +7,7 @@ MT5's return objects (only the attributes actually read are set).
 """
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -304,6 +305,23 @@ class TestPlaceOrder:
         with patch("execution.mt5_broker.mt5.symbol_select", return_value=True):
             with pytest.raises(ValueError, match="price is required"):
                 broker.place_order(order)
+
+    def test_order_window_is_refused_rather_than_silently_dropped(self) -> None:
+        # An expiry the venue never receives would leave a limit order working
+        # past the session the strategy defined it for.
+        broker = MT5Broker()
+        order = OrderRequest(
+            symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.2, price=29000.0,
+            expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC),
+        )
+
+        with (
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch("execution.mt5_broker.mt5.order_send", return_value=_order_send_result()) as mock_send,
+        ):
+            with pytest.raises(ValueError, match="expires_at"):
+                broker.place_order(order)
+        mock_send.assert_not_called()
 
     def test_stop_loss_and_take_profit_included_when_provided(self) -> None:
         broker = MT5Broker()
