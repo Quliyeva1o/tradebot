@@ -1,12 +1,12 @@
 # Canlı Əkiz Backtest — nəticə
 
-Hazırlandı: 2026-09-15 12:50 UTC · data sonu: 2026-09-15 · spec: `docs/superpowers/specs/2026-09-15-live-replay-backtest-design.md`
+Hazırlandı: 2026-09-16 14:36 UTC · data sonu: 2026-09-15 · spec: `docs/superpowers/specs/2026-09-15-live-replay-backtest-design.md`
 
 ## Yoxlamalar
 
-G1–G3 yoxlamaları (`pytest tests/live_replay`, 2026-09-15): **85 test keçdi, 0 yıxıldı** — 65 vahid test (G1), 13 bərabərlik testi (G2), 7 real trade testi (G3).
+G1–G3 yoxlamaları (`pytest tests/live_replay`, 2026-09-16): **96 test keçdi, 0 yıxıldı** — 75 vahid test (G1), 14 bərabərlik testi (G2), 7 real trade testi (G3).
 
-- G2: 10 konfiqurasiyanın hamısında replay hər 2 dəqiqəlik poll-da real runner-in `_evaluate_for_new_trade` ilə eyni setup-ı verir; M1-dən qurulan M15 brokerin öz M15-i ilə uyğundur.
+- G2: 11 konfiqurasiyanın hamısında (həftə sonu bağlayan `OrbBreakoutwf_XAUUSD_Paper` daxil) replay hər 2 dəqiqəlik poll-da real runner-in `_evaluate_for_new_trade` ilə eyni setup-ı verir; M1-dən qurulan M15 brokerin öz M15-i ilə uyğundur. Replay-in həftə sonu kəsmə vaxtı runner-in `weekend_flat_due` funksiyası ilə dəqiqə-dəqiqə eynidir.
 - G3: 2026-09-10..14-ün real Demo deal-ları (6 simvol) və VPS paper trade-ləri təkrarlanır — eyni setup, eyni SL/TP, eyni çıxış növü, boşluq stopları real −3.1R-dən ≤0.3R, swap lot başına ≤5%, giriş həmin dəqiqənin :04–:07 kotirovka aralığında.
 - Baza: `tests/test_nasdaq_midline_sweep_regression.py::test_midline_sweep_ustec_oos_regression` bu işdən əvvəl də sınıq idi.
 
@@ -23,8 +23,11 @@ G1–G3 yoxlamaları (`pytest tests/live_replay`, 2026-09-15): **85 test keçdi,
 | OrbSweep_GER40_Demo | 100 | 1.548 | +19.1 | 131 | 1.229 | +15.5 | 5.7 | 1.761 → 1.007 | 55% (11) | ✅✅❌ |
 | OrbBreakout_GER40_Paper | 633 | 1.256 | +128.9 | 660 | 1.262 | +137.5 | 32.4 | 1.043 → 0.961 | 55% (11) | ✅❌❌ |
 | OrbBreakout_XAUUSD_Paper | 678 | 1.382 | +179.1 | 676 | 1.176 | +88.9 | 31.1 | 1.384 → 1.283 | 64% (14) | ✅✅✅ |
+| OrbBreakoutwf_XAUUSD_Paper | 678 | 1.382 | +179.1 | 857 | 1.253 | +133.6 | 28.6 | 1.384 → 1.503 | 79% (14) | ✅✅✅ |
 | OrbSweep_JP225_Paper | 55 | 1.253 | +7.5 | 80 | 0.863 | -6.7 | 12.8 | 1.578 → 0.781 | 17% (6) | ❌❌❌ ⚠️az tarixçə |
 | OrbSweep_XAUUSD_Paper | 163 | 1.246 | +19.1 | 210 | 1.004 | +0.4 | 17.4 | 1.399 → 1.478 | 50% (14) | ✅✅❌ |
+
+Həftə sonu bağlayan botlarda (`--weekend-flat`) köhnə sütun batch backtest-dir və həftə sonu qaydasını bilmir: orada eyni konfiqurasiyanın mövqe saxlayan versiyası göstərilir.
 
 Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların ≥60%-i müsbət.
 
@@ -40,15 +43,11 @@ Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların �
 | OrbSweep_GER40_Demo | +15.5 | +16.0 | +20.2 | +15.9 | +15.9 | +15.6 | +18.8 | +15.5 |
 | OrbBreakout_GER40_Paper | +137.5 | +118.3 | +143.2 | +139.7 | +137.4 | +139.7 | +181.3 | +137.5 |
 | OrbBreakout_XAUUSD_Paper | +88.9 | +88.5 | +97.3 | +88.6 | +88.9 | +91.1 | +163.9 | +92.4 |
+| OrbBreakoutwf_XAUUSD_Paper | +133.6 | +134.0 | +145.5 | +133.0 | +133.6 | +133.7 | +201.3 | +138.5 |
 | OrbSweep_JP225_Paper | -6.7 | -6.4 | -2.1 | -8.9 | -7.3 | -6.7 | -5.8 | -6.7 |
 | OrbSweep_XAUUSD_Paper | +0.4 | +1.7 | +1.4 | +0.6 | +0.4 | +1.1 | +2.8 | +1.7 |
 
-**Swap sütununu necə oxumaq lazımdır.** Ən böyük fərq swap-dandır, çünki bu strategiya 4R
-hədəflə günlərlə mövqe saxlayır və indekslərdə illik 7.33% maliyyələşdirmə tutulur. Amma bütün
-tarixçəyə **bugünkü** dərəcə tətbiq olunub; 2020–2021-də faizlər sıfıra yaxın idi, deməli o
-illərin real swap xərci xeyli az olub. Ona görə düzgün oxunuş budur: **həqiqi nəticə "tam əkiz"
-ilə "swap" sütununun arasındadır** — birincisi bugünkü dərəcə ilə, ikincisi sıfır faiz sərhədi.
-Dəqiqləşdirmə üçün brokerin tarixi swap dərəcələri lazımdır, onlar isə heç yerdə saxlanmır.
+**Swap sütununu necə oxumaq lazımdır.** Ən böyük fərq adətən swap-dandır: bu strategiya 4R hədəflə günlərlə mövqe saxlayır, indekslərdə isə illik 7.33% maliyyələşdirmə tutulur. Amma bütün tarixçəyə **bugünkü** swap dərəcəsi tətbiq olunub; 2020–2021-də faizlər sıfıra yaxın idi, deməli o illərin real swap xərci xeyli az olub. Düzgün oxunuş: **həqiqi nəticə "tam əkiz" ilə "swap" sütununun arasındadır** — birincisi bugünkü dərəcə, ikincisi sıfır faiz sərhədi. Brokerin tarixi swap dərəcələri saxlanmadığı üçün daha dəqiq hesablamaq olmur.
 
 ## $50,000 hesabda (hər bot ayrıca)
 
@@ -62,6 +61,7 @@ Dəqiqləşdirmə üçün brokerin tarixi swap dərəcələri lazımdır, onlar 
 | OrbSweep_GER40_Demo | $54,302 | 4.1% | 131 | $-1,062 | $0 |
 | OrbBreakout_GER40_Paper | $86,273 | 14.9% | 660 | $-14,108 | $0 |
 | OrbBreakout_XAUUSD_Paper | $74,961 | 15.1% | 676 | $-21,588 | $-1,010 |
+| OrbBreakoutwf_XAUUSD_Paper | $96,242 | 13.5% | 857 | $-21,524 | $-1,538 |
 | OrbSweep_JP225_Paper | $47,544 | 7.1% | 80 | $-167 | $0 |
 | OrbSweep_XAUUSD_Paper | $50,148 | 10.9% | 210 | $-756 | $-437 |
 
@@ -77,13 +77,15 @@ Dəqiqləşdirmə üçün brokerin tarixi swap dərəcələri lazımdır, onlar 
 | OrbSweep_GER40_Demo | 69 | 58 | 2 | 2 | 0 | 0 | 1 | 1.00x | 1.547 | 1.548 |
 | OrbBreakout_GER40_Paper | 168 | 481 | 7 | 4 | 0 | 0 | 0 | 1.00x | — | — |
 | OrbBreakout_XAUUSD_Paper | 213 | 457 | 2 | 4 | 0 | 0 | 0 | 1.13x | 1.389 | 1.385 |
+| OrbBreakoutwf_XAUUSD_Paper | 196 | 469 | 2 | 2 | 0 | 0 | 2 | 1.13x | — | — |
 | OrbSweep_JP225_Paper | 37 | 39 | 4 | 0 | 0 | 0 | 1 | 1.00x | 1.253 | 1.253 |
 | OrbSweep_XAUUSD_Paper | 104 | 105 | 0 | 1 | 0 | 0 | 6 | 1.13x | — | — |
 
-**Spread yoxlaması (G4).** Bar-ların spread sütunu indekslərdə real tick spread-i ilə eynidir
-(1.00x). Yalnız XAUUSD-də 13% aşağı göstərir. 1.13x ilə yenidən hesabladım, təsiri cüzidir:
-XAUUSD Demo PF 1.090 → 1.087 (991 trade-də −2.4R), XAUUSD Paper 1.176 → 1.174,
-XAUUSD Sweep 1.004 → 1.003. Cədvəldəki rəqəmlər 1.00x ilədir.
+**Spread yoxlaması (G4).** Aşağıdakı konfiqurasiyalarda bar spread-i real tick spread-indən 10%-dən çox aşağıdır; onlar tick nisbəti ilə yenidən hesablandı (yuxarıdakı cədvəllər 1.00x ilədir):
+- OrbBreakout_XAUUSD_Demo: 1.13x ilə PF 1.090 → 1.087, net R +72.4 → +70.0
+- OrbBreakout_XAUUSD_Paper: 1.13x ilə PF 1.176 → 1.174, net R +88.9 → +87.8
+- OrbBreakoutwf_XAUUSD_Paper: 1.13x ilə PF 1.253 → 1.250, net R +133.6 → +132.2
+- OrbSweep_XAUUSD_Paper: 1.13x ilə PF 1.004 → 1.002, net R +0.4 → +0.3
 
 ## Məhdudiyyətlər
 
