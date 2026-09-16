@@ -47,6 +47,27 @@ def test_the_report_says_the_old_column_does_not_know_the_weekend_rule() -> None
     assert "həftə sonu" in text
 
 
+def _render(result) -> str:
+    return render_report([result], end=date(2026, 9, 15), generated=datetime(2026, 9, 15, tzinfo=UTC),
+                         validation_note="")
+
+
+def test_the_report_explains_that_the_truth_lies_between_the_twin_and_the_swap_off_column() -> None:
+    assert "sıfır faiz sərhədi" in _render(_result())
+
+
+def test_a_bar_spread_that_understates_the_ticks_gets_a_sensitivity_line() -> None:
+    result = _result()
+    result.spread_ratio, result.spread_sensitivity = 1.13, (1.087, 70.0)
+    text = _render(result)
+    assert "ilə yenidən hesablandı" in text
+    assert "1.13x" in text and "1.087" in text
+
+
+def test_no_sensitivity_line_when_bar_and_tick_spreads_agree() -> None:
+    assert "ilə yenidən hesablandı" not in _render(_result())  # ratio 1.04
+
+
 def test_every_trade_is_written_to_the_csv(tmp_path) -> None:
     path = tmp_path / "trades.csv"
     write_trades_csv(path, [_trade(10, 4.0), _trade(11, -1.0, "SL")])

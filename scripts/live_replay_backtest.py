@@ -35,6 +35,7 @@ from scripts.two_strategy_symbol_sweep import recent_spread
 
 REPORT_PATH = Path("LIVE_REPLAY_BACKTEST_REPORT.md")
 ABLATIONS = ("poll_clock", "spread", "entry_ticks", "gap_ticks", "gap_proxy", "swap", "commission")
+SPREAD_RATIO_LIMIT = 1.10  # spec §6 G4: above this the bar spread understates real ticks; rerun scaled
 # PFs this repo already recorded for these exact configurations, on data ending ~2026-09-08
 # (deploy/demo_roster.txt comments, WALK_FORWARD_2026_09_09_REPORT.md). The old column is only
 # trustworthy if it still reproduces them.
@@ -56,6 +57,7 @@ class ConfigResult:
     spread_ratio: float | None
     recorded_pf: float | None
     reproduced_pf: float | None
+    spread_sensitivity: tuple[float, float] | None = None  # (PF, net R) at spread_scale = spread_ratio
 
 
 def old_rs(config: BotConfig, data_dir: Path) -> list[tuple[date, float]]:
@@ -150,6 +152,12 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
                            for name in ABLATIONS)
         lines.append(f"| {result.config.task} | {full:+.1f} | {cells} |")
 
+    lines += ["", "**Swap sütununu necə oxumaq lazımdır.** Ən böyük fərq adətən swap-dandır: bu strategiya "
+              "4R hədəflə günlərlə mövqe saxlayır, indekslərdə isə illik 7.33% maliyyələşdirmə tutulur. Amma "
+              "bütün tarixçəyə **bugünkü** swap dərəcəsi tətbiq olunub; 2020–2021-də faizlər sıfıra yaxın idi, "
+              "deməli o illərin real swap xərci xeyli az olub. Düzgün oxunuş: **həqiqi nəticə \"tam əkiz\" ilə "
+              "\"swap\" sütununun arasındadır** — birincisi bugünkü dərəcə, ikincisi sıfır faiz sərhədi. "
+              "Brokerin tarixi swap dərəcələri saxlanmadığı üçün daha dəqiq hesablamaq olmur."]
     lines += ["", "## $50,000 hesabda (hər bot ayrıca)", "",
               "| Bot | son balans | max drawdown % | trade | swap $ | komissiya $ |",
               "|---|---|---|---|---|---|"]
@@ -174,6 +182,22 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
             f"{reasons.count('SL_GAP_TICK')} | {reasons.count('SL_GAP_PROXY') + reasons.count('SL_GAP_LEVEL')} | "
             f"{reasons.count('OPEN')} | {sum(1 for t in result.trades if t.both_levels_touched)} | "
             f"{sum(1 for t in result.trades if t.closed_on_entry_bar)} | {ratio} | {recorded} | {reproduced} |")
+
+    flagged = [r for r in results if r.spread_ratio is not None and r.spread_ratio > SPREAD_RATIO_LIMIT]
+    if not flagged:
+        lines += ["", "**Spread yoxlaması (G4).** Bar-ların spread sütunu bütün simvollarda real tick "
+                      "spread-i ilə uyğundur."]
+    else:
+        lines += ["", f"**Spread yoxlaması (G4).** Aşağıdakı konfiqurasiyalarda bar spread-i real tick "
+                      f"spread-indən {round((SPREAD_RATIO_LIMIT - 1) * 100)}%-dən çox aşağıdır; onlar tick "
+                      "nisbəti ilə yenidən hesablandı (yuxarıdakı cədvəllər 1.00x ilədir):"]
+        for result in flagged:
+            if result.spread_sensitivity is None:
+                continue
+            base = stats([r for _, r in _dated(result.trades)])
+            pf, net_r = result.spread_sensitivity
+            lines.append(f"- {result.config.task}: {result.spread_ratio:.2f}x ilə PF {_fmt(base.pf)} → "
+                         f"{_fmt(pf)}, net R {base.net_r:+.1f} → {net_r:+.1f}")
 
     lines += [
         "", "## Məhdudiyyətlər", "",
@@ -223,9 +247,15 @@ def main() -> None:
         recorded = RECORDED_OLD_PF.get(config.task)
         reproduced = (stats([r for day, r in old if day <= RECORDED_OLD_END]).pf
                       if old and recorded is not None else None)
+        ratio = spread_ratio(trades, m1, ticks)
+        sensitivity = None
+        if ratio is not None and ratio > SPREAD_RATIO_LIMIT:
+            scaled = stats([t.r for t in run(config, m1, spec, fx, ticks=ticks, spread_scale=ratio)
+                            if t.exit_reason != "OPEN"])
+            sensitivity = (scaled.pf, scaled.net_r)
         results.append(ConfigResult(config=config, trades=trades, old=old, ablation=ablation,
-                                    spread_ratio=spread_ratio(trades, m1, ticks),
-                                    recorded_pf=recorded, reproduced_pf=reproduced))
+                                    spread_ratio=ratio, recorded_pf=recorded, reproduced_pf=reproduced,
+                                    spread_sensitivity=sensitivity))
         write_trades_csv(out_dir / f"{config.task}_trades.csv", trades)
 
     note_path = Path(args.validation_note)
