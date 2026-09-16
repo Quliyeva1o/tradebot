@@ -37,6 +37,16 @@ def test_the_report_puts_the_old_and_the_twin_side_by_side() -> None:
     assert "məhdudiyyət" in text.lower()
 
 
+def test_the_report_says_the_old_column_does_not_know_the_weekend_rule() -> None:
+    from dataclasses import replace
+
+    result = _result()
+    result.config = replace(CONFIG, task="OrbBreakoutwf_XAUUSD_Paper", weekend_flat=True)
+    text = render_report([result], end=date(2026, 9, 15), generated=datetime(2026, 9, 15, tzinfo=UTC),
+                         validation_note="")
+    assert "həftə sonu" in text
+
+
 def test_every_trade_is_written_to_the_csv(tmp_path) -> None:
     path = tmp_path / "trades.csv"
     write_trades_csv(path, [_trade(10, 4.0), _trade(11, -1.0, "SL")])

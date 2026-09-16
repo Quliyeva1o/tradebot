@@ -7,7 +7,7 @@ import pytest
 
 from backtest.live_replay.configs import BotConfig
 from backtest.live_replay.engine import Flags, run
-from backtest.live_replay.market import NY, FxSeries, frame_from_bars
+from backtest.live_replay.market import BROKER_TZ, NY, FxSeries, frame_from_bars
 from backtest.live_replay.specs import SymbolSpec
 from core.models import Bar
 
@@ -133,6 +133,43 @@ def test_a_position_held_over_the_weekend_is_charged_three_swap_days() -> None:
     expected = trade.volume * 1.0 * 101.4 * -7.33 / 100 / 360 * 3
     assert trade.exit_reason == "TP"
     assert trade.swap_usd == pytest.approx(expected, rel=0.01)
+
+
+WEEKEND_FLAT = replace(CONFIG, weekend_flat=True)
+FRIDAY = datetime(2026, 9, 11, 9, 30, tzinfo=NY)
+
+
+def _flat_until(bars: list[Bar], last: datetime) -> list[Bar]:
+    """Quiet bars every minute after the last bar in `bars`, up to `last` inclusive."""
+    t = bars[-1].timestamp + timedelta(minutes=1)
+    while t <= last:
+        bars.append(_bar(t, 101.5, 101.6, 101.2, 101.4))
+        t += timedelta(minutes=1)
+    return bars
+
+
+def test_weekend_flat_closes_at_the_first_poll_from_friday_2340_server_and_pays_no_weekend_swap() -> None:
+    bars = _flat_until(_session(FRIDAY, FLAT), datetime(2026, 9, 11, 16, 47, tzinfo=NY))
+    monday = datetime(2026, 9, 14, 9, 30, tzinfo=NY)
+    bars += [_bar(monday + timedelta(minutes=i), 101.5, 101.6, 101.2, 101.4) for i in range(3)]
+    trade = _run(bars, config=WEEKEND_FLAT, spec=replace(SYN, swap_long=-7.33))[0]
+    assert trade.exit_reason == "WEEKEND_FLAT"
+    assert trade.exit_time.astimezone(BROKER_TZ).strftime("%a %H:%M") == "Fri 23:40"
+    assert trade.exit == pytest.approx(101.5)  # a long sells at the bid: that bar's open, no ticks
+    assert trade.swap_usd == 0.0
+
+
+def test_weekend_flat_takes_no_entry_after_the_friday_cutoff() -> None:
+    bars = [_bar(FRIDAY + timedelta(minutes=i), 100.5, 101.0, 100.0, 100.5) for i in range(15)]
+    breakout = datetime(2026, 9, 11, 16, 41, tzinfo=NY)  # 23:41 server
+    t = FRIDAY + timedelta(minutes=15)
+    while t < breakout:
+        bars.append(_bar(t, 100.5, 100.9, 100.2, 100.6))
+        t += timedelta(minutes=1)
+    bars.append(_bar(breakout, 100.9, 102.0, 100.9, 101.8))
+    bars += [_bar(breakout + timedelta(minutes=1 + i), 101.5, 101.6, 101.2, 101.4) for i in range(4)]
+    assert _run(bars, config=WEEKEND_FLAT) == []
+    assert len(_run(bars)) == 1  # the same breakout is taken when the rule is off
 
 
 def test_a_trade_still_open_at_the_end_is_reported_but_marked_open() -> None:

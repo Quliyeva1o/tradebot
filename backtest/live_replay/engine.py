@@ -34,6 +34,16 @@ GAP_TICK_WINDOW_SECONDS = 300
 # 18:46:05); MT5 truncates deal times to the second, so the true average is ~5.8 s. Against those
 # ten fills, 6 s gives the smallest mean error (2.4 points; 5 s gives 2.7).
 POLL_OFFSET_SECONDS = 6
+# run_live_nasdaq_orb.WEEKEND_FLAT_CUTOFF in minutes of broker server time -- a copy, so the engine
+# does not import a runner; tests/live_replay/test_weekend_flat_parity.py pins the two together.
+WEEKEND_FLAT_CUTOFF_MINUTE = 23 * 60 + 40
+
+
+def weekend_flat_due(epoch: int) -> bool:
+    """True from Friday's cutoff, in broker server time, until the week reopens."""
+    server = datetime.fromtimestamp(epoch, BROKER_TZ)
+    return server.weekday() >= 5 or (
+        server.weekday() == 4 and server.hour * 60 + server.minute >= WEEKEND_FLAT_CUTOFF_MINUTE)
 
 
 @dataclass(frozen=True)
@@ -156,6 +166,18 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         close(j, price, reason, touched_both=touched_both)
         return True
 
+    def market_close_price(j: int, poll: int) -> float:
+        """A market close at this poll, priced like an entry: a long sells at the bid, a short
+        buys at the ask -- the tick POLL_OFFSET_SECONDS into the minute where ticks exist."""
+        offset = POLL_OFFSET_SECONDS if poll == int(m1.ts[j]) else 0
+        quote = (ticks.entry_quote(config.symbol, int(m1.ts[j]), offset)
+                 if flags.entry_ticks and ticks is not None else None)
+        long = position.direction == SignalDirection.BUY
+        if quote is None:
+            return float(m1.open[j]) + (0.0 if long else spread_at(j))
+        bid, ask = quote
+        return bid if long or not flags.spread else ask
+
     def poll_time(j: int) -> int | None:
         """The poll this bar serves: an even minute at its open, or the even minute just before
         it when that minute had no bar. A poll during a longer gap hits a closed market, which
@@ -167,6 +189,8 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         return t - 60 if previous is None or t - 60 > previous else None
 
     for j in range(len(m1)):
+        poll = int(m1.ts[j]) if not flags.poll_clock else poll_time(j)
+        flat_for_weekend = config.weekend_flat and poll is not None and weekend_flat_due(poll)
         if position is not None:
             if flags.swap and j > 0 and server_day[j] > server_day[j - 1]:
                 days = rollover_days(_as_date(server_day[j - 1]), _as_date(server_day[j]),
@@ -174,11 +198,14 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
                 position.swap_usd += swap_usd(spec, position.direction, position.volume,
                                               float(m1.close[j - 1]), days,
                                               fx.usd_per_unit(int(m1.ts[j])))
-            check_exit(j)  # a bar that closes a trade never opens the next one
+            if flat_for_weekend:
+                # run_once closes at the poll instead of managing the trade (--weekend-flat)
+                close(j, market_close_price(j, poll), "WEEKEND_FLAT")
+            else:
+                check_exit(j)  # a bar that closes a trade never opens the next one
             continue
 
-        poll = int(m1.ts[j]) if not flags.poll_clock else poll_time(j)
-        if poll is None:
+        if poll is None or flat_for_weekend:
             continue
         setup = signals.at(scan.count_closed_by(poll))
         if setup is None or setup.setup_id in traded:

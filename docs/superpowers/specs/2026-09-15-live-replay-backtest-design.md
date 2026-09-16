@@ -14,7 +14,7 @@ Nəticə əsasən **R** ilə verilir (valyutadan asılı deyil), ikinci sütun *
 
 ## 2. Əhatə
 
-On konfiqurasiya, parametrlər iş vaxtı birbaşa `run_live_orb_*.bat` fayllarından oxunur
+On bir konfiqurasiya (on birincisi 2026-09-16-da əlavə olundu), parametrlər iş vaxtı birbaşa `run_live_orb_*.bat` fayllarından oxunur
 (əl ilə köçürülmür — `scripts/live_vs_backtest_report.py`-dakı kimi):
 
 | Task | Runner / sinif | Simvol | Parametrlər | Hesab |
@@ -29,6 +29,7 @@ On konfiqurasiya, parametrlər iş vaxtı birbaşa `run_live_orb_*.bat` fayllar�
 | OrbBreakout_GER40_Paper | nasdaq_orb | GER40 | OR 30m, scan M1, 4R | Paper |
 | OrbSweep_XAUUSD_Paper | xauusd_orb | XAUUSD | M15, sinif defoltları | Paper |
 | OrbSweep_JP225_Paper | xauusd_orb | JP225 | M15, sinif defoltları | Paper |
+| OrbBreakoutwf_XAUUSD_Paper | nasdaq_orb | XAUUSD | OR 60m, scan M1, 3R, `--weekend-flat` | Paper |
 
 Hamısı `--risk-per-trade-pct 0.005`, LONG-only (Breakout defoltu). Sweep defoltları
 (`XauusdOrbLiquiditySweepConfig`): OR 09:30 M15 şamı, yeni setup 11:00-a qədər, TP 2R,
@@ -139,6 +140,14 @@ effekti, xəbər filtri, requote/reject, VPS kəsintiləri, 2026-09-15-də əlav
 - Tarixi swap dərəcələri saxlanmayıb → bütün tarixçəyə 2026-09-15 dərəcələri (məhdudiyyət).
 - Yoxlanıb: 2026-09-14 NDX100 0.01 lot, cümə→bazar ertəsi, 29466 × 20 × 0.01 × 7.33%/360 × 3
   = $3.60; real deal −$3.59.
+
+### 4.8 Həftə sonu qaydası (`--weekend-flat`)
+- Cümə 23:40 server vaxtından həftə açılana qədər: açıq mövqe həmin yoxlamanın qiymətinə
+  bağlanır (giriş kimi qiymətləndirilir: uzun bid, qısa ask, tick olan yerdə 6-cı saniyənin
+  kotirovkası), yeni giriş açılmır. Həftə sonu swap-ı tutulmur.
+- Kəsmə runner-in `weekend_flat_due` funksiyası ilə dəqiqə-dəqiqə eynidir, saat dəyişən həftələr
+  daxil (`tests/live_replay/test_weekend_flat_parity.py`).
+- Batch backtest bu qaydanı bilmir; hesabatda bu botun "köhnə" sütunu mövqe saxlayan versiyadır.
 
 ## 5. Arxitektura
 

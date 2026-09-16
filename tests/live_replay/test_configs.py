@@ -42,6 +42,28 @@ def test_a_paper_twin_of_a_deployed_demo_bot_is_the_same_configuration(tmp_path:
     assert demo.key == paper.key and demo.task != paper.task
 
 
+def test_the_weekend_flat_launcher_is_a_breakout_with_the_rule_on(tmp_path: Path) -> None:
+    cfg = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_paper.bat",
+                         "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
+                         "--risk-per-trade-pct 0.005 --paper --weekend-flat --variant weekendflat"))
+    assert (cfg.task, cfg.family, cfg.weekend_flat, cfg.or_minutes, cfg.tp_r) == (
+        "OrbBreakoutwf_XAUUSD_Paper", "breakout", True, 60, 3.0)
+
+
+def test_the_family_comes_from_the_runner_a_launcher_calls(tmp_path: Path) -> None:
+    cfg = parse_bat(_bat(tmp_path, "run_live_orb_anyname_ger40_paper.bat",
+                         "run_live_xauusd_orb.py --symbol GER40 --timeframe M15 --risk-per-trade-pct 0.005 --paper"))
+    assert cfg.family == "sweep" and cfg.weekend_flat is False
+
+
+def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> None:
+    plain = parse_bat(_bat(tmp_path, "run_live_orb_breakout_xauusd_paper.bat",
+                           "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 --risk-per-trade-pct 0.005 --paper"))
+    flat = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_paper.bat",
+                          "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 --risk-per-trade-pct 0.005 --paper --weekend-flat"))
+    assert plain.key != flat.key
+
+
 def test_the_roster_lists_the_six_demo_bots_that_may_trade() -> None:
     assert load_roster(REPO) == {
         "OrbBreakout_XAUUSD_Demo", "OrbBreakout_NDX100_Demo", "OrbBreakout_SPX500_Demo",
@@ -49,10 +71,10 @@ def test_the_roster_lists_the_six_demo_bots_that_may_trade() -> None:
     }
 
 
-def test_scope_is_the_ten_distinct_configurations_the_repo_deploys() -> None:
+def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     assert {c.task for c in scope(REPO)} == {
         "OrbBreakout_XAUUSD_Demo", "OrbBreakout_NDX100_Demo", "OrbBreakout_SPX500_Demo",
         "OrbBreakout_DJI30_Demo", "OrbBreakout_JP225_Demo", "OrbSweep_GER40_Demo",
         "OrbBreakout_XAUUSD_Paper", "OrbBreakout_GER40_Paper", "OrbSweep_XAUUSD_Paper",
-        "OrbSweep_JP225_Paper",
+        "OrbSweep_JP225_Paper", "OrbBreakoutwf_XAUUSD_Paper",
     }

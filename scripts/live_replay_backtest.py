@@ -137,6 +137,9 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
             f"{_fmt(old_filters.last_year_pf)} → {_fmt(new_filters.last_year_pf)} | "
             f"{new_filters.blocks_green_pct:.0f}% ({new_filters.blocks}) | {marks} |")
 
+    if any(result.config.weekend_flat for result in results):
+        lines += ["", "Həftə sonu bağlayan botlarda (`--weekend-flat`) köhnə sütun batch backtest-dir və "
+                      "həftə sonu qaydasını bilmir: orada eyni konfiqurasiyanın mövqe saxlayan versiyası göstərilir."]
     lines += ["", "Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların ≥60%-i müsbət.",
               "", "## Fərqin parçalanması (netR, xüsusiyyət söndürüləndə)", "",
               "| Bot | tam əkiz | " + " | ".join(ABLATIONS) + " |",

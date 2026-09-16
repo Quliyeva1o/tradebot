@@ -2748,3 +2748,8 @@ Deviations made while executing, each forced by a gate:
   up to 15 points inside that window. The test asserts the replay's entry lies within that window's
   quote range plus ~0.3 spread of slippage; exits keep the one-spread tolerance.
 - The spec's §4.3 and §6 G3 were updated to match (same commit as the entry change).
+- **2026-09-16: an eleventh configuration.** main gained `OrbBreakoutwf_XAUUSD_Paper` (60m/3R with
+  `--weekend-flat`), whose launcher token `breakoutwf` made `parse_bat` raise. The family now comes
+  from the runner a launcher calls, `BotConfig.weekend_flat` carries the rule, and the engine closes
+  at the Friday 23:40 server poll and takes no entries after it -- the runner's own cutoff, pinned
+  minute by minute by `tests/live_replay/test_weekend_flat_parity.py`.

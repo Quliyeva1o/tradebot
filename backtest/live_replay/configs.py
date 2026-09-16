@@ -29,12 +29,13 @@ class BotConfig:
     or_minutes: int | None       # breakout only
     tp_r: float | None           # breakout only; the sweep uses its class default (2.0)
     entry_window_end: str | None  # sweep only, "HH:MM" when a launcher overrides the class default
+    weekend_flat: bool = False    # breakout only: --weekend-flat, flat from Friday 23:40 server time
 
     @property
     def key(self) -> tuple:
         """What makes two launchers the same strategy, ignoring Demo/Paper."""
         return (self.family, self.symbol, self.scan_minutes, self.or_minutes, self.tp_r,
-                self.entry_window_end)
+                self.entry_window_end, self.weekend_flat)
 
 
 def _flag(text: str, name: str, default: str | None = None) -> str | None:
@@ -42,15 +43,24 @@ def _flag(text: str, name: str, default: str | None = None) -> str | None:
     return match.group(1) if match else default
 
 
+# The strategy family is whichever runner a launcher calls. The file name's first token only names
+# the task, so a variant launcher such as run_live_orb_breakoutwf_xauusd_paper.bat needs no case.
+_RUNNER_FAMILY = {"run_live_nasdaq_orb.py": "breakout", "run_live_xauusd_orb.py": "sweep"}
+
+
 def parse_bat(path: Path) -> BotConfig:
     """Reads one run_live_orb_*.bat into a BotConfig."""
     text = path.read_text(encoding="utf-8")
-    family, symbol_tag, mode = path.stem.removeprefix("run_live_orb_").split("_")
+    name, symbol_tag, mode = path.stem.removeprefix("run_live_orb_").split("_")
+    family = next((f for runner, f in _RUNNER_FAMILY.items() if runner in text), None)
+    if family is None:
+        raise ValueError(f"{path.name}: calls neither run_live_nasdaq_orb.py nor run_live_xauusd_orb.py")
     symbol, risk = _flag(text, "symbol"), _flag(text, "risk-per-trade-pct")
     if symbol is None or risk is None:
         raise ValueError(f"{path.name}: --symbol and --risk-per-trade-pct are required")
-    common = dict(task=f"Orb{family.capitalize()}_{symbol_tag.upper()}_{mode.capitalize()}",
-                  family=family, symbol=symbol, paper="--paper" in text, risk_pct=float(risk))
+    common = dict(task=f"Orb{name.capitalize()}_{symbol_tag.upper()}_{mode.capitalize()}",
+                  family=family, symbol=symbol, paper="--paper" in text, risk_pct=float(risk),
+                  weekend_flat="--weekend-flat" in text)
     if family == "breakout":
         tp_r = _flag(text, "tp-r")
         if tp_r is None:
@@ -58,10 +68,8 @@ def parse_bat(path: Path) -> BotConfig:
         return BotConfig(**common, scan_minutes=_TF_MINUTES[_flag(text, "scan-timeframe", "M1")],
                          or_minutes=int(_flag(text, "or-minutes", "15")), tp_r=float(tp_r),
                          entry_window_end=None)
-    if family == "sweep":
-        return BotConfig(**common, scan_minutes=_TF_MINUTES[_flag(text, "timeframe", "M15")],
-                         or_minutes=None, tp_r=None, entry_window_end=_flag(text, "entry-window-end"))
-    raise ValueError(f"{path.name}: unknown strategy family {family!r}")
+    return BotConfig(**common, scan_minutes=_TF_MINUTES[_flag(text, "timeframe", "M15")],
+                     or_minutes=None, tp_r=None, entry_window_end=_flag(text, "entry-window-end"))
 
 
 def load_roster(repo: Path = REPO) -> set[str]:
