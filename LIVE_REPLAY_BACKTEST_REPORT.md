@@ -43,6 +43,13 @@ Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların �
 | OrbSweep_JP225_Paper | -6.7 | -6.4 | -2.1 | -8.9 | -7.3 | -6.7 | -5.8 | -6.7 |
 | OrbSweep_XAUUSD_Paper | +0.4 | +1.7 | +1.4 | +0.6 | +0.4 | +1.1 | +2.8 | +1.7 |
 
+**Swap sütununu necə oxumaq lazımdır.** Ən böyük fərq swap-dandır, çünki bu strategiya 4R
+hədəflə günlərlə mövqe saxlayır və indekslərdə illik 7.33% maliyyələşdirmə tutulur. Amma bütün
+tarixçəyə **bugünkü** dərəcə tətbiq olunub; 2020–2021-də faizlər sıfıra yaxın idi, deməli o
+illərin real swap xərci xeyli az olub. Ona görə düzgün oxunuş budur: **həqiqi nəticə "tam əkiz"
+ilə "swap" sütununun arasındadır** — birincisi bugünkü dərəcə ilə, ikincisi sıfır faiz sərhədi.
+Dəqiqləşdirmə üçün brokerin tarixi swap dərəcələri lazımdır, onlar isə heç yerdə saxlanmır.
+
 ## $50,000 hesabda (hər bot ayrıca)
 
 | Bot | son balans | max drawdown % | trade | swap $ | komissiya $ |
@@ -72,6 +79,11 @@ Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların �
 | OrbBreakout_XAUUSD_Paper | 213 | 457 | 2 | 4 | 0 | 0 | 0 | 1.13x | 1.389 | 1.385 |
 | OrbSweep_JP225_Paper | 37 | 39 | 4 | 0 | 0 | 0 | 1 | 1.00x | 1.253 | 1.253 |
 | OrbSweep_XAUUSD_Paper | 104 | 105 | 0 | 1 | 0 | 0 | 6 | 1.13x | — | — |
+
+**Spread yoxlaması (G4).** Bar-ların spread sütunu indekslərdə real tick spread-i ilə eynidir
+(1.00x). Yalnız XAUUSD-də 13% aşağı göstərir. 1.13x ilə yenidən hesabladım, təsiri cüzidir:
+XAUUSD Demo PF 1.090 → 1.087 (991 trade-də −2.4R), XAUUSD Paper 1.176 → 1.174,
+XAUUSD Sweep 1.004 → 1.003. Cədvəldəki rəqəmlər 1.00x ilədir.
 
 ## Məhdudiyyətlər
 
