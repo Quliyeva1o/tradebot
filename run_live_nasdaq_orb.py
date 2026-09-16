@@ -22,7 +22,10 @@ Usage:
 """
 
 import argparse
+import re
 import sys
+from datetime import UTC, datetime
+from datetime import time as dtime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -39,6 +42,7 @@ from execution.position_sizer import PositionSizer
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5.connector import MT5Connector
+from mt5.rates import BROKER_TZ
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
@@ -73,6 +77,28 @@ def _grace_bars(timeframe_str: str) -> int:
     """SIGNAL_GRACE_MINUTES converted to this timeframe's bar count."""
     per_bar = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}.get(timeframe_str, 1)
     return max(1, SIGNAL_GRACE_MINUTES // per_bar)
+
+
+# --weekend-flat. FundingPips closes gold at 23:48 broker server time every Friday (measured
+# 2024-09..2026-09): 16:48 New York most weeks, but 17:48 in the weeks when only one side of the
+# Atlantic has changed its clocks -- so the cutoff is in server time, not New York time. 23:40
+# leaves four polls before the close. Early closes before US holidays (12:54 NY on 2026-06-19
+# and 2026-07-03) come before the cutoff, so a position open on those Fridays is still carried
+# over the weekend.
+WEEKEND_FLAT_CUTOFF = dtime(23, 40)
+
+
+def weekend_flat_due(now: datetime) -> bool:
+    """True from Friday's cutoff, in broker server time, until the week reopens."""
+    server = now.astimezone(BROKER_TZ)
+    return server.weekday() >= 5 or (server.weekday() == 4 and server.time() >= WEEKEND_FLAT_CUTOFF)
+
+
+def _variant_name(value: str) -> str:
+    """argparse type for --variant: it ends up in file names, so letters and digits only."""
+    if not re.fullmatch(r"[a-z0-9]+", value):
+        raise argparse.ArgumentTypeError(f"--variant must be lower-case letters and digits, got {value!r}")
+    return value
 
 _CURRENT_MODE = "live"
 
@@ -109,6 +135,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
     parser.add_argument("--direction", default="long", choices=["long", "short", "both"])
+    parser.add_argument(
+        "--weekend-flat", action="store_true",
+        help="Close this bot's position from Friday 23:40 broker server time and open nothing new "
+             "until the week reopens. Off by default -- see WEEKEND_FLAT_CUTOFF.",
+    )
+    parser.add_argument(
+        "--variant", type=_variant_name, default=None,
+        help="Suffix for this bot's state files (lower-case letters and digits), so a second bot "
+             "on the same symbol keeps its own paper position, risk state and ledger.",
+    )
     parser.add_argument(
         "--paper",
         action="store_true",
@@ -167,6 +203,16 @@ def _log_trade_event(event: str, **fields: object) -> None:
 STRATEGY_TAG = "setup_nasdaq_orb_m1"
 
 
+def _bot_tag(symbol: str, variant: str | None) -> str:
+    """The suffix on every state file this bot owns.
+
+    A variant keeps a second bot on the same symbol -- the weekend-flat A/B twin -- from sharing
+    the first one's paper position, daily risk state, kill-switch flag and traded-setups ledger.
+    """
+    tag = symbol.lower().replace(".", "_")
+    return f"{tag}_{variant}" if variant else tag
+
+
 def _traded_setups_path(risk_dir: Path, symbol_tag: str, paper: bool) -> Path:
     """Where this bot remembers the setups it has opened -- see execution/traded_setups.py.
 
@@ -220,6 +266,23 @@ def _manage_open_trade(trade_manager: TradeManager, broker: IBroker, position: P
     else:
         logger.info("Trade %s for %s closed: %s", position.id, symbol, action.value)
         _log_trade_event("closed", symbol=symbol, position_id=position.id, outcome=action.value)
+
+
+def _close_for_weekend(trade_manager: TradeManager, broker: IBroker, position: Position) -> None:
+    """--weekend-flat: close this bot's position before the broker shuts for the weekend."""
+    _attach_to_open_position(trade_manager, broker, position)
+    action = trade_manager.close_trade()
+    if action is TradeManagerAction.CLOSE_FAILED:
+        close_result = trade_manager.last_close_result
+        reason = close_result.comment if close_result is not None else "unknown"
+        retcode = close_result.retcode if close_result is not None else None
+        logger.error("Weekend-flat close of %s for %s FAILED: %s (retcode=%s); the next poll retries.",
+                     position.id, position.symbol, reason, retcode)
+        _log_trade_event("close_failed", symbol=position.symbol, position_id=position.id,
+                         reason=reason, retcode=retcode)
+        return
+    logger.info("Trade %s for %s closed before the weekend.", position.id, position.symbol)
+    _log_trade_event("closed_weekend_flat", symbol=position.symbol, position_id=position.id)
 
 
 def _log_sizing(symbol: str, trade_manager: TradeManager, setup_id: str) -> None:
@@ -384,6 +447,8 @@ def run_once(
     lookback_days: int,
     kill_switch_flag_path: Path | None = None,
     traded_setups_path: Path | None = None,
+    weekend_flat: bool = False,
+    now: datetime | None = None,
 ) -> None:
     bars_per_day = {"M1": 1440, "M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6}.get(timeframe_str, 1440)
     lookback_bars = lookback_days * bars_per_day
@@ -395,12 +460,20 @@ def run_once(
         logger.error("Ambiguous open positions for %s (%d owned by this strategy); skipping.", symbol, len(mine))
         _log_trade_event("ambiguous_positions", symbol=symbol, count=len(mine))
         return
+    flat_for_weekend = weekend_flat and weekend_flat_due(now if now is not None else datetime.now(UTC))
     if len(mine) == 1:
-        _manage_open_trade(trade_manager, broker, mine[0], bars)
+        if flat_for_weekend:
+            _close_for_weekend(trade_manager, broker, mine[0])
+        else:
+            _manage_open_trade(trade_manager, broker, mine[0], bars)
         return
     if foreign:
         logger.info("Skipping %s: %d position(s) held by another strategy.", symbol, len(foreign))
         _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
+        return
+    if flat_for_weekend:
+        logger.info("RESULT: WEEKEND FLAT -- no new entries for %s until the week reopens.", symbol)
+        _log_trade_event("entry_blocked_weekend_flat", symbol=symbol)
         return
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
@@ -416,8 +489,9 @@ def main(argv: list[str] | None = None) -> None:
 
     # Deliberately separate paper state/kill-switch files (see
     # run_live_sr_bias.py's identical per-symbol rationale) -- symbol-tagged
-    # so a future second instance doesn't collide.
-    symbol_tag = args.symbol.lower().replace(".", "_")
+    # so a future second instance doesn't collide. --variant extends the tag for a
+    # second bot on the same symbol (see _bot_tag).
+    symbol_tag = _bot_tag(args.symbol, args.variant)
     risk_dir = Path(__file__).parent / "risk"
     kill_switch_flag_path = risk_dir / f"kill_switch_nasdaq_orb_{symbol_tag}_paper.flag" if args.paper else None
     daily_risk_tracker = (
@@ -485,6 +559,7 @@ def main(argv: list[str] | None = None) -> None:
             timeframe_str=args.scan_timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
             traded_setups_path=_traded_setups_path(risk_dir, symbol_tag, args.paper),
+            weekend_flat=args.weekend_flat,
         )
     finally:
         connector.disconnect()
