@@ -72,9 +72,29 @@ def test_the_roster_lists_the_six_demo_bots_that_may_trade() -> None:
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
+    # Since 2026-09-17 the Demo bots reverse on a stop and their paper twins do not, so the twins
+    # are configurations of their own (the control), and the inverse paper bots are six more.
     assert {c.task for c in scope(REPO)} == {
         "OrbBreakout_XAUUSD_Demo", "OrbBreakout_NDX100_Demo", "OrbBreakout_SPX500_Demo",
         "OrbBreakout_DJI30_Demo", "OrbBreakout_JP225_Demo", "OrbSweep_GER40_Demo",
         "OrbBreakout_XAUUSD_Paper", "OrbBreakout_GER40_Paper", "OrbSweep_XAUUSD_Paper",
         "OrbSweep_JP225_Paper", "OrbBreakoutwf_XAUUSD_Paper",
+        "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
+        "OrbBreakout_JP225_Paper", "OrbSweep_GER40_Paper",
+        "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper", "OrbBreakoutinv_SPX500_Paper",
+        "OrbBreakoutinv_DJI30_Paper", "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
     }
+    demo = {c.task: c for c in scope(REPO) if not c.paper}
+    assert {c.reverse_on_stop_r for c in demo.values()} == {0.5}
+
+
+def test_the_reverse_and_inverse_flags_are_parsed_and_make_different_configurations(tmp_path: Path) -> None:
+    args = "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 4.0 --or-minutes 15 --risk-per-trade-pct 0.005"
+    plain = parse_bat(_bat(tmp_path, "run_live_orb_breakout_xauusd_paper.bat", args + " --paper"))
+    reverse = parse_bat(_bat(tmp_path, "run_live_orb_breakout_xauusd_demo.bat", args + " --reverse-on-stop 0.5"))
+    inverse = parse_bat(_bat(tmp_path, "run_live_orb_breakoutinv_xauusd_paper.bat",
+                             args + " --paper --inverse --variant inverse"))
+    assert (plain.reverse_on_stop_r, plain.inverse) == (None, False)
+    assert (reverse.reverse_on_stop_r, reverse.inverse) == (0.5, False)
+    assert (inverse.task, inverse.inverse, inverse.reverse_on_stop_r) == ("OrbBreakoutinv_XAUUSD_Paper", True, None)
+    assert len({plain.key, reverse.key, inverse.key}) == 3

@@ -16,6 +16,11 @@
 # unaffected: they use per-strategy state files, never collide, and running
 # both sides on a symbol is how the losing config stays measurable.
 
+# 2026-09-17: every bot below runs --reverse-on-stop 0.5 -- a stop-out opens the opposite trade
+# (execution/stop_and_reverse.py). Chosen by the user against a backtest that loses over the last
+# 12 months (PF 0.74). Their *_Paper twins do NOT reverse and are the control; the
+# Orb*inv_*_Paper bots trade the exact inverse of each (strategy/inverse.py).
+
 # --- Breakout owns these four ---
 OrbBreakout_XAUUSD_Demo      # 15m OR / M1 / 4R -- PF 1.235, DD 50.2R; last 2y PF 1.496 (swapped with Paper's 60m/3R 2026-09-14)
 OrbBreakout_NDX100_Demo      # 30m OR / M5 / 4R -- PF 1.329, 7/9 folds

@@ -39,6 +39,7 @@ from execution.mt5_broker import MT5Broker
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
+from execution.stop_and_reverse import sync_reverse_order
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5.connector import MT5Connector
@@ -46,6 +47,7 @@ from mt5.rates import BROKER_TZ
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
+from strategy.inverse import mirror_setup
 from strategy.nasdaq_orb_m1_breakout import NasdaqOrbM1BreakoutConfig, NasdaqOrbM1BreakoutStrategy
 from strategy.risk_reward import resolve_stop_and_target
 from utils.logging import setup_logger, setup_structured_logger
@@ -146,12 +148,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "on the same symbol keeps its own paper position, risk state and ledger.",
     )
     parser.add_argument(
+        "--reverse-on-stop", type=float, default=None, metavar="R",
+        help="Rest an opposite pending stop order at every open trade's stop, so a stop-out opens "
+             "the reverse trade (same lots, stop back at the original entry, target R times that "
+             "distance). Demo only -- see execution/stop_and_reverse.py.",
+    )
+    parser.add_argument(
+        "--inverse", action="store_true",
+        help="Trade the exact opposite of every signal: other direction, stop and target swapped "
+             "-- see strategy/inverse.py.",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="Use PaperBroker (virtual fills against real MT5 prices, no real orders) instead of "
         "MT5Broker. REQUIRED for now -- this strategy has NOT yet run in any live/paper capacity.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.reverse_on_stop is not None:
+        if args.paper:
+            parser.error("--reverse-on-stop needs real pending stop orders, which PaperBroker cannot fill")
+        if args.reverse_on_stop <= 0:
+            parser.error("--reverse-on-stop must be a positive R multiple")
+        if args.weekend_flat:
+            parser.error("--reverse-on-stop with --weekend-flat is not modelled by the live replay")
+    return args
 
 
 def _ensure_explicit_demo_configuration() -> None:
@@ -327,6 +348,7 @@ def _evaluate_for_new_trade(
     grace_bars: int,
     kill_switch_flag_path: Path | None = None,
     traded_setups_path: Path | None = None,
+    inverse: bool = False,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (a fresh strategy instance only ever sees ONE bar per evaluate() call
@@ -396,6 +418,9 @@ def _evaluate_for_new_trade(
         _log_trade_event("no_signal", symbol=symbol)
         return
 
+    if inverse:
+        setup = mirror_setup(setup)
+
     # Nothing else remembers that this setup was already traded: a broker-side stop
     # inside the grace window leaves the next poll with no position and the same
     # setup still fresh -- see execution/traded_setups.py.
@@ -449,6 +474,32 @@ def run_once(
     traded_setups_path: Path | None = None,
     weekend_flat: bool = False,
     now: datetime | None = None,
+    reverse_on_stop_r: float | None = None,
+    inverse: bool = False,
+) -> None:
+    _poll_once(connector, broker, trade_manager, strategy, symbol, timeframe, timeframe_str,
+               lookback_days, kill_switch_flag_path, traded_setups_path, weekend_flat, now, inverse)
+    if reverse_on_stop_r is not None:
+        # after the poll, so a trade opened just now has its reverse order within the same poll
+        mine, _ = _partition_positions(broker.get_open_positions(), symbol)
+        sync_reverse_order(broker, symbol, STRATEGY_TAG, mine, reverse_on_stop_r, _log_trade_event,
+                           halted=is_trading_halted(kill_switch_flag_path))
+
+
+def _poll_once(
+    connector: MT5Connector,
+    broker: IBroker,
+    trade_manager: TradeManager,
+    strategy: NasdaqOrbM1BreakoutStrategy,
+    symbol: str,
+    timeframe: Timeframe,
+    timeframe_str: str,
+    lookback_days: int,
+    kill_switch_flag_path: Path | None,
+    traded_setups_path: Path | None,
+    weekend_flat: bool,
+    now: datetime | None,
+    inverse: bool,
 ) -> None:
     bars_per_day = {"M1": 1440, "M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6}.get(timeframe_str, 1440)
     lookback_bars = lookback_days * bars_per_day
@@ -478,7 +529,7 @@ def run_once(
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
                             _grace_bars(timeframe_str), kill_switch_flag_path,
-                            traded_setups_path=traded_setups_path)
+                            traded_setups_path=traded_setups_path, inverse=inverse)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -514,6 +565,8 @@ def main(argv: list[str] | None = None) -> None:
     if is_trading_halted(kill_switch_flag_path):
         logger.info("RESULT: TRADING HALTED (kill-switch active)")
         print("TRADING HALTED (kill-switch active)")
+        if args.reverse_on_stop is not None:
+            _cancel_reverse_orders(args.symbol, args.reverse_on_stop)
         return
 
     connector = MT5Connector()
@@ -560,7 +613,21 @@ def main(argv: list[str] | None = None) -> None:
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
             traded_setups_path=_traded_setups_path(risk_dir, symbol_tag, args.paper),
             weekend_flat=args.weekend_flat,
+            reverse_on_stop_r=args.reverse_on_stop, inverse=args.inverse,
         )
+    finally:
+        connector.disconnect()
+
+
+def _cancel_reverse_orders(symbol: str, reward_r: float) -> None:
+    """While halted nothing else runs, but a resting reverse order would still open a trade."""
+    connector = MT5Connector()
+    broker = MT5Broker(connector=connector)
+    if not broker.connect():
+        logger.error("Could not connect to MT5 to cancel %s's reverse order while halted.", symbol)
+        return
+    try:
+        sync_reverse_order(broker, symbol, STRATEGY_TAG, [], reward_r, _log_trade_event, halted=True)
     finally:
         connector.disconnect()
 

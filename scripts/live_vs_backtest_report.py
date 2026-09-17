@@ -34,6 +34,7 @@ import MetaTrader5 as mt5  # noqa: N813
 
 import scripts.nasdaq_orb_m1_breakout_backtest as orb_mod
 import scripts.xauusd_orb_liquidity_sweep_backtest as sweep_mod
+from execution.stop_and_reverse import is_reverse
 from scripts.consistency_analysis import _cached_load_m1, agg, consistency
 from scripts.two_strategy_symbol_sweep import DATA_DIR, recent_spread
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
@@ -44,6 +45,18 @@ sweep_mod.load_m1 = _cached_load_m1
 REPO = Path(__file__).parent.parent
 BREAKOUT_TAG = "setup_nasdaq_orb_m1"     # STRATEGY_TAG in run_live_nasdaq_orb.py
 SWEEP_TAG = "setup_xauusd_orb"           # STRATEGY_TAG in run_live_xauusd_orb.py
+
+
+def _strategy_label(comment: str) -> str | None:
+    """Which bot opened a deal, from its comment -- None for anything these bots did not open.
+
+    A --reverse-on-stop trade carries its bot's tag too, but it is a different trade (a 0.5R target,
+    not the strategy's own), so it is labelled apart and never mixed into the strategy's PF.
+    """
+    for tag, family in ((BREAKOUT_TAG, "Breakout"), (SWEEP_TAG, "Sweep")):
+        if comment.startswith(tag):
+            return f"{family} reversal" if is_reverse(comment, tag) else family
+    return None
 
 
 def _flag(text: str, name: str, default: str | None = None) -> str | None:
@@ -143,12 +156,13 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
         out: dict[str, list[dict]] = defaultdict(list)
         for pid, ex in exits.items():
             en = entries.get(pid)
-            if en is None or not en.comment.startswith((BREAKOUT_TAG, SWEEP_TAG)):
+            label = None if en is None else _strategy_label(en.comment)
+            if label is None:
                 continue
             reason = "TP" if "[tp" in ex.comment else ("SL" if "[sl" in ex.comment else "?")
             out[en.symbol].append(dict(
                 pid=pid, day=datetime.fromtimestamp(en.time, UTC).date(),
-                strategy="Breakout" if en.comment.startswith(BREAKOUT_TAG) else "Sweep",
+                strategy=label,
                 entry=en.price, exit=ex.price, profit=ex.profit, reason=reason,
             ))
         return dict(out)
@@ -230,6 +244,19 @@ def _report_bot(sym: str, family: str, label: str, cfg: dict, rows: list[dict], 
     return len(rows), pnl
 
 
+def _report_reversals(rows: list[dict]) -> tuple[int, float]:
+    """The bot's --reverse-on-stop trades, apart from its own (execution/stop_and_reverse.py)."""
+    pnl = sum(r["profit"] for r in rows)
+    gp = sum(r["profit"] for r in rows if r["profit"] > 0)
+    gl = abs(sum(r["profit"] for r in rows if r["profit"] <= 0))
+    pf = (gp / gl) if gl > 0 else float("inf")
+    print(f"   REVERSAL (stopdan sonra eks trade): PF {pf:.3f}  n={len(rows)}  P&L ${pnl:+,.2f}")
+    for r in sorted(rows, key=lambda x: x["day"]):
+        print(f"      {r['day']}  {r['reason']:2}  giris {r['entry']:>10.2f}  "
+              f"cixis {r['exit']:>10.2f}  ${r['profit']:>+8.2f}")
+    return len(rows), pnl
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30, help="canli tarixceden nece gun geriye baxilsin")
@@ -266,6 +293,11 @@ def main() -> None:
         n, pnl = _report_bot(sym, family, label, cfg, rows, base)
         total_n += n
         total_profit += pnl
+        reversals = [r for r in live.get(sym, []) if r["strategy"] == f"{family} reversal"]
+        if reversals:
+            n, pnl = _report_reversals(reversals)
+            total_n += n
+            total_profit += pnl
 
     print("\n" + "-" * 104)
     print(f"CEMI: {total_n} bagli trade, P&L ${total_profit:+,.2f}")

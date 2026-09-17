@@ -142,6 +142,12 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
     if any(result.config.weekend_flat for result in results):
         lines += ["", "Həftə sonu bağlayan botlarda (`--weekend-flat`) köhnə sütun batch backtest-dir və "
                       "həftə sonu qaydasını bilmir: orada eyni konfiqurasiyanın mövqe saxlayan versiyası göstərilir."]
+    if any(result.config.reverse_on_stop_r is not None for result in results):
+        lines += ["", "Stopdan sonra əks trade açan botlarda (`--reverse-on-stop`) əkiz sütunu reversal trade-ləri "
+                      "də sayır (setup_id `_sar` ilə bitir), köhnə sütun isə reversal-sız batch backtest-dir."]
+    if any(result.config.inverse for result in results):
+        lines += ["", "Tərs botlarda (`--inverse`) köhnə sütun tərs olmayan orijinal strategiyanın batch "
+                      "backtest-idir; müqayisə üçün yox, yalnız istinad üçündür."]
     lines += ["", "Filtrlər sırası: tam tarixçə PF > 1, son 1 il PF > 1, 6 aylıq blokların ≥60%-i müsbət.",
               "", "## Fərqin parçalanması (netR, xüsusiyyət söndürüləndə)", "",
               "| Bot | tam əkiz | " + " | ".join(ABLATIONS) + " |",

@@ -175,3 +175,64 @@ def test_weekend_flat_takes_no_entry_after_the_friday_cutoff() -> None:
 def test_a_trade_still_open_at_the_end_is_reported_but_marked_open() -> None:
     trades = _run(_session(DAY, FLAT))
     assert trades[-1].exit_reason == "OPEN"
+
+
+# --reverse-on-stop: the reverse trade fills at the stop, holds the symbol's one position until it
+# closes, and is never reversed again.
+REVERSE = replace(CONFIG, reverse_on_stop_r=0.5)
+# 09:53 and 09:54 (the entry bar) hold; the 09:55 bar trades through the 100.0 stop only
+STOPPED = FLAT[:2] + [(100.5, 100.6, 99.9, 99.95)]
+
+
+def _shifted(bars: list[Bar], by: float) -> list[Bar]:
+    return [replace(b, open=b.open + by, high=b.high + by, low=b.low + by, close=b.close + by) for b in bars]
+
+
+def test_a_stopped_trade_opens_the_reverse_at_its_stop_which_can_reach_its_target() -> None:
+    tail = STOPPED + [(99.5, 99.6, 99.0, 99.1)] + [(99.2, 99.3, 99.0, 99.1)] * 5
+    original, reverse = _run(_session(DAY, tail), config=REVERSE)
+    assert (original.exit_reason, original.exit) == ("SL", 100.0)
+    assert reverse.setup_id == original.setup_id + "_sar"
+    assert (reverse.direction, reverse.entry, reverse.stop) == ("SELL", 100.0, pytest.approx(101.6))
+    assert reverse.target == pytest.approx(100.0 - 0.5 * 1.6)
+    # the next bar's ask low 99.1 reaches the 99.2 target
+    assert (reverse.exit_reason, reverse.exit) == ("TP", pytest.approx(99.2))
+    assert reverse.r == pytest.approx(0.5)
+    assert reverse.risk_usd == pytest.approx(original.risk_usd)
+
+
+def test_without_ticks_a_stop_bar_that_also_spans_the_reverse_stop_counts_as_a_loss() -> None:
+    tail = FLAT[:2] + [(101.5, 101.6, 99.5, 99.8)] + FLAT  # the stop bar's ask high also reaches 101.6
+    original, reverse = _run(_session(DAY, tail), config=REVERSE)[:2]
+    assert (reverse.exit_reason, reverse.closed_on_entry_bar) == ("SL", True)
+    assert reverse.r == pytest.approx(-1.0)
+
+
+def test_a_trade_that_reaches_its_target_is_not_reversed() -> None:
+    tail = FLAT[:2] + [(101.5, 110.0, 101.4, 109.5)] + FLAT
+    trades = _run(_session(DAY, tail), config=REVERSE)
+    assert [t.exit_reason for t in trades][:1] == ["TP"]
+    assert not any(t.setup_id.endswith("_sar") for t in trades)
+
+
+def test_an_open_reverse_trade_blocks_the_next_days_signal() -> None:
+    far = replace(CONFIG, reverse_on_stop_r=20.0)  # its target is out of reach
+    day1 = _session(DAY, STOPPED + [(99.8, 99.9, 99.6, 99.7)] * 10)
+    day2 = _shifted(_session(DAY + timedelta(days=1), [(101.5, 101.6, 101.2, 101.4)] * 10), -10.0)
+    with_rule = _run(day1 + day2, config=far)
+    assert [t.setup_id.endswith("_sar") for t in with_rule] == [False, True]
+    assert with_rule[1].exit_reason == "OPEN"
+    assert len(_run(day1 + day2)) == 2  # without the rule the second day trades
+
+
+def test_the_reverse_rule_is_refused_with_weekend_flat() -> None:
+    with pytest.raises(ValueError):
+        _run(_session(DAY, FLAT), config=replace(REVERSE, weekend_flat=True))
+
+
+def test_an_inverse_bot_sells_the_breakout_with_stop_and_target_swapped() -> None:
+    trade = _run(_session(DAY, FLAT), config=replace(CONFIG, inverse=True))[0]
+    assert trade.setup_id.endswith("_inv")
+    assert trade.direction == "SELL"
+    assert trade.entry == pytest.approx(101.5)  # a sell fills at the bid
+    assert (trade.stop, trade.target) == (pytest.approx(101.8 + 4 * 1.8), 100.0)

@@ -41,3 +41,12 @@ def test_every_bot_in_the_real_roster_has_a_deployed_bat():
 def test_report_no_longer_consults_the_local_task_scheduler():
     """Local task state is exactly what went wrong once the bots moved to the VPS."""
     assert not hasattr(report, "_task_states")
+
+
+def test_reverse_trades_are_labelled_apart_from_their_bots_own():
+    """A 0.5R reverse trade mixed into the Breakout PF would hide what the strategy itself is doing."""
+    assert report._strategy_label("setup_nasdaq_orb_m1__9f089d26") == "Breakout"
+    assert report._strategy_label("setup_xauusd_orb_rev_d929727e") == "Sweep"
+    assert report._strategy_label("setup_nasdaq_orb_m1_sar884987") == "Breakout reversal"
+    assert report._strategy_label("setup_xauusd_orb_sar12884987") == "Sweep reversal"
+    assert report._strategy_label("manual") is None

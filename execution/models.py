@@ -86,6 +86,24 @@ class OrderResult:
         require_non_negative(self.volume, "volume")
 
 
+@dataclass(frozen=True)
+class PendingOrder:
+    """A resting order the venue still holds: placed, not yet filled, not cancelled.
+
+    `comment` is what the order was sent with, so the caller can tell which bot owns it -- the
+    same role Position.comment plays for open positions.
+    """
+
+    id: str
+    symbol: str
+    order_type: OrderType
+    volume: float
+    price: float
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    comment: str = ""
+
+
 class TradeManagerAction(Enum):
     """Outcome of a single TradeManager.on_new_bar()/close_trade() call.
 

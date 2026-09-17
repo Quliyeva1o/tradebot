@@ -8,6 +8,7 @@ signals. Needs data/history/fundingpips; skipped where it is absent.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -25,7 +26,21 @@ from strategy.xauusd_orb_liquidity_sweep import (
     XauusdOrbLiquiditySweepConfig, XauusdOrbLiquiditySweepStrategy,
 )
 
-CONFIGS = scope()
+
+
+def _signal_streams():
+    """One configuration per distinct signal stream: --reverse-on-stop changes trades, not signals,
+    so a Demo bot and its paper twin would only replay the same polls twice."""
+    seen, configs = set(), []
+    for config in scope():
+        key = replace(config, reverse_on_stop_r=None).key
+        if key not in seen:
+            seen.add(key)
+            configs.append(config)
+    return configs
+
+
+CONFIGS = _signal_streams()
 DATA_PRESENT = all((DEFAULT_DATA_DIR / f"{c.symbol}_M1.csv").exists() for c in CONFIGS)
 REPLAY_FROM = datetime(2025, 9, 1, tzinfo=UTC)
 BREAKOUT_LOOKBACK = {1: 2 * 1440, 5: 2 * 288}  # run_live_nasdaq_orb.run_once
@@ -70,7 +85,8 @@ def _runner_setup(config, bars, tmp_path):
         runner._evaluate_for_new_trade(
             capture, None, _fresh_strategy(config), bars, config.symbol,
             Timeframe(f"M{config.scan_minutes}"), grace_bars(config.scan_minutes),
-            kill_switch_flag_path=tmp_path / "no_kill_switch.flag", traded_setups_path=ledger)
+            kill_switch_flag_path=tmp_path / "no_kill_switch.flag", traded_setups_path=ledger,
+            inverse=config.inverse)
     return capture.setups[-1] if capture.setups else None
 
 

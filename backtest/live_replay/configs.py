@@ -30,12 +30,14 @@ class BotConfig:
     tp_r: float | None           # breakout only; the sweep uses its class default (2.0)
     entry_window_end: str | None  # sweep only, "HH:MM" when a launcher overrides the class default
     weekend_flat: bool = False    # breakout only: --weekend-flat, flat from Friday 23:40 server time
+    inverse: bool = False         # --inverse: every setup mirrored (strategy/inverse.py)
+    reverse_on_stop_r: float | None = None  # --reverse-on-stop R (execution/stop_and_reverse.py)
 
     @property
     def key(self) -> tuple:
         """What makes two launchers the same strategy, ignoring Demo/Paper."""
         return (self.family, self.symbol, self.scan_minutes, self.or_minutes, self.tp_r,
-                self.entry_window_end, self.weekend_flat)
+                self.entry_window_end, self.weekend_flat, self.inverse, self.reverse_on_stop_r)
 
 
 def _flag(text: str, name: str, default: str | None = None) -> str | None:
@@ -58,9 +60,11 @@ def parse_bat(path: Path) -> BotConfig:
     symbol, risk = _flag(text, "symbol"), _flag(text, "risk-per-trade-pct")
     if symbol is None or risk is None:
         raise ValueError(f"{path.name}: --symbol and --risk-per-trade-pct are required")
+    reverse = _flag(text, "reverse-on-stop")
     common = dict(task=f"Orb{name.capitalize()}_{symbol_tag.upper()}_{mode.capitalize()}",
                   family=family, symbol=symbol, paper="--paper" in text, risk_pct=float(risk),
-                  weekend_flat="--weekend-flat" in text)
+                  weekend_flat="--weekend-flat" in text, inverse="--inverse" in text,
+                  reverse_on_stop_r=float(reverse) if reverse is not None else None)
     if family == "breakout":
         tp_r = _flag(text, "tp-r")
         if tp_r is None:

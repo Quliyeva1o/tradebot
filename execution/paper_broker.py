@@ -26,7 +26,7 @@ from execution.event_log import log_fill
 from execution.fill_simulator import simulate_market_fill
 from execution.level_fill import exit_fill, limit_fill
 from execution.interfaces import IBroker
-from execution.models import OrderRequest, OrderResult, Position
+from execution.models import OrderRequest, OrderResult, PendingOrder, Position
 from execution.order import Order, OrderStatus
 from mt5.connector import MT5Connector
 from utils.logging import setup_logger
@@ -577,6 +577,19 @@ class PaperBroker(IBroker):
             self._load_state()
             positions = list(self._positions.values())
         return [self._mark_to_market(position) for position in positions]
+
+    def get_pending_orders(self, symbol: str) -> list[PendingOrder]:
+        """The virtual pending orders still working for `symbol` (only limits exist here)."""
+        with _StateFileLock(self._lock_file):
+            self._load_state()
+            orders = [o for o in self._orders.values()
+                      if o.status is OrderStatus.PENDING and o.request.symbol == symbol
+                      and o.request.order_type not in _MARKET_ORDER_TYPES]
+        return [PendingOrder(id=o.order_id, symbol=o.request.symbol, order_type=o.request.order_type,
+                             volume=o.request.volume, price=o.request.price or 0.0,
+                             stop_loss=o.request.stop_loss, take_profit=o.request.take_profit,
+                             comment=o.request.comment)
+                for o in orders]
 
     # ~7 trading days of M1: a limit working a whole NY day plus a position held
     # over a weekend both stay inside one fetch.

@@ -940,3 +940,43 @@ class TestSlippageLogging:
             broker.close_position("777")
 
         mock_log_fill.assert_not_called()
+
+
+def _mt5_order(ticket: int = 501, type_: int = mt5.ORDER_TYPE_SELL_STOP, comment: str = "setup_nasdaq_orb_m1_sar884987",
+               sl: float = 4354.6, tp: float = 0.0) -> SimpleNamespace:
+    """Minimal stand-in for MT5's TradeOrder, exposing only what we read."""
+    return SimpleNamespace(ticket=ticket, symbol="XAUUSD", type=type_, volume_current=0.16,
+                           price_open=4340.31, sl=sl, tp=tp, comment=comment)
+
+
+class TestGetPendingOrders:
+    """Tests for MT5Broker.get_pending_orders()."""
+
+    def test_maps_resting_orders(self) -> None:
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=(_mt5_order(),)) as orders_get:
+            orders = MT5Broker().get_pending_orders("XAUUSD")
+        orders_get.assert_called_once_with(symbol="XAUUSD")
+        assert len(orders) == 1
+        order = orders[0]
+        assert (order.id, order.order_type, order.volume, order.price) == ("501", OrderType.SELL_STOP, 0.16, 4340.31)
+        assert (order.stop_loss, order.take_profit, order.comment) == (4354.6, None, "setup_nasdaq_orb_m1_sar884987")
+
+    def test_no_orders_is_an_empty_list(self) -> None:
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=()):
+            assert MT5Broker().get_pending_orders("XAUUSD") == []
+
+    def test_a_none_with_a_success_code_is_also_empty(self) -> None:
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=None), \
+                patch("execution.mt5_broker.mt5.last_error", return_value=(1, "Success")):
+            assert MT5Broker().get_pending_orders("XAUUSD") == []
+
+    def test_a_real_failure_raises(self) -> None:
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=None), \
+                patch("execution.mt5_broker.mt5.last_error", return_value=(-4, "Terminal: Not found")):
+            with pytest.raises(RuntimeError):
+                MT5Broker().get_pending_orders("NOPE")
+
+    def test_order_kinds_this_codebase_never_places_are_left_out(self) -> None:
+        stop_limit = _mt5_order(type_=mt5.ORDER_TYPE_SELL_STOP_LIMIT)
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=(stop_limit,)):
+            assert MT5Broker().get_pending_orders("XAUUSD") == []

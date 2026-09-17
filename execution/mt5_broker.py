@@ -10,7 +10,7 @@ from core.models import AccountInfo, OrderType, SymbolConstraints
 from core.validation import require_non_negative, require_positive
 from execution.event_log import log_fill
 from execution.interfaces import IBroker
-from execution.models import OrderRequest, OrderResult, Position
+from execution.models import OrderRequest, OrderResult, PendingOrder, Position
 from mt5.connector import MT5Connector
 from mt5.rates import BROKER_TZ
 from risk.kill_switch import activate_kill_switch
@@ -131,6 +131,11 @@ _ORDER_TYPE_MAP: dict[OrderType, int] = {
 }
 
 _MARKET_ORDER_TYPES = (OrderType.BUY_MARKET, OrderType.SELL_MARKET)
+_PENDING_TYPE_BY_MT5: dict[int, OrderType] = {
+    mt5_type: order_type for order_type, mt5_type in _ORDER_TYPE_MAP.items()
+    if order_type not in _MARKET_ORDER_TYPES
+}
+_MT5_RES_S_OK = 1  # last_error() code when a *_get() call succeeded
 
 # Retcodes that represent the venue accepting the request: DONE/DONE_PARTIAL
 # for an immediately-executed market order, PLACED for an accepted pending order.
@@ -530,6 +535,38 @@ class MT5Broker(IBroker):
                 comment=getattr(pos, "comment", "") or "",
             )
             for pos in positions
+        ]
+
+    def get_pending_orders(self, symbol: str) -> list[PendingOrder]:
+        """Fetches `symbol`'s resting pending orders via mt5.orders_get(symbol=...).
+
+        Order kinds this codebase never places (stop-limit, close-by) are left out rather than
+        mapped to something they are not.
+
+        Raises:
+            RuntimeError: If mt5.orders_get() fails. With no orders it returns an empty tuple and
+                last_error() (1, 'Success') -- checked on the real terminal 2026-09-17 -- so None
+                always means a real failure (an unknown symbol gives -4 'Terminal: Not found').
+        """
+        orders = mt5.orders_get(symbol=symbol)
+        if orders is None:
+            error = mt5.last_error()
+            if error and error[0] == _MT5_RES_S_OK:
+                return []
+            raise RuntimeError(f"mt5.orders_get() returned None for {symbol}. Error code: {error}")
+        return [
+            PendingOrder(
+                id=str(order.ticket),
+                symbol=order.symbol,
+                order_type=_PENDING_TYPE_BY_MT5[order.type],
+                volume=order.volume_current,
+                price=order.price_open,
+                stop_loss=order.sl or None,
+                take_profit=order.tp or None,
+                comment=getattr(order, "comment", "") or "",
+            )
+            for order in orders
+            if order.type in _PENDING_TYPE_BY_MT5
         ]
 
     def calculate_margin(

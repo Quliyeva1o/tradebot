@@ -18,6 +18,7 @@ from datetime import UTC, datetime, time
 
 from core.models import Timeframe
 from market_structure.structure_models import MarketState
+from strategy.inverse import mirror_setup
 from strategy.models import TradeSetup
 from strategy.nasdaq_orb_m1_breakout import NasdaqOrbM1BreakoutConfig, NasdaqOrbM1BreakoutStrategy
 from strategy.xauusd_orb_liquidity_sweep import (
@@ -125,5 +126,17 @@ def _minutes(value: time) -> int:
     return value.hour * 60 + value.minute
 
 
-def make_signals(config: BotConfig, scan: BarFrame) -> BreakoutSignals | SweepSignals:
-    return BreakoutSignals(config, scan) if config.family == "breakout" else SweepSignals(config, scan)
+class InverseSignals:
+    """Another family's signals, each mirrored the way the runners' --inverse mirrors them."""
+
+    def __init__(self, inner: BreakoutSignals | SweepSignals) -> None:
+        self._inner = inner
+
+    def at(self, n_closed: int) -> TradeSetup | None:
+        setup = self._inner.at(n_closed)
+        return None if setup is None else mirror_setup(setup)
+
+
+def make_signals(config: BotConfig, scan: BarFrame) -> BreakoutSignals | SweepSignals | InverseSignals:
+    signals = BreakoutSignals(config, scan) if config.family == "breakout" else SweepSignals(config, scan)
+    return InverseSignals(signals) if config.inverse else signals

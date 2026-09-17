@@ -34,6 +34,7 @@ Usage:
 """
 
 import argparse
+import re
 import sys
 from dataclasses import replace
 from datetime import time as dtime
@@ -50,12 +51,14 @@ from execution.mt5_broker import MT5Broker
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
+from execution.stop_and_reverse import sync_reverse_order
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5.connector import MT5Connector
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
+from strategy.inverse import mirror_setup
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig, XauusdOrbLiquiditySweepStrategy
 from utils.logging import setup_logger, setup_structured_logger
 from market_structure.structure_models import MarketState
@@ -87,6 +90,19 @@ def _grace_bars(timeframe_str: str) -> int:
     per_bar = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}.get(timeframe_str, 15)
     return max(1, SIGNAL_GRACE_MINUTES // per_bar)
 
+def _variant_name(value: str) -> str:
+    """argparse type for --variant: it ends up in file names, so letters and digits only."""
+    if not re.fullmatch(r"[a-z0-9]+", value):
+        raise argparse.ArgumentTypeError(f"--variant must be lower-case letters and digits, got {value!r}")
+    return value
+
+
+def _bot_tag(symbol: str, variant: str | None) -> str:
+    """The suffix on every state file this bot owns -- see run_live_nasdaq_orb._bot_tag."""
+    tag = symbol.lower().replace(".", "_")
+    return f"{tag}_{variant}" if variant else tag
+
+
 _CURRENT_MODE = "live"
 
 
@@ -113,12 +129,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--volume", type=float, default=DEFAULT_VOLUME)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
     parser.add_argument(
+        "--reverse-on-stop", type=float, default=None, metavar="R",
+        help="Rest an opposite pending stop order at every open trade's stop, so a stop-out opens "
+             "the reverse trade (same lots, stop back at the original entry, target R times that "
+             "distance). Demo only -- see execution/stop_and_reverse.py.",
+    )
+    parser.add_argument(
+        "--inverse", action="store_true",
+        help="Trade the exact opposite of every signal: other direction, stop and target swapped "
+             "-- see strategy/inverse.py.",
+    )
+    parser.add_argument(
+        "--variant", type=_variant_name, default=None,
+        help="Suffix for this bot's state files (lower-case letters and digits), so a second bot "
+             "on the same symbol keeps its own paper position, risk state and ledger.",
+    )
+    parser.add_argument(
         "--paper",
         action="store_true",
         help="Use PaperBroker (virtual fills against real MT5 prices, no real orders) instead of "
         "MT5Broker. REQUIRED for now -- this strategy has NOT yet run in any live/paper capacity.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.reverse_on_stop is not None:
+        if args.paper:
+            parser.error("--reverse-on-stop needs real pending stop orders, which PaperBroker cannot fill")
+        if args.reverse_on_stop <= 0:
+            parser.error("--reverse-on-stop must be a positive R multiple")
+    return args
 
 
 def _ensure_explicit_demo_configuration() -> None:
@@ -274,6 +312,7 @@ def _evaluate_for_new_trade(
     grace_bars: int,
     kill_switch_flag_path: Path | None = None,
     traded_setups_path: Path | None = None,
+    inverse: bool = False,
 ) -> None:
     """Replays every fetched bar through the strategy in chronological order
     (a fresh strategy instance only ever sees ONE bar per evaluate() call
@@ -319,6 +358,9 @@ def _evaluate_for_new_trade(
         logger.info("RESULT: NO SIGNAL (top reason: %s)", reasons_str)
         _log_trade_event("no_signal", symbol=symbol)
         return
+
+    if inverse:
+        setup = mirror_setup(setup)
 
     # Nothing else remembers that this setup was already traded: a broker-side stop
     # inside the grace window leaves the next poll with no position and the same
@@ -366,6 +408,30 @@ def run_once(
     lookback_days: int,
     kill_switch_flag_path: Path | None = None,
     traded_setups_path: Path | None = None,
+    reverse_on_stop_r: float | None = None,
+    inverse: bool = False,
+) -> None:
+    _poll_once(connector, broker, trade_manager, strategy, symbol, timeframe, timeframe_str,
+               lookback_days, kill_switch_flag_path, traded_setups_path, inverse)
+    if reverse_on_stop_r is not None:
+        # after the poll, so a trade opened just now has its reverse order within the same poll
+        mine, _ = _partition_positions(broker.get_open_positions(), symbol)
+        sync_reverse_order(broker, symbol, STRATEGY_TAG, mine, reverse_on_stop_r, _log_trade_event,
+                           halted=is_trading_halted(kill_switch_flag_path))
+
+
+def _poll_once(
+    connector: MT5Connector,
+    broker: IBroker,
+    trade_manager: TradeManager,
+    strategy: XauusdOrbLiquiditySweepStrategy,
+    symbol: str,
+    timeframe: Timeframe,
+    timeframe_str: str,
+    lookback_days: int,
+    kill_switch_flag_path: Path | None,
+    traded_setups_path: Path | None,
+    inverse: bool,
 ) -> None:
     bars_per_day = {"M1": 1440, "M5": 288, "M15": 96, "M30": 48, "H1": 24, "H4": 6}.get(timeframe_str, 288)
     lookback_bars = lookback_days * bars_per_day
@@ -387,7 +453,7 @@ def run_once(
 
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
                             _grace_bars(timeframe_str), kill_switch_flag_path,
-                            traded_setups_path=traded_setups_path)
+                            traded_setups_path=traded_setups_path, inverse=inverse)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -400,8 +466,8 @@ def main(argv: list[str] | None = None) -> None:
     # Deliberately separate paper state/kill-switch files (see
     # run_live_sr_bias.py's identical per-symbol rationale) -- symbol-tagged
     # so a future second instance (e.g. a different broker suffix) doesn't
-    # collide.
-    symbol_tag = args.symbol.lower().replace(".", "_")
+    # collide. --variant extends the tag for a second bot on the same symbol.
+    symbol_tag = _bot_tag(args.symbol, args.variant)
     risk_dir = Path(__file__).parent / "risk"
     kill_switch_flag_path = risk_dir / f"kill_switch_xauusd_orb_{symbol_tag}_paper.flag" if args.paper else None
     daily_risk_tracker = (
@@ -424,6 +490,8 @@ def main(argv: list[str] | None = None) -> None:
     if is_trading_halted(kill_switch_flag_path):
         logger.info("RESULT: TRADING HALTED (kill-switch active)")
         print("TRADING HALTED (kill-switch active)")
+        if args.reverse_on_stop is not None:
+            _cancel_reverse_orders(args.symbol, args.reverse_on_stop)
         return
 
     connector = MT5Connector()
@@ -468,7 +536,21 @@ def main(argv: list[str] | None = None) -> None:
             symbol=args.symbol, timeframe=timeframe, timeframe_str=args.timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
             traded_setups_path=_traded_setups_path(risk_dir, symbol_tag, args.paper),
+            reverse_on_stop_r=args.reverse_on_stop, inverse=args.inverse,
         )
+    finally:
+        connector.disconnect()
+
+
+def _cancel_reverse_orders(symbol: str, reward_r: float) -> None:
+    """While halted nothing else runs, but a resting reverse order would still open a trade."""
+    connector = MT5Connector()
+    broker = MT5Broker(connector=connector)
+    if not broker.connect():
+        logger.error("Could not connect to MT5 to cancel %s's reverse order while halted.", symbol)
+        return
+    try:
+        sync_reverse_order(broker, symbol, STRATEGY_TAG, [], reward_r, _log_trade_event, halted=True)
     finally:
         connector.disconnect()
 

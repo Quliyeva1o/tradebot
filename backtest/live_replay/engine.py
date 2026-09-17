@@ -22,6 +22,7 @@ from strategy.risk_reward import resolve_stop_and_target
 from backtest.live_replay.configs import BotConfig
 from backtest.live_replay.market import BROKER_TZ, BarFrame, FxSeries, aggregate
 from backtest.live_replay.pricing import entry_price, exit_on_bar, rollover_days, size_position, swap_usd
+from backtest.live_replay.reversal import reverse_trade
 from backtest.live_replay.signals import make_signals
 from backtest.live_replay.specs import SymbolSpec
 from backtest.live_replay.ticks import TickCache
@@ -111,6 +112,8 @@ def _as_date(yyyymmdd: int):
 def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         ticks: TickCache | None = None, flags: Flags = Flags(), start_balance: float = 50_000.0,
         spread_scale: float = 1.0) -> list[TradeRecord]:
+    if config.reverse_on_stop_r is not None and config.weekend_flat:
+        raise ValueError(f"{config.task}: --reverse-on-stop with --weekend-flat is not modelled")
     scan = aggregate(m1, config.scan_minutes)
     signals = make_signals(config, scan)
     server_day = _server_days(m1.ts)
@@ -118,19 +121,23 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
     trades: list[TradeRecord] = []
     balance = start_balance
     position: _Position | None = None
+    busy_until = -1  # --reverse-on-stop: the reverse trade holds the symbol's one position to here
+    bar_spreads = None
+    if config.reverse_on_stop_r is not None:
+        bar_spreads = m1.spread * spread_scale if flags.spread else np.zeros(len(m1))
 
     def spread_at(j: int) -> float:
         return float(m1.spread[j]) * spread_scale if flags.spread else 0.0
 
     def close(j: int, price: float, reason: str, *, touched_both: bool = False) -> None:
-        nonlocal balance, position
+        nonlocal balance, position, busy_until
         held = position
         usd = fx.usd_per_unit(int(m1.ts[j]))
         sign = 1.0 if held.direction == SignalDirection.BUY else -1.0
         pnl = ((price - held.fill) * sign * spec.usd_per_price_unit(held.volume, usd)
                + held.swap_usd + held.commission_usd)
         balance += pnl
-        trades.append(TradeRecord(
+        record = TradeRecord(
             task=config.task, symbol=config.symbol, setup_id=held.setup.setup_id,
             direction=held.direction.name, signal_time=held.setup.timestamp,
             entry_time=datetime.fromtimestamp(int(m1.ts[held.entry_index]), UTC),
@@ -138,8 +145,16 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
             target=held.target, exit=price, exit_reason=reason, volume=held.volume, pnl_usd=pnl,
             swap_usd=held.swap_usd, commission_usd=held.commission_usd, risk_usd=held.risk_usd,
             r=pnl / held.risk_usd if held.risk_usd > 0 else 0.0, balance_after=balance,
-            closed_on_entry_bar=j == held.entry_index, both_levels_touched=touched_both))
+            closed_on_entry_bar=j == held.entry_index, both_levels_touched=touched_both)
+        trades.append(record)
         position = None
+        if config.reverse_on_stop_r is not None and reason.startswith("SL"):
+            reverse, busy_until = reverse_trade(
+                record, config.reverse_on_stop_r, m1, spec, fx, ticks, flags, bar_spreads, server_day,
+                balance, gap_window_seconds=GAP_TICK_WINDOW_SECONDS,
+                break_seconds=TRADING_BREAK_SECONDS, as_date=_as_date)
+            trades.append(reverse)
+            balance = reverse.balance_after
 
     def check_exit(j: int) -> bool:
         after_break = j > 0 and int(m1.ts[j]) - int(m1.ts[j - 1]) > TRADING_BREAK_SECONDS
@@ -204,6 +219,8 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
             else:
                 check_exit(j)  # a bar that closes a trade never opens the next one
             continue
+        if j <= busy_until:
+            continue  # a bar that closes the reverse trade never opens the next one either
 
         if poll is None or flat_for_weekend:
             continue

@@ -3,7 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from core.models import AccountInfo, OrderType, SymbolConstraints
-from execution.models import OrderRequest, OrderResult, Position
+from execution.models import OrderRequest, OrderResult, PendingOrder, Position
 
 
 @runtime_checkable
@@ -65,6 +65,17 @@ class IBroker(Protocol):
 
         Returns:
             A list of currently open Position records.
+        """
+        ...
+
+    def get_pending_orders(self, symbol: str) -> list[PendingOrder]:
+        """Fetches `symbol`'s resting (unfilled, uncancelled) pending orders.
+
+        Args:
+            symbol: Trading instrument symbol.
+
+        Returns:
+            A list of PendingOrder records; empty when none rest.
         """
         ...
 
