@@ -96,6 +96,15 @@ def resample(df: pd.DataFrame, minutes: int, offset_minutes: int = 0) -> pd.Data
     HIGHER-timeframe bar from a lower-timeframe one MUST go through
     `htf_bias_known_from` first -- see the warning on that function.
 
+    DST WARNING -- only safe for periods that divide 60 minutes. The bins step in
+    ABSOLUTE time from an origin, so on a tz-aware index any period that a one-hour
+    DST shift is not a multiple of (4H, 2H, 90m, ...) slips by an hour at each
+    changeover: a 240-minute grid produces 00:00/04:00/08:00 boundaries in one half
+    of the year and 03:00/07:00/11:00 in the other, and which half you get depends
+    on where the file happens to start. 1m/5m/15m/30m/1H are unaffected. For a 4H
+    chart grid, group on the LOCAL calendar instead -- see
+    `scripts.liquidity_sweep_bos_backtest.Session._htf_levels`.
+
     offset_minutes shifts the bin grid, which otherwise anchors to midnight:
     a 60-minute grid lands on 09:00/10:00 and can never produce the 09:30
     bar an opening-range strategy needs, so such a caller passes
