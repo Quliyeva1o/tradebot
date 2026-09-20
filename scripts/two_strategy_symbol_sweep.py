@@ -53,7 +53,10 @@ def recent_spread(csv_path: Path, year: str = "2026") -> float:
                 if len(parts) >= 7 and parts[6]:
                     total += float(parts[6])
                     count += 1
-    return round(total / count, 4) if count else 0.0
+    # Eight decimals, not four: a 5-digit FX pair's mean spread is around 2e-5, which
+    # four decimal places round to zero -- the symbol then looks free to trade. Index and
+    # metal spreads are unaffected beyond their fifth significant figure.
+    return round(total / count, 8) if count else 0.0
 
 
 def window_stats(trades: list, start: date | None) -> dict:
