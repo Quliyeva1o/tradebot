@@ -39,16 +39,25 @@ BROKER_TZ = ZoneInfo("Europe/Bucharest")
 # Data loading / resampling
 # --------------------------------------------------------------------------
 
-def load_m1(path: str) -> pd.DataFrame:
+def load_m1(path: str, since: str | None = None) -> pd.DataFrame:
     """Loads a broker M1 CSV, converting broker-local timestamps to NY time.
 
     Also usable for any other bar size (the parser only cares about the
     OHLCV+time columns) -- `order_flow_daily_bias_backtest.run_backtest_native_h1`
     relies on that to feed it a native H1 file.
+
+    `since` ("YYYY-MM-DD") skips earlier rows during the parse, which is what makes a
+    recent-window run cheap on a file with millions of bars. The column is broker-local
+    wall clock in a lexicographically sortable format, so the comparison is a string
+    one and no timestamp is built for a row that is going to be dropped. It is also
+    BROKER-local, not NY: a caller wanting a clean NY window should ask for a day or
+    two extra and slice afterwards.
     """
     rows = []
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
+            if since is not None and row["time"] < since:
+                continue
             naive = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S")
             broker_local = naive.replace(tzinfo=BROKER_TZ)
             ny_ts = broker_local.astimezone(NY)
