@@ -268,8 +268,10 @@ def main() -> None:
         if config.task in rules:
             prefix = BREAKOUT_TAG if family == "Breakout" else SWEEP_TAG
             rule = rules[config.task]
-            for line in kill_rule.report_lines(rule, kill_rule.fetch_live_trades(rule, ticker, prefix)):
+            verdict = kill_rule.evaluate(rule, kill_rule.fetch_live_trades(rule, ticker, prefix))
+            for line in kill_rule.format_lines(rule, verdict):
                 print(line)
+            _print_alert_outcome(kill_rule.send_alert(kill_rule.alert_text(rule, verdict)))
         reversals = [r for r in live.get(ticker, []) if r["strategy"] == f"{family} reversal"]
         if reversals:
             n, pnl = _report_reversals(reversals)
@@ -283,5 +285,31 @@ def main() -> None:
         print("muqayise ucun en azi 20-30 trade lazimdir. Bu hesabat heftelik isledilmelidir.")
 
 
+def _print_alert_outcome(sent: bool | None) -> None:
+    """Says in the report whether an alert left, so a dead Telegram channel shows up here."""
+    if sent is True:
+        print("   >>> Telegram xeberdarligi gonderildi")
+    elif sent is False:
+        print("   >>> Telegram xeberdarligi GONDERILMEDI -- .env TELEGRAM_TOKEN / TELEGRAM_CHAT_ID yoxlayin")
+
+
+def run() -> None:
+    """main(), plus an alert if it dies.
+
+    A report that crashes is a stop rule nobody checked that week, and it crashes silently: Task
+    Scheduler records a non-zero result that no one reads. So the failure is sent down the same
+    channel as a DAYAN, then re-raised so the task's own result still says it failed. Only the
+    exception's type goes out -- the same restraint notifications/crash_alert.py shows.
+    """
+    try:
+        main()
+    except Exception as exc:
+        sent = kill_rule.send_alert(
+            f"⚠️ Heftelik hesabat ISLEMEDI ({type(exc).__name__}) -- canli botun stop "
+            f"qaydasi bu hefte yoxlanmadi. Bax: logs/weekly_report_<tarix>.txt")
+        _print_alert_outcome(sent)
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    run()

@@ -69,7 +69,7 @@ if (-not $RepoPath) {
     } elseif ($MyInvocation.MyCommand.Path) {
         Split-Path -Parent $MyInvocation.MyCommand.Path
     } else {
-        throw "RepoPath tapilmadi -- -RepoPath C:	radebot seklinde acig verin"
+        throw "RepoPath tapilmadi -- -RepoPath C:\tradebot seklinde acig verin"
     }
     $RepoPath = Split-Path -Parent $scriptDir
 }
@@ -175,6 +175,34 @@ if (Test-Path $rosterFile) {
 } else {
     Write-Warning "demo_roster.txt tapilmadi -- Demo tasklar el ile yoxlanmalidir"
 }
+
+# --- the weekly check on the live bot ----------------------------------------
+# scripts/live_vs_backtest_report.py measures the Demo bot's pre-registered stop rule
+# (deploy/kill_rules.json) and sends a Telegram alert on DAYAN. Until 2026-09-21 nothing ran
+# it, so the rule was written down and never checked. Saturday, because the report replays
+# years of M1 history for its baseline -- about 1 GB of RAM for a minute or two -- and with
+# every market shut it cannot compete with a bot for the machine. The week is also complete by
+# then: the weekend-flat bot is out of every position by Friday's close. It only reads, so
+# -PaperOnly registers it too.
+$weeklyBat = Join-Path $RepoPath 'run_weekly_report.bat'
+if (Test-Path $weeklyBat) {
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' `
+        -Argument ('"{0}" "{1}"' -f $vbs, $weeklyBat)
+    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At '09:00'
+    # An hour, not the bots' 72: the report takes minutes, and one that hangs should end.
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+        -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries -StartWhenAvailable
+    if ($PSCmdlet.ShouldProcess('WeeklyReport', 'Register-ScheduledTask')) {
+        Register-ScheduledTask -TaskName 'WeeklyReport' -Action $action -Trigger $trigger `
+            -Settings $settings -Force | Out-Null
+        Write-Host "`n  WeeklyReport                 <- run_weekly_report.bat (Senbe 09:00)"
+    } else {
+        Write-Host "`n  [WhatIf] WeeklyReport        <- run_weekly_report.bat (Senbe 09:00)"
+    }
+} else {
+    Write-Warning "run_weekly_report.bat tapilmadi -- stop qaydasinin heftelik yoxlanisi qurulmadi"
+}
 Write-Host @"
 
 BUNDAN SONRA, SIRA ILE:
@@ -183,7 +211,10 @@ BUNDAN SONRA, SIRA ILE:
   1. MT5 terminalini qurasdirin, hesaba girin, ve Alqoritmik Ticareti ACIN
      (Ctrl+E). Bagli qalarsa real orderler sessizce retcode 10027 ile redd
      olunur -- bu layihede artiq bir defe bas verib.
-  2. .env faylini kopyalayin (git-de yoxdur: MT5_LOGIN/PASSWORD/SERVER/PATH).
+  2. .env faylini kopyalayin (git-de yoxdur: MT5_LOGIN/PASSWORD/SERVER/PATH,
+     ve TELEGRAM_TOKEN/TELEGRAM_CHAT_ID -- bunlar olmasa stop qaydasinin DAYAN
+     xeberdarligi ve crash xeberdarliqlari hec yere getmir; heftelik hesabat
+     bunu "GONDERILMEDI" kimi yazir).
   3. python -m venv .venv
      .venv\Scripts\pip install -r deploy\requirements-live.txt
        (tam requirements.txt YOX -- pytest/matplotlib serverde islenmir)

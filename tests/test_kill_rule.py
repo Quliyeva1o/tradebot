@@ -247,3 +247,66 @@ class TestReportLines:
 
         assert "4242" in lines[1]
         assert "QIYMETLENDIRILMEDI" in lines[-1]
+
+    def test_report_lines_and_format_lines_agree(self) -> None:
+        trades = _trades([2.0, -1.0, -1.0])
+
+        assert kr.report_lines(RULE, trades) == kr.format_lines(RULE, kr.evaluate(RULE, trades))
+
+
+class TestAlertText:
+    def test_all_well_sends_nothing(self) -> None:
+        # A weekly "OK" would teach the reader to skip these, and then DAYAN gets skipped too.
+        assert kr.alert_text(RULE, kr.evaluate(RULE, _trades([1.0, -1.0]))) is None
+
+    def test_a_breach_names_the_bot_only_the_broken_clause_and_what_to_do(self) -> None:
+        text = kr.alert_text(RULE, kr.evaluate(RULE, _trades([-1.0] * 18)))
+
+        assert "DAYAN: T stop qaydasi pozuldu" in text
+        assert "DD > 17R ilk 40 tradede" in text
+        assert "DD > 22R" not in text
+        assert "demo_roster.txt" in text
+
+    def test_an_unevaluated_rule_names_the_position(self) -> None:
+        trades = [kr.LiveTrade(position=4242, opened=T0, long=True, net=-10.0, risk=None)]
+
+        text = kr.alert_text(RULE, kr.evaluate(RULE, trades))
+
+        assert "QIYMETLENDIRILMEDI" in text and "4242" in text
+
+    def test_reaching_the_horizon_asks_for_a_decision(self) -> None:
+        assert "BAXIS" in kr.alert_text(RULE, kr.evaluate(RULE, _trades([0.1] * 80)))
+
+
+class _Notifier:
+    """Stands in for TelegramNotifier: returns what it is told, or raises."""
+
+    def __init__(self, result: bool = True, boom: bool = False) -> None:
+        self.result, self.boom, self.sent = result, boom, []
+
+    def send_message(self, text: str) -> bool:
+        if self.boom:
+            raise ConnectionError("down")
+        self.sent.append(text)
+        return self.result
+
+
+class TestSendAlert:
+    def test_nothing_to_say_sends_nothing(self) -> None:
+        notifier = _Notifier()
+
+        assert kr.send_alert(None, notifier) is None
+        assert notifier.sent == []
+
+    def test_a_delivered_alert_reports_true(self) -> None:
+        notifier = _Notifier(result=True)
+
+        assert kr.send_alert("x", notifier) is True
+        assert notifier.sent == ["x"]
+
+    def test_a_refused_alert_reports_false_so_the_report_can_say_so(self) -> None:
+        # TelegramNotifier answers False for a bad token or chat id. That must never read as sent.
+        assert kr.send_alert("x", _Notifier(result=False)) is False
+
+    def test_a_crashing_channel_reports_false_rather_than_raising(self) -> None:
+        assert kr.send_alert("x", _Notifier(boom=True)) is False

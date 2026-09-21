@@ -232,7 +232,11 @@ _STATUS_TEXT = {
 
 def report_lines(rule: KillRule, trades: Sequence[LiveTrade]) -> list[str]:
     """The weekly report's section for this rule, in its own ASCII Azerbaijani."""
-    verdict = evaluate(rule, trades)
+    return format_lines(rule, evaluate(rule, trades))
+
+
+def format_lines(rule: KillRule, verdict: Verdict) -> list[str]:
+    """report_lines for a verdict already in hand, so the caller can also alert on it."""
     lines = [f"   STOP QAYDASI ({rule.adopted:%Y-%m-%d %H:%M} UTC-den, deploy/kill_rules.json)"]
     if verdict.status == NOT_EVALUATED:
         positions = ", ".join(str(p) for p in verdict.unknown)
@@ -244,6 +248,49 @@ def report_lines(rule: KillRule, trades: Sequence[LiveTrade]) -> list[str]:
     lines.extend(f"      {c.label:<32}: {c.detail}" for c in verdict.clauses)
     lines.append(f"   >>> VEZIYYET: {_STATUS_TEXT[verdict.status]}")
     return lines
+
+
+def alert_text(rule: KillRule, verdict: Verdict) -> str | None:
+    """The Telegram message this verdict calls for, or None when there is nothing to act on.
+
+    Only the states that need a human get a message. A weekly "OK" would train the reader to
+    stop opening them, and then the one that says DAYAN goes unread too.
+    """
+    if verdict.status == OK:
+        return None
+    if verdict.status == STOP:
+        broken = "; ".join(f"{c.label}: {c.detail}" for c in verdict.clauses if c.breached)
+        return (f"\U0001f6d1 DAYAN: {rule.task} stop qaydasi pozuldu. {broken}. "
+                f"Canli trade {verdict.n}, cemi {verdict.net_r:+.1f}R. "
+                f"Botu dayandir: deploy/demo_roster.txt-den cixar ve task-i sondur.")
+    if verdict.status == NOT_EVALUATED:
+        positions = ", ".join(str(p) for p in verdict.unknown)
+        return (f"⚠️ {rule.task} stop qaydasi QIYMETLENDIRILMEDI: {len(verdict.unknown)} "
+                f"trade-in stopu tapilmadi (position {positions}). R bilinmir -- elle yoxla.")
+    return (f"ℹ️ BAXIS: {rule.task} {rule.horizon} canli trade-e catdi, stop qaydasinin "
+            f"pencereleri bitdi (cemi {verdict.net_r:+.1f}R). Botun gelecegine qerar ver.")
+
+
+def send_alert(text: str | None, notifier=None) -> bool | None:
+    """Sends `text` down the project's Telegram channel. None when there was nothing to send.
+
+    Returns False rather than raising on any failure -- a missing token, an HTTP error, a bad chat
+    id -- so the report can print that the alert did NOT go out. TelegramNotifier already fails
+    safe; the point here is that its False is surfaced instead of swallowed, because a channel
+    that silently drops a DAYAN is worse than no channel at all.
+    """
+    if not text:
+        return None
+    try:
+        if notifier is None:
+            from config.settings import Settings
+            from notifications.telegram import TelegramNotifier
+
+            settings = Settings.load()
+            notifier = TelegramNotifier(settings.TELEGRAM_TOKEN, settings.TELEGRAM_CHAT_ID)
+        return bool(notifier.send_message(text))
+    except Exception:  # an alert is best-effort; the report around it must still finish
+        return False
 
 
 def fetch_live_trades(rule: KillRule, symbol: str, prefix: str) -> list[LiveTrade]:
