@@ -38,6 +38,7 @@ from execution.models import OrderRequest
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
 from execution.traded_setups import already_traded, record_traded
+from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import is_trading_halted
@@ -105,6 +106,14 @@ def run_once(
     sid = setup_id(symbol, plan)
     if already_traded(traded_setups_path, sid):
         return "already_traded"
+    # A session boundary an hour out builds this plan from the wrong candles -- see
+    # mt5/clock.py. Entry only: an open position is left to its broker-side SL/TP.
+    verdict = clock.measure(symbol)
+    if verdict.wrong:
+        logger.critical("SAAT UYGUNSUZLUGU -- yeni girise icaze verilmir: %s", verdict.detail)
+        _log_trade_event("entry_blocked_clock_drift", symbol=symbol, setup_id=sid,
+                         drift_seconds=round(verdict.drift or 0.0, 1), hours_off=verdict.hours_off)
+        return "clock_drift"
     if is_trading_halted(kill_switch_flag_path):
         logger.warning("Setup %s found but the kill-switch is active; not ordering.", sid)
         _log_trade_event("signal_blocked_kill_switch", symbol=symbol, setup_id=sid)

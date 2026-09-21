@@ -102,6 +102,50 @@ nasazlığa uyğundur:
   oxunub və bütün real ticarəti dayandırıb.
 - **`tzdata` yoxdur** — Windows-da IANA bazası yoxdur, strategiyalar
   `America/New_York`-a bağlıdır və paket olmadan işləmir, xəta atır.
+- **Saat yalan danışır** — 2026-09-21 07:24 UTC-də bu VPS-in saati 2 saat irəli
+  atıldı (host agenti qonağın UTC-sinə öz **lokal** saatını yazdı, `dllhost.exe`),
+  Windows Time 2 dəq 04 san sonra geri qaytardı. İki polling gələcək tarixli
+  yazıldı və **heç bir yoxlama dinmədi**. NY 03:24 olduğu üçün heç nəyə başa
+  gəlmədi; 09:30 NY-də olsaydı opening range səhv barlardan yığılardı.
+
+## Saat: iki ayrı təhlükə, bir ölçü
+
+`mt5/clock.py` brokerin öz divar saatını (MT5 hər tick-də xam göndərir)
+`BROKER_TZ`-in həmin an üçün proqnozu ilə müqayisə edir. Uyğunluq **həm** OS
+saatının, **həm** timezone-un düz olduğunu bildirir. Tam saatlıq fərq isə
+birinin yanlış olduğunu — hansının, buradan bilinmir, amma ikisi də ticarəti
+dayandırmalıdır.
+
+| Nə tutur | Necə görünür |
+|---|---|
+| OS saatının sıçraması (yuxarıdakı hadisə) | broker saatı proqnozdan tam saat geridə/irəlidə |
+| `BROKER_TZ` köhnəlməsi | eyni əlamət, amma davamlı |
+
+**25 oktyabr 2026 riski:** `Europe/Bucharest` UTC+2-yə keçir, New York isə
+**1 noyabrda**. CFI ABŞ qrafikinə baxırsa, o bir həftə bar vaxtları 1 saat
+sürüşəcək. `mt5/rates.py`-dakı şərh açıq deyir: bu sabit FXTM-dən başqa heç bir
+broker üçün təsdiqlənməyib. Yoxlama indi bunu özü tutacaq — 25 oktyabrdan sonra
+ilk iş günü `preflight.py`-ı qaçırın. Fərq çıxsa, `.env`-ə `MT5_BROKER_TZ=...`
+yazın (kod dəyişikliyi lazım deyil).
+
+**Botlar nə edir:** fərq tam saatdırsa, **yeni giriş açılmır** (log-da
+`entry_blocked_clock_drift`), açıq mövqe isə idarə olunmağa davam edir — onun
+SL/TP-si onsuz da brokerdədir. Bazar bağlı olanda ölçmək mümkün olmur və bu
+**dayandırma səbəbi deyil**, yoxsa botlar hər bazar günü dayanardı.
+
+**Host saatını qonağa yazma yolunu bağlayın** (VPS-də, administrator kimi):
+
+```powershell
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\VMICTimeProvider' -Name Enabled -Value 0
+Set-Service vmictimesync -StartupType Disabled
+w32tm /config /syncfromflags:manual /manualpeerlist:"time.windows.com,0x8 pool.ntp.org,0x8" /update
+Restart-Service w32time
+w32tm /resync /force
+```
+
+`MaxPosPhaseCorrection` / `MaxNegPhaseCorrection`-u **kiçiltməyin**. İndi 54000
+saniyədir və məhz buna görə w32time 2 saatlıq səhvi geri qaytara bildi. Kiçiltsəniz,
+növbəti sıçrayışdan sonra düzəliş rədd olunar və saat səhv qalar.
 
 ## Sonra
 

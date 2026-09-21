@@ -15,6 +15,10 @@ actually gone wrong in this project and cost real trading days:
     ALL real trading for days.
   - Missing tzdata. Windows has no IANA database; every strategy here is
     defined against America/New_York and raises without it.
+  - A system clock that lies. On 2026-09-21 this VPS's clock jumped two hours
+    forward for 2m04s (a host agent wrote its local wall clock into the guest's
+    UTC) and nothing noticed. The same check catches a stale BROKER_TZ, which is
+    due to diverge from a US-DST broker between 2026-10-25 and 2026-11-01.
 
 It places no orders and changes nothing. Exit code 0 means safe to enable the
 paper tasks.
@@ -252,12 +256,36 @@ try:
                          "bot ilk qacisda ozu elave edir (connector.py:106)")
                 else:
                     ok(f"{label} hazir (trade_mode={si.trade_mode})")
+
+            # ------------------------------------------------ 6. saat ve BROKER_TZ
+            # Bu masinin saati 2026-09-21 07:24 UTC-de 2 saat irelie atildi (host agenti
+            # qonagin UTC-sine oz LOKAL saatini yazdi) ve Windows Time 2 deqiqe sonra geri
+            # qaytardi. Hec bir yoxlama dinmedi. Eyni sey 09:30 NY-de olsa, opening range
+            # sehv barlardan yigilar. Hemin olcu BROKER_TZ-i de yoxlayir: Europe/Bucharest
+            # 2026-10-25-de UTC+2-ye kecir, New York ise 2026-11-01-de -- ABS qrafikine
+            # baxan bir broker o hefte bir saat kenarda qalar. Bax mt5/clock.py.
+            print("\n6) Saat ve BROKER_TZ")
+            if not TICKERS:
+                warn("yoxlanacaq simvol yoxdur -- saat olculmedi")
+            for s in sorted(TICKERS.values()):
+                try:
+                    from mt5.clock import measure
+                    verdict = measure(s)
+                except Exception as exc:  # noqa: BLE001 - never block preflight on this
+                    warn(f"{s}: saat yoxlanmadi ({type(exc).__name__}: {exc})")
+                    continue
+                if verdict.wrong:
+                    bad(verdict.detail)
+                elif verdict.measurable:
+                    ok(verdict.detail)
+                else:
+                    warn(verdict.detail)
         finally:
             mt5.shutdown()
 except ImportError:
     bad("MetaTrader5 paketi yoxdur, MT5 yoxlamalari atlandi")
 
-# ----------------------------------------------------------------- 6. verdict
+# ----------------------------------------------------------------- 7. verdict
 print("\n" + "=" * 72)
 if problems:
     print(f"NETICE: {len(problems)} PROBLEM -- taskları ACMAYIN")

@@ -57,6 +57,7 @@ from execution.position_sizer import PositionSizer
 from execution.stop_and_reverse import sync_reverse_order
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
+from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
@@ -456,10 +457,32 @@ def _poll_once(
         _log_trade_event("foreign_position_blocks_entry", symbol=symbol, count=len(foreign))
         return
 
+    if not _clock_trustworthy(symbol):
+        return
     _evaluate_for_new_trade(trade_manager, broker, strategy, bars, symbol, timeframe,
                             _grace_bars(timeframe_str), kill_switch_flag_path,
                             traded_setups_path=traded_setups_path, inverse=inverse)
 
+
+def _clock_trustworthy(symbol: str) -> bool:
+    """False when the broker's clock and ours disagree by a whole hour (mt5/clock.py).
+
+    Gating ENTRY only, and deliberately not position management: a session boundary that
+    is an hour out builds the opening range from the wrong bars, so a new trade would be
+    a different trade from the one that was backtested. An open position's SL/TP already
+    sit with the broker, and closing it on a clock we do not trust is its own mistake.
+
+    A closed market leaves the last tick stale and unmeasurable; that is not a refusal.
+    A market shut for exactly an hour can still read as a whole-hour drift, and entry is
+    refused -- which costs nothing, because an order into a closed market is rejected.
+    """
+    verdict = clock.measure(symbol)
+    if not verdict.wrong:
+        return True
+    logger.critical("SAAT UYGUNSUZLUGU -- yeni girise icaze verilmir: %s", verdict.detail)
+    _log_trade_event("entry_blocked_clock_drift", symbol=symbol,
+                     drift_seconds=round(verdict.drift or 0.0, 1), hours_off=verdict.hours_off)
+    return False
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
