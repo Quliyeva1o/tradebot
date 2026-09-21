@@ -16,23 +16,27 @@
 # unaffected: they use per-strategy state files, never collide, and running
 # both sides on a symbol is how the losing config stays measurable.
 
-# 2026-09-17: every bot below runs --reverse-on-stop 0.5 -- a stop-out opens the opposite trade
-# (execution/stop_and_reverse.py). Chosen by the user against a backtest that loses over the last
-# 12 months (PF 0.74). Their *_Paper twins do NOT reverse and are the control; the
-# Orb*inv_*_Paper bots trade the exact inverse of each (strategy/inverse.py).
+# 2026-09-20: CUT FROM SIX BOTS TO ONE, and --reverse-on-stop removed from every launcher.
+# A 1-year and a 3-month replay of every ORB breakout configuration, on both this account's
+# broker and CFI's (ORB_BREAKOUT_1Y_BROKER_REPORT.md, ORB_BREAKOUT_3MO_BROKER_REPORT.md,
+# scripts/orb_breakout_year_backtest.py) found:
+#   - five of the six symbols lost over the last 12 months AND again over the last 3:
+#     DJI30, SPX500, NDX100, JP225 and GER40 together -107.5R on CFI prices, PF 0.61-0.90.
+#   - --reverse-on-stop 0.5 cost 34.6R over the year across the four Demo bots whose Paper
+#     twin shares their parameters, and on XAUUSD -- the one symbol that makes money -- it
+#     turned +44.2R into +39.2R while RAISING max drawdown from 18.8R to 23.1R. It needs a
+#     66.7% win rate (1R risked for 0.5R) and gets 62.3%.
+#   - only XAUUSD on 60m OR / M1 / 3R with --weekend-flat was positive in BOTH windows:
+#     +34.5R, PF 1.49, 5.8% max drawdown over the year, +2.4R over the last quarter.
+# The five losing configurations keep running as PAPER bots. That is how they stay measurable,
+# and this decision gets revisited on their numbers rather than on memory.
+#
+# KNOW WHAT THE SURVIVOR IS. Over FundingPips' full 2009-2026 history (the longer feed) this
+# same config had NO edge before 2020: PF 0.98 for 2009-2019 even with no swap charged at all
+# (1448 trades), and PF 1.25-1.40 from 2020 on (860 trades) depending on the swap assumption.
+# The replay charges today's swap on every year, which overstates the low-rate years, so the
+# truth lies between those bounds. Its edge belongs to the current regime; judge it live
+# against that, and expect a decade like 2009-2019 to be roughly breakeven or worse.
 
-# --- Breakout owns these four ---
-OrbBreakout_XAUUSD_Demo      # 15m OR / M1 / 4R -- PF 1.235, DD 50.2R; last 2y PF 1.496 (swapped with Paper's 60m/3R 2026-09-14)
-OrbBreakout_NDX100_Demo      # 30m OR / M5 / 4R -- PF 1.329, 7/9 folds
-OrbBreakout_SPX500_Demo      # 60m OR / M1 / 4R -- PF 1.326, 6/8 folds
-OrbBreakout_DJI30_Demo       # 60m OR / M1 / 4R -- PF 1.205, 7/9 folds
-
-# --- Sweep owns GER40 ---
-OrbSweep_GER40_Demo          # 15m OR / 11:00 / 2R -- PF 1.547, 1y 1.761, DD 6.6R
-
-# --- JP225 went to Breakout on 2026-09-09 (commit b7f87c5) ---
-# Neither family can be fold-tested on JP225 (2.4y of data, a 24+6 fold needs
-# 30 months), so this was slot allocation under acknowledged uncertainty:
-# Breakout has 336 trades to Sweep's 55, ~+20R/year to ~+3R, return/drawdown
-# 2.50 to 1.53. Sweep's small drawdown is an artifact of trading twice a month.
-OrbBreakout_JP225_Demo       # 15m OR / M1 / 4R
+# --- the one bot allowed to place real orders ---
+OrbBreakoutwf_XAUUSD_Demo    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse

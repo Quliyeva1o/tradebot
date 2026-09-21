@@ -5,9 +5,10 @@ the only question the backtests cannot answer -- whether the deployed bots are
 tracking their own expectation once real spread, slippage and execution delay
 are in the way.
 
-The live configuration is read out of the run_live_orb_breakout_*.bat files
-rather than hardcoded, so the baseline always describes what is actually
-deployed. Change a .bat and the comparison follows it.
+The live configuration is read out of the run_live_orb_*_demo.bat files (by
+backtest/live_replay/configs.parse_bat) rather than hardcoded, and the baseline
+is the live-twin replay of exactly that configuration on the broker whose ticker
+it names. Change a .bat and the comparison follows it.
 
 Judgement is deliberately loose: with the handful of trades a 1-2 month sample
 provides, a live PF anywhere near the walk-forward's honest 1.1-1.3 band is
@@ -22,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -32,15 +32,15 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 import MetaTrader5 as mt5  # noqa: N813
 
-import scripts.nasdaq_orb_m1_breakout_backtest as orb_mod
-import scripts.xauusd_orb_liquidity_sweep_backtest as sweep_mod
+from backtest.live_replay.brokers import broker_for, history_path
+from backtest.live_replay.configs import BotConfig, parse_bat
+from backtest.live_replay.engine import run as replay
+from backtest.live_replay.market import load_bars, load_fx
+from backtest.live_replay.reversal import REVERSE_SUFFIX
+from backtest.live_replay.specs import load_specs
 from execution.stop_and_reverse import is_reverse
-from scripts.consistency_analysis import _cached_load_m1, agg, consistency
-from scripts.two_strategy_symbol_sweep import DATA_DIR, recent_spread
+from scripts.consistency_analysis import agg, consistency
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
-
-orb_mod.load_m1 = _cached_load_m1
-sweep_mod.load_m1 = _cached_load_m1
 
 REPO = Path(__file__).parent.parent
 BREAKOUT_TAG = "setup_nasdaq_orb_m1"     # STRATEGY_TAG in run_live_nasdaq_orb.py
@@ -57,11 +57,6 @@ def _strategy_label(comment: str) -> str | None:
         if comment.startswith(tag):
             return f"{family} reversal" if is_reverse(comment, tag) else family
     return None
-
-
-def _flag(text: str, name: str, default: str | None = None) -> str | None:
-    m = re.search(rf"--{name}\s+(\S+)", text)
-    return m.group(1) if m else default
 
 
 def _roster(path: Path = REPO / "deploy" / "demo_roster.txt") -> set[str] | None:
@@ -92,47 +87,26 @@ def _task_name(bat: str) -> str:
     return f"Orb{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
 
 
-def live_configs() -> dict[str, dict]:
-    """Reads the deployed Breakout configs straight from the .bat files."""
-    out = {}
-    for bat in sorted(REPO.glob("run_live_orb_breakout_*_demo.bat")):
-        text = bat.read_text(encoding="utf-8", errors="replace")
-        sym = _flag(text, "symbol")
-        if not sym:
-            continue
-        # scan-timeframe must be read, not assumed: NDX100 runs --scan-timeframe
-        # M5 live, and benchmarking it against an M1 backtest would report a
-        # divergence that is purely this script's own.
-        out[sym] = dict(tp_r=float(_flag(text, "tp-r", "3.0")),
-                        or_minutes=int(_flag(text, "or-minutes", "15")),
-                        scan_minutes=int(str(_flag(text, "scan-timeframe", "M1")).lstrip("Mm")),
-                        risk_pct=float(_flag(text, "risk-per-trade-pct", "0.005")),
-                        bat=bat.name)
-    return out
+def deployed_configs() -> list[BotConfig]:
+    """Every Demo launcher, read by the same parser the live-twin replay uses.
 
-
-def sweep_configs() -> dict[str, dict]:
-    """Same for the Sweep bots.
-
-    Only symbol/timeframe/risk live in the .bat -- the strategy parameters come
-    from XauusdOrbLiquiditySweepConfig's defaults, so they are read from the
-    class rather than restated here, and the baseline follows if those defaults
-    ever change.
+    This used to glob run_live_orb_breakout_*_demo.bat and key the result by symbol. Both went
+    wrong on 2026-09-20: the one bot left deployed is run_live_orb_breakoutwf_xauusd_demo.bat,
+    which that glob never matched, and it shares its ticker with the stood-down 15m breakout
+    launcher, so a dict keyed by symbol would have kept whichever sorted last. parse_bat also
+    reads every flag -- --weekend-flat, --reverse-on-stop, a broker's own ticker -- so the
+    baseline below describes the bot that is really deployed.
     """
+    return [parse_bat(p) for p in sorted(REPO.glob("run_live_orb_*_demo.bat"))]
+
+
+def _label(config: BotConfig) -> str:
+    if config.family == "breakout":
+        label = f"{config.or_minutes}m OR / M{config.scan_minutes} / {config.tp_r:g}R"
+        return label + (" / hefte sonu bagli" if config.weekend_flat else "")
     defaults = XauusdOrbLiquiditySweepConfig()
-    out = {}
-    for bat in sorted(REPO.glob("run_live_orb_sweep_*_demo.bat")):
-        text = bat.read_text(encoding="utf-8", errors="replace")
-        sym = _flag(text, "symbol")
-        if not sym:
-            continue
-        tf = _flag(text, "timeframe", "M15")
-        out[sym] = dict(bar_minutes=int(str(tf).lstrip("Mm")),
-                        entry_end=defaults.entry_window_end,
-                        tp_r=defaults.fixed_tp_r,
-                        risk_pct=float(_flag(text, "risk-per-trade-pct", "0.005")),
-                        bat=bat.name)
-    return out
+    end = config.entry_window_end or f"{defaults.entry_window_end:%H:%M}"
+    return f"{config.scan_minutes}m OR / {end} / {defaults.fixed_tp_r:g}R"
 
 
 def closed_live_trades(days: int) -> dict[str, list[dict]]:
@@ -170,16 +144,28 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
         mt5.shutdown()
 
 
-def sweep_baseline(symbol: str, cfg: dict) -> dict:
-    csv = DATA_DIR / f"{symbol}_M1.csv"
-    if not csv.exists():
+def replay_baseline(config: BotConfig) -> dict:
+    """What the live-twin replay expects of this bot, on its own broker's prices.
+
+    This used to call the batch backtests, which know nothing of --weekend-flat -- and the one
+    bot deployed since 2026-09-20 is defined by it. The replay (backtest/live_replay) models
+    that rule along with the spread, swap and poll clock the bot really trades under, on the
+    broker whose ticker the launcher names. Reverse legs are left out, as on the live side.
+
+    Empty when this machine has no history for the broker: the VPS keeps none on purpose.
+    """
+    broker = broker_for(config)
+    spec = load_specs(broker.specs_file)[config.symbol]
+    path = history_path(broker, spec)
+    if not path.exists():
         return {}
-    sp = recent_spread(csv)
-    tr, _ = sweep_mod.run_backtest(str(csv), tp_r=cfg["tp_r"], spread_points=sp,
-                                   enable_breakout=False, bar_minutes=cfg["bar_minutes"],
-                                   entry_window_end=cfg["entry_end"],
-                                   entry_fill_mode="next_open")
-    t = [(date.fromisoformat(str(x.day)[:10]), x.r_multiple) for x in tr]
+    try:
+        fx = load_fx(spec.profit_currency, broker.data_dir)
+    except FileNotFoundError:
+        return {}
+    m1 = load_bars(path, config.symbol, 1)
+    t = [(tr.entry_time.date(), tr.r) for tr in replay(config, m1, spec, fx, ticks=None)
+         if tr.exit_reason != "OPEN" and not tr.setup_id.endswith(REVERSE_SUFFIX)]
     if not t:
         return {}
     n, wr, pf, net = agg([v for _, v in t])
@@ -190,24 +176,8 @@ def sweep_baseline(symbol: str, cfg: dict) -> dict:
                 green=consistency(t)["green_pct"], per_month=len(t) / span_months)
 
 
-def backtest_baseline(symbol: str, cfg: dict) -> dict:
-    csv = DATA_DIR / f"{symbol}_M1.csv"
-    if not csv.exists():
-        return {}
-    sp = recent_spread(csv)
-    tr = orb_mod.run_backtest(str(csv), "full", sp, cfg["tp_r"], "long",
-                              or_minutes=cfg["or_minutes"],
-                              scan_minutes=cfg["scan_minutes"])
-    t = [(date.fromisoformat(str(x.day)[:10]), x.r_multiple) for x in tr]
-    n, wr, pf, net = agg([v for _, v in t])
-    since = date.today() - timedelta(days=365)
-    n1, wr1, pf1, net1 = agg([v for d, v in t if d >= since])
-    return dict(n=n, wr=wr, pf=pf, net=net, wr_1y=wr1, pf_1y=pf1,
-                green=consistency(t)["green_pct"],
-                per_month=len(t) / max((max(d for d, _ in t) - min(d for d, _ in t)).days / 30.4, 1))
-
-
-def _report_bot(sym: str, family: str, label: str, cfg: dict, rows: list[dict], base: dict) -> tuple[int, float]:
+def _report_bot(sym: str, family: str, label: str, risk_pct: float, rows: list[dict],
+                base: dict) -> tuple[int, float]:
     """Prints one bot's section and returns (closed trades, P&L) for the totals.
 
     Live trades are printed whether or not a backtest baseline exists. The VPS
@@ -215,7 +185,7 @@ def _report_bot(sym: str, family: str, label: str, cfg: dict, rows: list[dict], 
     skipped the live trades, a run there on 2026-09-14 reported "0 trades" for
     an account that had closed seven. Only the verdict needs the baseline.
     """
-    print(f"\n### {sym} / {family}   ({label}, risk {cfg['risk_pct']*100:g}%)")
+    print(f"\n### {sym} / {family}   ({label}, risk {risk_pct*100:g}%)")
     if base:
         print(f"   BACKTEST gozlentisi : PF {base['pf']:.3f} (son 1 il {base['pf_1y']:.3f})  "
               f"WR {base['wr']:.1f}%  yasil ay {base['green']:.0f}%  ~{base['per_month']:.1f} trade/ay")
@@ -263,14 +233,7 @@ def main() -> None:
     args = ap.parse_args()
 
     live = closed_live_trades(args.days)
-    deployed: list[tuple[str, str, str, dict]] = []
-    for sym, cfg in live_configs().items():
-        deployed.append(("Breakout", sym,
-                         f"{cfg['or_minutes']}m OR / M{cfg['scan_minutes']} / "
-                         f"{cfg['tp_r']:g}R", cfg))
-    for sym, cfg in sweep_configs().items():
-        deployed.append(("Sweep", sym,
-                         f"{cfg['bar_minutes']}m OR / {cfg['entry_end']:%H:%M} / {cfg['tp_r']:g}R", cfg))
+    deployed = deployed_configs()
 
     print("=" * 104)
     print(f"CANLI vs BACKTEST -- son {args.days} gun            {datetime.now(UTC):%Y-%m-%d %H:%M} UTC")
@@ -283,17 +246,18 @@ def main() -> None:
     total_profit = 0.0
     total_n = 0
     roster = _roster()
-    for family, sym, label, cfg in sorted(deployed):
-        if roster is not None and _task_name(cfg["bat"]) not in roster:
-            print(f"\n### {sym} / {family}   -- demo_roster.txt-de yoxdur, atlanir")
+    for config in sorted(deployed, key=lambda c: c.task):
+        family = config.family.capitalize()             # "Breakout" | "Sweep", as _strategy_label says
+        ticker = config.broker_ticker or config.symbol  # the name the account's deals carry
+        if roster is not None and config.task not in roster:
+            print(f"\n### {config.task}   -- demo_roster.txt-de yoxdur, atlanir")
             continue
-        rows = [r for r in live.get(sym, []) if r["strategy"] == family]
-        base = (backtest_baseline(sym, cfg) if family == "Breakout"
-                else sweep_baseline(sym, cfg))
-        n, pnl = _report_bot(sym, family, label, cfg, rows, base)
+        rows = [r for r in live.get(ticker, []) if r["strategy"] == family]
+        n, pnl = _report_bot(ticker, family, _label(config), config.risk_pct, rows,
+                             replay_baseline(config))
         total_n += n
         total_profit += pnl
-        reversals = [r for r in live.get(sym, []) if r["strategy"] == f"{family} reversal"]
+        reversals = [r for r in live.get(ticker, []) if r["strategy"] == f"{family} reversal"]
         if reversals:
             n, pnl = _report_reversals(reversals)
             total_n += n

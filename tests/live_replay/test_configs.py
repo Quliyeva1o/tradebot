@@ -64,28 +64,34 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-def test_the_roster_lists_the_six_demo_bots_that_may_trade() -> None:
-    assert load_roster(REPO) == {
-        "OrbBreakout_XAUUSD_Demo", "OrbBreakout_NDX100_Demo", "OrbBreakout_SPX500_Demo",
-        "OrbBreakout_DJI30_Demo", "OrbSweep_GER40_Demo", "OrbBreakout_JP225_Demo",
-    }
+def test_the_roster_lists_the_one_demo_bot_that_may_trade() -> None:
+    """2026-09-20: cut from six to one. Five symbols lost over both the last 12 months and the
+    last 3, so only the weekend-flat XAUUSD bot still places real orders -- the roster file's
+    own comment block carries the numbers."""
+    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo"}
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
-    # Since 2026-09-17 the Demo bots reverse on a stop and their paper twins do not, so the twins
-    # are configurations of their own (the control), and the inverse paper bots are six more.
+    # One deployed Demo bot since 2026-09-20, plus every Paper configuration that is not its
+    # twin. The weekend-flat Paper bot IS its twin -- same CFI ticker, same parameters -- so it
+    # is covered by the Demo entry, as a twin always has been. The five stood-down symbols have
+    # no Demo side left, so all of their Paper bots are listed.
     assert {c.task for c in scope(REPO)} == {
-        "OrbBreakout_XAUUSD_Demo", "OrbBreakout_NDX100_Demo", "OrbBreakout_SPX500_Demo",
-        "OrbBreakout_DJI30_Demo", "OrbBreakout_JP225_Demo", "OrbSweep_GER40_Demo",
+        "OrbBreakoutwf_XAUUSD_Demo",
         "OrbBreakout_XAUUSD_Paper", "OrbBreakout_GER40_Paper", "OrbSweep_XAUUSD_Paper",
-        "OrbSweep_JP225_Paper", "OrbBreakoutwf_XAUUSD_Paper",
+        "OrbSweep_JP225_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
         "OrbBreakout_JP225_Paper", "OrbSweep_GER40_Paper",
         "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper", "OrbBreakoutinv_SPX500_Paper",
         "OrbBreakoutinv_DJI30_Paper", "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
     }
-    demo = {c.task: c for c in scope(REPO) if not c.paper}
-    assert {c.reverse_on_stop_r for c in demo.values()} == {0.5}
+
+
+def test_no_bot_that_places_real_orders_reverses_on_a_stop() -> None:
+    """--reverse-on-stop 0.5 risks 1R to make 0.5R: it needs 66.7% wins and gets 62.3%."""
+    assert {c.reverse_on_stop_r for c in scope(REPO) if not c.paper} == {None}
+    assert not any("--reverse-on-stop" in p.read_text(encoding="utf-8")
+                   for p in REPO.glob("run_live_orb_*.bat"))
 
 
 def test_the_reverse_and_inverse_flags_are_parsed_and_make_different_configurations(tmp_path: Path) -> None:

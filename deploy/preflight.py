@@ -33,10 +33,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 sys.stdout.reconfigure(encoding="utf-8")
 
 REPO = Path(__file__).parent.parent
-SYMBOLS = ("XAUUSD", "NDX100", "SPX500", "DJI30", "GER40", "JP225")
+
+
+def _deployed_symbols() -> tuple[str, ...]:
+    """The tickers the launchers really pass to MT5, read from the launchers themselves.
+
+    This check exists because a broker change once left the bots polling a symbol that no longer
+    existed (see the module docstring). A list kept by hand here would go stale at exactly that
+    moment -- and did: it still named the previous broker's six when the launchers had moved on.
+    The raw ticker is what MT5 is asked for, so `broker_ticker` wins over the repo's own name.
+    """
+    from backtest.live_replay.configs import parse_bat
+    names = set()
+    for path in sorted(REPO.glob("run_live_orb_*.bat")):
+        try:
+            config = parse_bat(path)
+        except ValueError as exc:  # a malformed launcher is its own problem, reported below
+            warnings.append(f"{path.name} oxunmadi: {exc}")
+            continue
+        names.add(config.broker_ticker or config.symbol)
+    return tuple(sorted(names))
+
 
 problems: list[str] = []
 warnings: list[str] = []
+
+SYMBOLS = _deployed_symbols()
 
 
 def ok(msg: str) -> None:

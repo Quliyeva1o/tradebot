@@ -50,3 +50,26 @@ def test_reverse_trades_are_labelled_apart_from_their_bots_own():
     assert report._strategy_label("setup_nasdaq_orb_m1_sar884987") == "Breakout reversal"
     assert report._strategy_label("setup_xauusd_orb_sar12884987") == "Sweep reversal"
     assert report._strategy_label("manual") is None
+
+
+def test_the_report_sees_every_bot_the_roster_deploys():
+    """It globbed run_live_orb_breakout_*_demo.bat, so the one bot left on 2026-09-20 --
+    run_live_orb_breakoutwf_xauusd_demo.bat -- was invisible to the only check on it."""
+    roster = report._roster(REPO / "deploy" / "demo_roster.txt")
+    seen = {c.task for c in report.deployed_configs()}
+
+    assert roster <= seen
+
+
+def test_the_report_matches_live_deals_by_the_brokers_own_ticker():
+    """The account's deals carry CFI's name (XAUUSD_), not this repo's (XAUUSD)."""
+    wf = next(c for c in report.deployed_configs() if c.task == "OrbBreakoutwf_XAUUSD_Demo")
+
+    assert (wf.broker_ticker, wf.symbol, wf.weekend_flat) == ("XAUUSD_", "XAUUSD", True)
+
+
+def test_the_baseline_is_replayed_on_the_broker_the_launcher_names():
+    from backtest.live_replay.brokers import broker_for
+
+    wf = next(c for c in report.deployed_configs() if c.task == "OrbBreakoutwf_XAUUSD_Demo")
+    assert broker_for(wf).name == "cfi"
