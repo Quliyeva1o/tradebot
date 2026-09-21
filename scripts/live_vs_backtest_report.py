@@ -7,8 +7,13 @@ are in the way.
 
 The live configuration is read out of the run_live_orb_*_demo.bat files (by
 backtest/live_replay/configs.parse_bat) rather than hardcoded, and the baseline
-is the live-twin replay of exactly that configuration on the broker whose ticker
-it names. Change a .bat and the comparison follows it.
+is the live-twin replay of exactly that configuration on the broker THIS machine
+is logged into -- the same account whose deals are being counted, resolved from
+.env by config/brokers.py. Change a .bat and the comparison follows it.
+
+Run it where the account is: the VPS reports its CFI bots, the workstation its
+FundingPips ones. A bot the roster does not allow real orders on this account is
+skipped by name, so the one Demo bot rostered on CFI is not reported as live here.
 
 Judgement is deliberately loose: with the handful of trades a 1-2 month sample
 provides, a live PF anywhere near the walk-forward's honest 1.1-1.3 band is
@@ -32,7 +37,8 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 import MetaTrader5 as mt5  # noqa: N813
 
-from backtest.live_replay.brokers import broker_for, history_path
+import config.brokers as machine
+from backtest.live_replay.brokers import deployed_broker, history_path
 from backtest.live_replay.configs import BotConfig, parse_bat
 from backtest.live_replay.engine import run as replay
 from backtest.live_replay.market import load_bars, load_fx, trim_to_real_m1
@@ -60,10 +66,14 @@ def _strategy_label(comment: str) -> str | None:
     return None
 
 
-def _roster(path: Path = REPO / "deploy" / "demo_roster.txt") -> set[str] | None:
+def _roster(path: Path = REPO / "deploy" / "demo_roster.txt",
+            broker: str | None = None) -> set[str] | None:
     """Demo bots the version-controlled roster says are live -- the same file
     install_tasks.ps1 enables tasks from, so a bot whose .bat exists but is not
     deployed is not reported as if it were trading.
+
+    `broker` narrows it to the account this machine trades: real-order permission is per
+    account (see deploy/demo_roster.txt), so the CFI bot is not "live" on FundingPips.
 
     This used to ask Task Scheduler on the machine running the report. That
     stopped meaning anything on 2026-09-10: the bots moved to the VPS, every bot
@@ -77,8 +87,8 @@ def _roster(path: Path = REPO / "deploy" / "demo_roster.txt") -> set[str] | None
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None
-    names = (line.split("#", 1)[0].split() for line in lines)
-    return {parts[0] for parts in names if parts}
+    rows = [parts for parts in (line.split("#", 1)[0].split() for line in lines) if parts]
+    return {parts[0] for parts in rows if broker is None or parts[1:2] == [broker]}
 
 
 def _task_name(bat: str) -> str:
@@ -95,7 +105,7 @@ def deployed_configs() -> list[BotConfig]:
     wrong on 2026-09-20: the one bot left deployed is run_live_orb_breakoutwf_xauusd_demo.bat,
     which that glob never matched, and it shares its ticker with the stood-down 15m breakout
     launcher, so a dict keyed by symbol would have kept whichever sorted last. parse_bat also
-    reads every flag -- --weekend-flat, --reverse-on-stop, a broker's own ticker -- so the
+    reads every flag -- --weekend-flat, --reverse-on-stop, the risk fraction -- so the
     baseline below describes the bot that is really deployed.
     """
     return [parse_bat(p) for p in sorted(REPO.glob("run_live_orb_*_demo.bat"))]
@@ -151,16 +161,16 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
 
 
 def replay_baseline(config: BotConfig) -> dict:
-    """What the live-twin replay expects of this bot, on its own broker's prices.
+    """What the live-twin replay expects of this bot, on this account's broker's prices.
 
     This used to call the batch backtests, which know nothing of --weekend-flat -- and the one
     bot deployed since 2026-09-20 is defined by it. The replay (backtest/live_replay) models
     that rule along with the spread, swap and poll clock the bot really trades under, on the
-    broker whose ticker the launcher names. Reverse legs are left out, as on the live side.
+    broker this machine is logged into. Reverse legs are left out, as on the live side.
 
     Empty when this machine has no history for the broker: the VPS keeps none on purpose.
     """
-    broker = broker_for(config)
+    broker = deployed_broker()
     spec = load_specs(broker.specs_file)[config.symbol]
     path = history_path(broker, spec)
     if not path.exists():
@@ -251,13 +261,14 @@ def main() -> None:
 
     total_profit = 0.0
     total_n = 0
-    roster = _roster()
+    profile = machine.local()
+    roster = _roster(broker=profile.name)
     rules = kill_rule.load_rules()
     for config in sorted(deployed, key=lambda c: c.task):
-        family = config.family.capitalize()             # "Breakout" | "Sweep", as _strategy_label says
-        ticker = config.broker_ticker or config.symbol  # the name the account's deals carry
+        family = config.family.capitalize()   # "Breakout" | "Sweep", as _strategy_label says
+        ticker = profile.ticker(config.symbol)  # the name THIS account's deals carry
         if roster is not None and config.task not in roster:
-            print(f"\n### {config.task}   -- demo_roster.txt-de yoxdur, atlanir")
+            print(f"\n### {config.task}   -- {profile.name} hesabinin rosterinde yoxdur, atlanir")
             continue
         rows = [r for r in live.get(ticker, []) if r["strategy"] == family]
         n, pnl = _report_bot(ticker, family, _label(config), config.risk_pct, rows,

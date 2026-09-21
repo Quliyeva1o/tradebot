@@ -1,6 +1,8 @@
-"""The replay reads its configurations from the launchers the VPS actually runs."""
+"""The replay reads its configurations from the launchers both machines actually run."""
 
 from pathlib import Path
+
+import pytest
 
 from backtest.live_replay.configs import REPO, BotConfig, load_roster, parse_bat, scope
 
@@ -68,7 +70,7 @@ def test_the_roster_lists_the_one_demo_bot_that_may_trade() -> None:
     """2026-09-20: cut from six to one. Five symbols lost over both the last 12 months and the
     last 3, so only the weekend-flat XAUUSD bot still places real orders -- the roster file's
     own comment block carries the numbers."""
-    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo"}
+    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo": "cfi"}
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
@@ -113,21 +115,48 @@ def test_the_reverse_and_inverse_flags_are_parsed_and_make_different_configurati
     assert len({plain.key, reverse.key, inverse.key}) == 3
 
 
-def test_a_brokers_own_ticker_maps_back_to_the_name_this_repo_keys_by(tmp_path: Path) -> None:
-    """CFI calls gold XAUUSD_; specs, history files and reports are all keyed by XAUUSD."""
+def test_a_launcher_names_this_repos_symbol_not_a_brokers_ticker(tmp_path: Path) -> None:
+    """One launcher set runs on both accounts, so a .bat cannot name CFI's XAUUSD_ or
+    FundingPips' XAUUSD: each machine resolves its own from .env (config/brokers.py)."""
     cfg = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_demo.bat",
-                         "run_live_nasdaq_orb.py --symbol XAUUSD_ --tp-r 3.0 --or-minutes 60 "
+                         "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
                          "--risk-per-trade-pct 0.005 --weekend-flat --variant weekendflat"))
-    assert (cfg.symbol, cfg.broker_ticker, cfg.task) == (
-        "XAUUSD", "XAUUSD_", "OrbBreakoutwf_XAUUSD_Demo")
+    assert (cfg.symbol, cfg.task) == ("XAUUSD", "OrbBreakoutwf_XAUUSD_Demo")
 
 
-def test_the_same_strategy_at_two_brokers_is_not_one_configuration(tmp_path: Path) -> None:
-    """Otherwise scope() would drop one as the other's twin and stop reporting it."""
-    cfi = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_demo.bat",
-                         "run_live_nasdaq_orb.py --symbol XAUUSD_ --tp-r 3.0 --or-minutes 60 "
-                         "--risk-per-trade-pct 0.005 --weekend-flat --variant weekendflat"))
-    here = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_paper.bat",
-                          "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
-                          "--risk-per-trade-pct 0.005 --paper --weekend-flat --variant weekendflat"))
-    assert cfi.symbol == here.symbol and cfi.key != here.key
+def test_no_launcher_still_names_a_brokers_own_ticker() -> None:
+    """A leftover XAUUSD_ polls a symbol that does not exist on the FundingPips machine -- the
+    exact failure deploy/preflight.py was written about, one broker change earlier."""
+    tickers = {"XAUUSD_", "US100_Spot", "US500_SPOT", "US30_SPOT", "GER30_SPOT", "JPN225_SPOT"}
+    for path in sorted(REPO.glob("run_live_*.bat")):
+        named = tickers & set(path.read_text(encoding="utf-8").split())
+        assert not named, f"{path.name} still names {', '.join(sorted(named))}"
+
+
+def test_the_roster_must_say_which_account_a_demo_bot_may_trade_on(tmp_path: Path) -> None:
+    """Real-order permission is per account: this bot's sizing and stop rule were measured on
+    CFI's spread, swap and 0.01-lot minimum, and none of that transfers to FundingPips."""
+    roster = tmp_path / "deploy" / "demo_roster.txt"
+    roster.parent.mkdir()
+    roster.write_text("OrbBreakoutwf_XAUUSD_Demo\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="names no broker"):
+        load_roster(tmp_path)
+
+
+def test_scope_narrows_the_demo_side_to_one_accounts_bots(tmp_path: Path) -> None:
+    """On the FundingPips machine no Demo bot is deployed, so its Paper twin must not be
+    dropped as that Demo bot's duplicate -- it is the only measurement of it there."""
+    demo = _bat(tmp_path, "run_live_orb_breakoutwf_xauusd_demo.bat",
+                "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
+                "--risk-per-trade-pct 0.0025 --weekend-flat --variant weekendflat")
+    _bat(tmp_path, "run_live_orb_breakoutwf_xauusd_paper.bat",
+         "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
+         "--risk-per-trade-pct 0.005 --paper --weekend-flat --variant weekendflat")
+    roster = tmp_path / "deploy" / "demo_roster.txt"
+    roster.parent.mkdir()
+    roster.write_text("OrbBreakoutwf_XAUUSD_Demo    cfi\n", encoding="utf-8")
+    assert demo.exists()
+
+    assert [c.task for c in scope(tmp_path, broker="cfi")] == ["OrbBreakoutwf_XAUUSD_Demo"]
+    assert [c.task for c in scope(tmp_path, broker="fundingpips")] == ["OrbBreakoutwf_XAUUSD_Paper"]

@@ -1,9 +1,14 @@
-"""The bot configurations, read from the launchers the VPS executes.
+"""The bot configurations, read from the launchers the machines execute.
 
 Parameters are parsed from run_live_orb_*.bat and deploy/demo_roster.txt at run time, never
 copied, so the replay always describes what is deployed. Defaults mirror the runners' own
 argparse defaults (run_live_nasdaq_orb.py: --scan-timeframe M1, --or-minutes 15;
 run_live_xauusd_orb.py: --timeframe M15, --entry-window-end unset).
+
+A launcher names the symbol THIS REPO uses (XAUUSD, NDX100), never a broker's own ticker: the
+same launcher set runs on the VPS's CFI account and on the workstation's FundingPips one, and
+each machine resolves the ticker from its own .env (config/brokers.py). So a BotConfig says
+what a bot does, not which broker it does it on -- that is the machine's, and the caller's.
 """
 
 from __future__ import annotations
@@ -32,19 +37,16 @@ class BotConfig:
     weekend_flat: bool = False    # breakout only: --weekend-flat, flat from Friday 23:40 server time
     inverse: bool = False         # --inverse: every setup mirrored (strategy/inverse.py)
     reverse_on_stop_r: float | None = None  # --reverse-on-stop R (execution/stop_and_reverse.py)
-    broker_ticker: str | None = None  # the launcher's own ticker when it is another broker's name
-                                      # for `symbol` -- CFI calls XAUUSD "XAUUSD_"
 
     @property
     def key(self) -> tuple:
         """What makes two launchers the same strategy, ignoring Demo/Paper.
 
-        The broker is part of it: the same strategy pointed at two brokers is two deployments,
-        with different spreads and swap, so neither is the other's twin.
+        Not the broker: one launcher set is deployed on both accounts, so a Demo bot and the
+        Paper bot with these same parameters are twins on whichever machine they run.
         """
         return (self.family, self.symbol, self.scan_minutes, self.or_minutes, self.tp_r,
-                self.entry_window_end, self.weekend_flat, self.inverse, self.reverse_on_stop_r,
-                self.broker_ticker)
+                self.entry_window_end, self.weekend_flat, self.inverse, self.reverse_on_stop_r)
 
 
 def _flag(text: str, name: str, default: str | None = None) -> str | None:
@@ -55,16 +57,6 @@ def _flag(text: str, name: str, default: str | None = None) -> str | None:
 # The strategy family is whichever runner a launcher calls. The file name's first token only names
 # the task, so a variant launcher such as run_live_orb_breakoutwf_xauusd_paper.bat needs no case.
 _RUNNER_FAMILY = {"run_live_nasdaq_orb.py": "breakout", "run_live_xauusd_orb.py": "sweep"}
-
-# Each broker names the same instrument its own way. This repo keys everything -- symbol specs,
-# history files, every report -- by the name on the RIGHT, so a launcher aimed at a broker's own
-# ticker is mapped back to it, and the raw ticker kept in BotConfig.broker_ticker. Left-hand
-# names come from that broker's MT5 symbol list (see backtest/live_replay/symbol_specs_cfi.json).
-BROKER_TICKERS = {
-    "XAUUSD_": "XAUUSD", "US100_Spot": "NDX100", "US500_SPOT": "SPX500",
-    "US30_SPOT": "DJI30", "GER30_SPOT": "GER40", "JPN225_SPOT": "JP225",
-}
-
 
 def parse_bat(path: Path) -> BotConfig:
     """Reads one run_live_orb_*.bat into a BotConfig."""
@@ -78,8 +70,7 @@ def parse_bat(path: Path) -> BotConfig:
         raise ValueError(f"{path.name}: --symbol and --risk-per-trade-pct are required")
     reverse = _flag(text, "reverse-on-stop")
     common = dict(task=f"Orb{name.capitalize()}_{symbol_tag.upper()}_{mode.capitalize()}",
-                  family=family, symbol=BROKER_TICKERS.get(symbol, symbol),
-                  broker_ticker=symbol if symbol in BROKER_TICKERS else None,
+                  family=family, symbol=symbol,
                   paper="--paper" in text, risk_pct=float(risk),
                   weekend_flat="--weekend-flat" in text, inverse="--inverse" in text,
                   reverse_on_stop_r=float(reverse) if reverse is not None else None)
@@ -94,17 +85,36 @@ def parse_bat(path: Path) -> BotConfig:
                      or_minutes=None, tp_r=None, entry_window_end=_flag(text, "entry-window-end"))
 
 
-def load_roster(repo: Path = REPO) -> set[str]:
-    """The Demo task names deploy/demo_roster.txt allows to place real orders."""
+def load_roster(repo: Path = REPO) -> dict[str, str]:
+    """Which Demo task may place real orders, and on whose account: task name -> broker name.
+
+    Real-order permission is per broker, not per bot. The one Demo bot in the roster was sized,
+    stopped and stop-ruled on CFI's replay -- its lot minimum, its spread, its swap -- so the
+    same launcher running on the FundingPips machine is a DIFFERENT deployment and stays paper
+    until someone does that work for it. Membership tests still read naturally: a dict answers
+    `task in roster` on its keys.
+    """
     lines = (repo / "deploy" / "demo_roster.txt").read_text(encoding="utf-8").splitlines()
-    return {parts[0] for parts in (line.split("#", 1)[0].split() for line in lines) if parts}
+    rows = [parts for parts in (line.split("#", 1)[0].split() for line in lines) if parts]
+    for parts in rows:
+        if len(parts) < 2:
+            raise ValueError(
+                f"demo_roster.txt: {parts[0]} names no broker -- write `{parts[0]} cfi`. "
+                f"A Demo bot may only place real orders on the account it was validated on."
+            )
+    return {parts[0]: parts[1] for parts in rows}
 
 
-def scope(repo: Path = REPO) -> list[BotConfig]:
-    """Every deployed Demo bot, plus each Paper config that is not one of them."""
+def scope(repo: Path = REPO, broker: str | None = None) -> list[BotConfig]:
+    """Every deployed Demo bot, plus each Paper config that is not one of them.
+
+    `broker` narrows the Demo side to the bots that broker's account may really trade; without
+    it every rostered bot counts, whichever account it belongs to.
+    """
     configs = [parse_bat(p) for p in sorted(repo.glob("run_live_orb_*.bat"))]
     roster = load_roster(repo)
-    demo = [c for c in configs if not c.paper and c.task in roster]
+    demo = [c for c in configs if not c.paper and c.task in roster
+            and (broker is None or roster[c.task] == broker)]
     demo_keys = {c.key for c in demo}
     paper = [c for c in configs if c.paper and c.key not in demo_keys]
     return demo + paper

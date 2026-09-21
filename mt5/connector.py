@@ -5,11 +5,49 @@ import os
 import MetaTrader5 as mt5  # noqa: N813
 from dotenv import load_dotenv
 
+import config.brokers as machine
+from config.brokers import BrokerProfile
 from core.models import AccountInfo, Bar, SymbolConstraints
 from mt5.rates import TIMEFRAME_MAPPING, get_symbol_point, rates_to_bars
 from utils.logging import setup_logger
 
 logger = setup_logger("mt5_connector", log_to_file=True)
+
+
+class WrongBrokerError(RuntimeError):
+    """The terminal is logged into an account other than the one .env names."""
+
+
+def resolve_ticker(symbol: str) -> tuple[BrokerProfile, str]:
+    """This machine's broker, and the ticker IT uses for the name a launcher passed.
+
+    Called before connecting, because a bot's state files are named from the ticker: the VPS's
+    CFI gold keeps `XAUUSD_` files and this workstation's FundingPips gold keeps `XAUUSD` ones,
+    so two brokers can never read each other's open paper position or daily risk baseline.
+    """
+    profile = machine.local()
+    return profile, profile.ticker(symbol)
+
+
+def ensure_logged_into(profile: BrokerProfile) -> None:
+    """Refuses to go on unless the terminal really is on the account .env names.
+
+    connect() logs in with MT5_SERVER, so this should never fire -- but everything downstream
+    (which ticker to poll, which state files are this bot's, which broker's specs the reports
+    read) is derived from that one string, and being wrong about it means trading the wrong
+    account. Cheap assertion, expensive failure.
+
+    Raises:
+        WrongBrokerError: If the terminal reports a different server.
+    """
+    info = mt5.account_info()
+    if info is None:
+        raise WrongBrokerError("MT5 returned no account_info() -- cannot confirm which broker this is.")
+    if info.server != profile.server:
+        raise WrongBrokerError(
+            f".env names {profile.server} ({profile.name}), but the terminal is logged into "
+            f"{info.server!r}. Refusing to trade the wrong account."
+        )
 
 
 class MT5Connector:

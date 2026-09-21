@@ -16,6 +16,10 @@ NOT YET forward/paper-validated -- fresh backtest-to-live port. Run with
 R varies by symbol (XAUUSD ~4.0, GER40 ~3.0, see strategy module docstring)
 -- always pass it explicitly per symbol rather than relying on the fallback.
 
+--symbol takes the name THIS REPO uses (XAUUSD, GER40, NDX100), not a broker's own ticker.
+The machine's .env decides the broker and the ticker is resolved from it (config/brokers.py):
+the VPS's CFI account is asked for XAUUSD_, this workstation's FundingPips one for XAUUSD.
+
 Usage:
     python run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 4.0 --risk-per-trade-pct 0.005 --paper
     python run_live_nasdaq_orb.py --symbol GER40 --tp-r 3.0 --risk-per-trade-pct 0.01 --paper
@@ -31,6 +35,7 @@ from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5  # noqa: N813
 
+from config.brokers import UnknownBrokerError
 from config.settings import Settings
 from core.models import AccountInfo, Bar, OrderType, SignalDirection, Timeframe
 from execution.interfaces import IBroker
@@ -42,7 +47,7 @@ from execution.position_sizer import PositionSizer
 from execution.stop_and_reverse import sync_reverse_order
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
-from mt5.connector import MT5Connector
+from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from mt5.rates import BROKER_TZ
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
@@ -114,7 +119,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Live NASDAQ ORB M1 Breakout loop against a DEMO MT5 account "
         "(places real demo orders -- see module docstring)."
     )
-    parser.add_argument("--symbol", required=True, help="MT5 symbol name (this account's ticker)")
+    parser.add_argument("--symbol", required=True,
+                        help="Symbol as THIS REPO names it (XAUUSD, NDX100, GER40) -- the broker's "
+                             "own ticker is resolved from .env, see config/brokers.py")
     parser.add_argument("--tp-r", type=float, required=True, help="Take-profit R multiple (symbol-specific, see module docstring)")
     parser.add_argument(
         "--scan-timeframe", default="M1", choices=["M1", "M5", "M15"],
@@ -538,11 +545,22 @@ def main(argv: list[str] | None = None) -> None:
     global _CURRENT_MODE
     _CURRENT_MODE = "paper" if args.paper else "live"
 
+    # Which broker this machine trades, and its own name for the symbol. Resolved before
+    # anything else: every state file below is named from the ticker, so the VPS's CFI bots
+    # (XAUUSD_) and this workstation's FundingPips ones (XAUUSD) never share a file.
+    try:
+        profile, symbol = resolve_ticker(args.symbol)
+    except UnknownBrokerError as exc:
+        logger.critical("BROKER NOT RESOLVED: %s", exc)
+        print(f"REFUSING TO START: {exc}")
+        sys.exit(1)
+    logger.info("Broker %s (%s): %s -> %s", profile.name, profile.server, args.symbol, symbol)
+
     # Deliberately separate paper state/kill-switch files (see
     # run_live_sr_bias.py's identical per-symbol rationale) -- symbol-tagged
     # so a future second instance doesn't collide. --variant extends the tag for a
     # second bot on the same symbol (see _bot_tag).
-    symbol_tag = _bot_tag(args.symbol, args.variant)
+    symbol_tag = _bot_tag(symbol, args.variant)
     risk_dir = Path(__file__).parent / "risk"
     kill_switch_flag_path = risk_dir / f"kill_switch_nasdaq_orb_{symbol_tag}_paper.flag" if args.paper else None
     daily_risk_tracker = (
@@ -566,7 +584,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("RESULT: TRADING HALTED (kill-switch active)")
         print("TRADING HALTED (kill-switch active)")
         if args.reverse_on_stop is not None:
-            _cancel_reverse_orders(args.symbol, args.reverse_on_stop)
+            _cancel_reverse_orders(symbol, args.reverse_on_stop)
         return
 
     connector = MT5Connector()
@@ -580,6 +598,12 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     try:
+        try:
+            ensure_logged_into(profile)
+        except WrongBrokerError as exc:
+            logger.critical("WRONG BROKER: %s", exc)
+            print(f"REFUSING TO TRADE: {exc}")
+            sys.exit(1)
         account_info = broker.get_account_info()
         if not args.paper:
             try:
@@ -608,7 +632,7 @@ def main(argv: list[str] | None = None) -> None:
         trade_manager = TradeManager(volume=args.volume, position_sizer=position_sizer)
         run_once(
             connector=connector, broker=broker, trade_manager=trade_manager, strategy=strategy,
-            symbol=args.symbol, timeframe=Timeframe[args.scan_timeframe],
+            symbol=symbol, timeframe=Timeframe[args.scan_timeframe],
             timeframe_str=args.scan_timeframe,
             lookback_days=args.lookback_days, kill_switch_flag_path=kill_switch_flag_path,
             traded_setups_path=_traded_setups_path(risk_dir, symbol_tag, args.paper),

@@ -1,4 +1,5 @@
-# Which *_Demo tasks may place real orders. One bot per symbol, no exceptions.
+# Which *_Demo tasks may place real orders, and ON WHOSE ACCOUNT.
+# Format: <task name> <broker>   # comment. One bot per symbol, no exceptions.
 #
 # WHY THIS FILE EXISTS: a .bat exists for every strategy/symbol pair, so
 # install_tasks.ps1 registers eighteen tasks. Enabling all of them puts TWO
@@ -54,5 +55,18 @@
 #   At 0.25% about 1 trade in 125 computes below CFI's 0.01-lot minimum and is clamped up to it,
 #   risking up to 0.5% on that trade: the R figures stay true, the dollars run slightly hot.
 
+# 2026-09-21: TWO MACHINES, TWO BROKERS -- AND REAL ORDERS ONLY ON ONE.
+# The VPS trades the CFI account; this workstation stays on FundingPips. Both machines run the
+# same launchers (they are in git), and each resolves the broker's own ticker from its own .env
+# (config/brokers.py), so nothing below is a launcher name any more -- it is a permission, and
+# permission is per account.
+#
+# Every number that justifies the bot below was measured on CFI: its spread, its swap, its
+# 0.01-lot minimum, the 1-year replay the stop rule's bootstrap envelope comes from. None of it
+# transfers to FundingPips, which charges $5/lot commission, caps gold at 5 lots and is a prop
+# TRIAL account. So the same launcher on the FundingPips machine is a DIFFERENT deployment and
+# runs PAPER until someone does that work for it. install_tasks.ps1 asks this machine which
+# broker it is and disables every Demo task not listed for it -- on the workstation, all of them.
+
 # --- the one bot allowed to place real orders ---
-OrbBreakoutwf_XAUUSD_Demo    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
+OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk

@@ -1,10 +1,15 @@
-"""Replay every deployed ORB bot the way the VPS runs it, beside the old batch backtests.
+"""Replay every deployed ORB bot the way its machine runs it, beside the old batch backtests.
 
-Each bot is replayed on the broker its launcher names (backtest/live_replay/brokers.py): that
-broker's history, trimmed to its real minute data, its contract specs, FX files and tick cache.
+The bots are replayed on one broker's prices: that broker's history, trimmed to its real minute
+data, its contract specs, FX files and tick cache. Which broker is no longer readable from a
+launcher -- the same launcher set runs on the VPS's CFI account and on this workstation's
+FundingPips one -- so it defaults to the broker THIS machine trades (.env, config/brokers.py)
+and --broker names the other. From the workstation, `--broker cfi` is the VPS's deployment,
+which is the one placing real orders.
 
 Usage:
     python -m scripts.live_replay_backtest
+    python -m scripts.live_replay_backtest --broker cfi          (the VPS's deployment)
     python -m scripts.live_replay_backtest --configs OrbSweep_GER40_Demo --no-ablation
     python -m scripts.live_replay_backtest --data-dir data/history/fundingpips --out artifacts/live_replay
       (--data-dir forces one folder, named and specced as FundingPips, for every bot)
@@ -30,7 +35,7 @@ import numpy as np
 import scripts.nasdaq_orb_m1_breakout_backtest as orb_mod
 import scripts.xauusd_orb_liquidity_sweep_backtest as sweep_mod
 from backtest.live_replay.brokers import (
-    BROKERS, Broker, broker_for, connected_server, history_path, tick_cache,
+    BROKERS, Broker, connected_server, deployed_broker, history_path, tick_cache,
 )
 from backtest.live_replay.configs import BotConfig, scope
 from backtest.live_replay.engine import Flags, TradeRecord, run
@@ -116,11 +121,12 @@ def _fmt(value: float) -> str:
 
 
 def render_report(results: list[ConfigResult], end: date, generated: datetime,
-                  validation_note: str) -> str:
+                  validation_note: str, broker: str) -> str:
     lines = [
         "# Canlı Əkiz Backtest — nəticə",
         "",
-        f"Hazırlandı: {generated:%Y-%m-%d %H:%M} UTC · data sonu: {end:%Y-%m-%d} · "
+        f"Broker: **{broker}** · hazırlandı: {generated:%Y-%m-%d %H:%M} UTC · "
+        f"data sonu: {end:%Y-%m-%d} · "
         "spec: `docs/superpowers/specs/2026-09-15-live-replay-backtest-design.md`",
         "",
         "## Yoxlamalar",
@@ -215,8 +221,9 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
         "", "## Məhdudiyyətlər", "",
         "- Swap dərəcələri tarixi deyil: bütün tarixçəyə hər brokerin spec faylının capture "
         "tarixindəki dərəcələri tətbiq olunub (FundingPips 2026-09-15, CFI 2026-09-20).",
-        "- Hər bot öz brokerinin datasında replay olunur, həmin brokerin real M1 datası "
-        "başlayandan (CFI qızılı 2017-dən).",
+        "- Bütün botlar yuxarıda adı çəkilən BİR brokerin datasında replay olunur, həmin "
+        "brokerin real M1 datası başlayandan (CFI qızılı 2017-dən). VPS CFI hesabında, bu "
+        "kompüter FundingPips-də işləyir; `--broker` ilə seçilir.",
         "- Spread hər M1 barın öz spread sütunundandır; tick müqayisəsi yuxarıdakı nisbətdədir.",
         "- Tick tarixçəsi indekslərdə 2025-03, qızılda 2026-05-dən başlayır; ondan əvvəlki boşluq "
         "stopları bar close proksisi ilə qiymətləndirilib (`gap_proxy` sütunu bunun qiymətidir).",
@@ -231,9 +238,12 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--configs", default="", help="comma-separated task names; default all ten")
+    parser.add_argument("--broker", default="",
+                        help=f"which broker's deployment to replay ({', '.join(sorted(BROKERS))}); "
+                             "default: the one this machine trades (.env)")
     parser.add_argument("--data-dir", default="",
                         help="replay every bot on this one folder with FundingPips specs "
-                             "(default: each bot on its own broker's)")
+                             "(default: the broker's own)")
     parser.add_argument("--out", default="artifacts/live_replay")
     parser.add_argument("--no-ablation", action="store_true")
     parser.add_argument("--no-old", action="store_true")
@@ -242,16 +252,21 @@ def main() -> None:
 
     out_dir = Path(args.out)
     wanted = {name.strip() for name in args.configs.split(",") if name.strip()}
-    configs = [c for c in scope() if not wanted or c.task in wanted]
-    forced = (Broker("forced", args.data_dir, Path(args.data_dir), BROKERS["fundingpips"].specs_file)
-              if args.data_dir else None)
+    # Which deployment is being replayed -- that decides both the prices and which bots count.
+    # --data-dir still overrides only the prices, so forcing a folder cannot silently empty the
+    # roster.
+    deployment = deployed_broker(args.broker)
+    broker = (Broker("forced", args.data_dir, Path(args.data_dir), BROKERS["fundingpips"].specs_file)
+              if args.data_dir else deployment)
+    # Only the bots that account may really trade: real-order permission is per account
+    # (deploy/demo_roster.txt), so a Demo bot rostered on CFI is a Paper bot on FundingPips.
+    configs = [c for c in scope(broker=deployment.name) if not wanted or c.task in wanted]
     logged_into = connected_server()
     caches: dict[str, TickCache] = {}
     results: list[ConfigResult] = []
     end = date.min  # "last year" is measured back from the newest bar, not from today
 
     for config in configs:
-        broker = forced or broker_for(config)
         print(f"--- {config.task}  ({broker.name})")
         spec = load_specs(broker.specs_file)[config.symbol]
         csv_path = history_path(broker, spec)
@@ -287,7 +302,8 @@ def main() -> None:
 
     note_path = Path(args.validation_note)
     note = note_path.read_text(encoding="utf-8") if note_path.exists() else "(testlər işlədilməyib)"
-    REPORT_PATH.write_text(render_report(results, end, datetime.now(UTC), note), encoding="utf-8")
+    REPORT_PATH.write_text(render_report(results, end, datetime.now(UTC), note, broker.name),
+                           encoding="utf-8")
     print(f"wrote {REPORT_PATH}")
 
 
