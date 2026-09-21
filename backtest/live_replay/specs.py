@@ -28,12 +28,15 @@ class SymbolSpec:
     volume_step: float
     volume_max: float
     profit_currency: str
-    swap_mode: int            # 1 = points per lot per day, 5 = annual percent of the price
+    swap_mode: int            # 1 = points per lot per day, 4 = deposit currency per lot per
+                              # day, 5 = annual percent of the price
     swap_long: float
     swap_short: float
     swap_rollover3days: int   # MT5 weekday numbering: 0 = Sunday, 3 = Wednesday, 5 = Friday
     margin_rate: float        # margin / notional, in account currency
     commission_per_lot_usd: float
+    broker_symbol: str | None = None  # this broker's own ticker, when it differs from ours
+                                      # (CFI calls NDX100 "US100_Spot"); names the history CSV.
 
     def constraints(self, usd_per_unit: float) -> SymbolConstraints:
         """What PositionSizer needs, with the tick value in USD at this FX rate."""

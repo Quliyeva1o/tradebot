@@ -98,3 +98,23 @@ def test_the_reverse_and_inverse_flags_are_parsed_and_make_different_configurati
     assert (reverse.reverse_on_stop_r, reverse.inverse) == (0.5, False)
     assert (inverse.task, inverse.inverse, inverse.reverse_on_stop_r) == ("OrbBreakoutinv_XAUUSD_Paper", True, None)
     assert len({plain.key, reverse.key, inverse.key}) == 3
+
+
+def test_a_brokers_own_ticker_maps_back_to_the_name_this_repo_keys_by(tmp_path: Path) -> None:
+    """CFI calls gold XAUUSD_; specs, history files and reports are all keyed by XAUUSD."""
+    cfg = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_demo.bat",
+                         "run_live_nasdaq_orb.py --symbol XAUUSD_ --tp-r 3.0 --or-minutes 60 "
+                         "--risk-per-trade-pct 0.005 --weekend-flat --variant weekendflat"))
+    assert (cfg.symbol, cfg.broker_ticker, cfg.task) == (
+        "XAUUSD", "XAUUSD_", "OrbBreakoutwf_XAUUSD_Demo")
+
+
+def test_the_same_strategy_at_two_brokers_is_not_one_configuration(tmp_path: Path) -> None:
+    """Otherwise scope() would drop one as the other's twin and stop reporting it."""
+    cfi = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_demo.bat",
+                         "run_live_nasdaq_orb.py --symbol XAUUSD_ --tp-r 3.0 --or-minutes 60 "
+                         "--risk-per-trade-pct 0.005 --weekend-flat --variant weekendflat"))
+    here = parse_bat(_bat(tmp_path, "run_live_orb_breakoutwf_xauusd_paper.bat",
+                          "run_live_nasdaq_orb.py --symbol XAUUSD --tp-r 3.0 --or-minutes 60 "
+                          "--risk-per-trade-pct 0.005 --paper --weekend-flat --variant weekendflat"))
+    assert cfi.symbol == here.symbol and cfi.key != here.key

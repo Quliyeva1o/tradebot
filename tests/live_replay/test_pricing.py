@@ -10,7 +10,7 @@ from backtest.live_replay.pricing import (
 )
 from core.models import Bar, SignalDirection, Timeframe
 from strategy.models import TradeSetup
-from tests.live_replay._fixtures import NDX, XAU
+from tests.live_replay._fixtures import CFI_JP, NDX, XAU
 
 
 def _bar(o: float, h: float, low: float, c: float) -> Bar:
@@ -89,3 +89,22 @@ def test_the_margin_ceiling_scales_an_oversized_entry_down() -> None:
 
 def test_a_setup_whose_stop_equals_its_entry_cannot_be_sized() -> None:
     assert size_position(NDX, _setup(29048.08, 29048.08, 29100.0), 50_000.0, 1.0, 0.005) == 0.0
+
+
+def test_deposit_currency_swap_is_money_per_lot_per_night() -> None:
+    # CFI's mode 4: the rate IS the charge for one lot for one night, in USD.
+    assert swap_usd(CFI_JP, SignalDirection.BUY, 1.0, 65151.6, 1, 1.0) == pytest.approx(-31.77)
+    assert swap_usd(CFI_JP, SignalDirection.BUY, 0.25, 65151.6, 4, 1.0) == pytest.approx(-31.77)
+    assert swap_usd(CFI_JP, SignalDirection.SELL, 1.0, 65151.6, 1, 1.0) == pytest.approx(-14.478)
+
+
+def test_deposit_currency_swap_ignores_price_and_the_fx_rate() -> None:
+    # Already in the deposit currency: converting a JPY-quoted index by its FX rate, as
+    # modes 1 and 5 require, would divide this charge by ~150.
+    assert swap_usd(CFI_JP, SignalDirection.BUY, 1.0, 65151.6, 1, 1 / 156.88) == pytest.approx(-31.77)
+    assert swap_usd(CFI_JP, SignalDirection.BUY, 1.0, 12.0, 1, 1.0) == pytest.approx(-31.77)
+
+
+def test_an_unmodelled_swap_mode_still_refuses_to_guess() -> None:
+    with pytest.raises(ValueError, match="swap_mode 6"):
+        swap_usd(replace(CFI_JP, swap_mode=6), SignalDirection.BUY, 1.0, 65151.6, 1, 1.0)

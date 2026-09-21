@@ -61,6 +61,11 @@ def swap_usd(spec: SymbolSpec, direction: SignalDirection, volume: float, price:
     rate = spec.swap_long if direction == SignalDirection.BUY else spec.swap_short
     if spec.swap_mode == 1:      # points per lot per day (gold here)
         per_day = volume * spec.contract_size * spec.point * rate
+    elif spec.swap_mode == 4:
+        # Money per lot per day, already in the account's DEPOSIT currency (CFI's indices
+        # quote this way). Unlike every other mode here it needs no profit-currency
+        # conversion, so it returns before the usd_per_unit multiplication below.
+        return volume * rate * days
     elif spec.swap_mode == 5:    # annual percent of the current price (the indices here)
         per_day = volume * spec.contract_size * price * rate / 100.0 / 360.0
     else:
