@@ -87,6 +87,13 @@ def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     }
 
 
+def test_the_one_live_bot_risks_a_quarter_percent() -> None:
+    """2026-09-21: halved before its first live trade. Its edge was already decaying inside the
+    year it was chosen on, and a drawdown stop catches collapse, not decay -- see the roster."""
+    live = [c for c in scope(REPO) if not c.paper]
+    assert [(c.task, c.risk_pct) for c in live] == [("OrbBreakoutwf_XAUUSD_Demo", 0.0025)]
+
+
 def test_no_bot_that_places_real_orders_reverses_on_a_stop() -> None:
     """--reverse-on-stop 0.5 risks 1R to make 0.5R: it needs 66.7% wins and gets 62.3%."""
     assert {c.reverse_on_stop_r for c in scope(REPO) if not c.paper} == {None}

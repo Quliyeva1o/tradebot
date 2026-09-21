@@ -38,5 +38,21 @@
 # truth lies between those bounds. Its edge belongs to the current regime; judge it live
 # against that, and expect a decade like 2009-2019 to be roughly breakeven or worse.
 
+# 2026-09-21: RISK HALVED TO 0.25%, AND A STOP RULE FIXED BEFORE THE FIRST LIVE TRADE.
+# From the 1-year CFI replay of this bot's Paper twin (identical strategy flags;
+# artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv, 125 trades, +34.5R):
+#   - The edge decays inside that year: +0.484R/trade over the first 59 trades (to 2026-03-22),
+#     +0.090R/trade over the last 66. If the first-half edge still held, a second half that weak
+#     has p = 0.029 (bootstrap). Expect roughly +0.09 to +0.28R/trade forward, not PF 1.49.
+#   - Size is the lever, because a drawdown stop catches collapse, not decay: a zero-edge copy of
+#     this bot breaches its p95 drawdown only 30% of the time within 40 trades.
+#   - STOP -- take OrbBreakoutwf_XAUUSD_Demo out of this file -- if, counted from its first live
+#     trade, drawdown from peak exceeds 17R within 40 trades or 22R within 80 (each the p99 of
+#     the year's bootstrap envelope), or if at the 40-trade checkpoint (about 4 months) the net is
+#     below -5.8R (its p05).
+#   These are set now, before any live data, on purpose. Do not loosen them after seeing trades.
+#   At 0.25% about 1 trade in 125 computes below CFI's 0.01-lot minimum and is clamped up to it,
+#   risking up to 0.5% on that trade: the R figures stay true, the dollars run slightly hot.
+
 # --- the one bot allowed to place real orders ---
-OrbBreakoutwf_XAUUSD_Demo    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse
+OrbBreakoutwf_XAUUSD_Demo    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
