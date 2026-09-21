@@ -19,14 +19,25 @@ def test_roster_reads_task_names_and_ignores_comments_and_blanks(tmp_path):
     """Same format install_tasks.ps1 reads: first token per line, # starts a comment."""
     roster = tmp_path / "demo_roster.txt"
     roster.write_text(
-        "# Which *_Demo tasks may place real orders.\n"
+        "# Which *_Demo tasks may place real orders, and on whose account.\n"
         "\n"
-        "OrbBreakout_XAUUSD_Demo      # 60m OR / M1 / 3R\n"
-        "OrbSweep_GER40_Demo\n",
+        "OrbBreakout_XAUUSD_Demo   cfi          # 60m OR / M1 / 3R\n"
+        "OrbSweep_GER40_Demo       fundingpips\n",
         encoding="utf-8",
     )
 
     assert report._roster(roster) == {"OrbBreakout_XAUUSD_Demo", "OrbSweep_GER40_Demo"}
+
+
+def test_the_roster_is_read_per_account(tmp_path):
+    """Real-order permission belongs to one account: the CFI bot's sizing, its 0.01-lot minimum
+    and its stop-rule envelope were all measured on CFI, so it is not live on FundingPips."""
+    roster = tmp_path / "demo_roster.txt"
+    roster.write_text("OrbBreakout_XAUUSD_Demo   cfi\n"
+                      "OrbSweep_GER40_Demo       fundingpips\n", encoding="utf-8")
+
+    assert report._roster(roster, broker="cfi") == {"OrbBreakout_XAUUSD_Demo"}
+    assert report._roster(roster, broker="fundingpips") == {"OrbSweep_GER40_Demo"}
 
 
 def test_every_bot_in_the_real_roster_has_a_deployed_bat():
@@ -62,14 +73,23 @@ def test_the_report_sees_every_bot_the_roster_deploys():
 
 
 def test_the_report_matches_live_deals_by_the_brokers_own_ticker():
-    """The account's deals carry CFI's name (XAUUSD_), not this repo's (XAUUSD)."""
-    wf = next(c for c in report.deployed_configs() if c.task == "OrbBreakoutwf_XAUUSD_Demo")
-
-    assert (wf.broker_ticker, wf.symbol, wf.weekend_flat) == ("XAUUSD_", "XAUUSD", True)
-
-
-def test_the_baseline_is_replayed_on_the_broker_the_launcher_names():
-    from backtest.live_replay.brokers import broker_for
+    """A deal on the CFI account carries XAUUSD_, one on FundingPips carries XAUUSD. The
+    launcher names neither -- the machine's own profile turns this repo's XAUUSD into both."""
+    import config.brokers as machine
 
     wf = next(c for c in report.deployed_configs() if c.task == "OrbBreakoutwf_XAUUSD_Demo")
-    assert broker_for(wf).name == "cfi"
+    assert (wf.symbol, wf.weekend_flat) == ("XAUUSD", True)
+
+    assert machine.profiles()["cfi"].ticker(wf.symbol) == "XAUUSD_"
+    assert machine.profiles()["fundingpips"].ticker(wf.symbol) == "XAUUSD"
+
+
+def test_the_baseline_is_replayed_on_the_account_this_machine_trades():
+    """The report counts the connected account's deals, so its baseline has to come from that
+    same account's prices -- not from whichever broker a launcher used to name."""
+    import config.brokers as machine
+    from backtest.live_replay.brokers import deployed_broker
+
+    for name in ("cfi", "fundingpips"):
+        profile = machine.profiles()[name]
+        assert deployed_broker(profile.name).name == name

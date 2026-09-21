@@ -3,13 +3,28 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import backtest.live_replay.brokers as brokers
-from backtest.live_replay.brokers import Broker, broker_for, tick_cache
-from backtest.live_replay.configs import REPO, parse_bat
+import config.brokers as machine
+from backtest.live_replay.brokers import Broker, deployed_broker, tick_cache
 
 
-def test_the_deployed_bot_is_replayed_on_cfi() -> None:
-    assert broker_for(parse_bat(REPO / "run_live_orb_breakoutwf_xauusd_demo.bat")).name == "cfi"
+def test_the_replay_follows_the_machine_rather_than_the_launcher(monkeypatch) -> None:
+    """Since 2026-09-21 the same launchers run on the VPS's CFI account and on this
+    workstation's FundingPips one, so nothing in a .bat says which prices are the bot's."""
+    monkeypatch.setattr(machine, "local", lambda: machine.profiles()["fundingpips"])
+    assert deployed_broker().name == "fundingpips"
+
+    monkeypatch.setattr(machine, "local", lambda: machine.profiles()["cfi"])
+    assert deployed_broker().name == "cfi"
+
+
+def test_the_other_machines_deployment_can_be_named() -> None:
+    """The workstation judges the VPS's real-order bot with --broker cfi."""
+    assert deployed_broker("cfi").name == "cfi"
+    with pytest.raises(LookupError):
+        deployed_broker("fxtm")
 
 
 def _cfi_like(tmp_path: Path) -> Broker:

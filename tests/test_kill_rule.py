@@ -39,7 +39,7 @@ class TestAdoptedRuleIsPinned:
         assert rule.horizon == 80
 
     def test_every_rule_names_a_bot_the_roster_deploys(self) -> None:
-        assert set(kr.load_rules()) <= load_roster()
+        assert set(kr.load_rules()) <= set(load_roster())
 
     def test_a_missing_file_means_no_rules_rather_than_a_crash(self, tmp_path) -> None:
         assert kr.load_rules(tmp_path / "nope.json") == {}

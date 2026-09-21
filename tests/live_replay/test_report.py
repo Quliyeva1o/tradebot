@@ -29,7 +29,7 @@ def _result() -> ConfigResult:
 
 def test_the_report_puts_the_old_and_the_twin_side_by_side() -> None:
     text = render_report([_result()], end=date(2026, 9, 15), generated=datetime(2026, 9, 15, tzinfo=UTC),
-                         validation_note="G1-G3: 40 passed")
+                         validation_note="G1-G3: 40 passed", broker="cfi")
     assert "OrbBreakout_NDX100_Demo" in text
     assert "köhnə" in text
     assert "1.329" in text and "G1-G3: 40 passed" in text
@@ -43,13 +43,13 @@ def test_the_report_says_the_old_column_does_not_know_the_weekend_rule() -> None
     result = _result()
     result.config = replace(CONFIG, task="OrbBreakoutwf_XAUUSD_Paper", weekend_flat=True)
     text = render_report([result], end=date(2026, 9, 15), generated=datetime(2026, 9, 15, tzinfo=UTC),
-                         validation_note="")
+                         validation_note="", broker="cfi")
     assert "həftə sonu" in text
 
 
 def _render(result) -> str:
     return render_report([result], end=date(2026, 9, 15), generated=datetime(2026, 9, 15, tzinfo=UTC),
-                         validation_note="")
+                         validation_note="", broker="cfi")
 
 
 def test_the_report_explains_that_the_truth_lies_between_the_twin_and_the_swap_off_column() -> None:

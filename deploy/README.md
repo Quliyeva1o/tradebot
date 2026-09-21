@@ -6,6 +6,33 @@ aralığındadır (qış vaxtı bir saat gec), və mövqe açıldıqdan sonra SL
 tərəfində saxlandığı üçün kompüter yalnız **giriş** üçün lazımdır. VPS bu
 pəncərəni 24/7 örtür.
 
+## İki maşın, iki hesab
+
+2026-09-21-dən: **VPS CFI hesabında, iş kompüteri FundingPips-də** işləyir.
+Hər iki maşın eyni launcher-ləri qaçırır (onlar git-dədir), ona görə brokerin öz
+ticker-i artıq `.bat` faylında yazılmır — hər maşın onu **öz `.env`-indən**
+(`MT5_SERVER`) həll edir, `config/brokers.py` vasitəsilə:
+
+```
+.env MT5_SERVER  ->  broker profili  ->  həmin brokerin bizim simvola verdiyi ad
+CFI11-Demo       ->  cfi             ->  XAUUSD -> XAUUSD_
+FundingPips-Trial->  fundingpips     ->  XAUUSD -> XAUUSD
+```
+
+Launcher `--symbol XAUUSD` deyir, maşın isə hansı hesabda olduğunu bilir. State
+faylları **həll olunmuş ticker-dən** adlanır (CFI-də `..._xauusd__weekendflat`,
+FundingPips-də `..._xauusd_weekendflat`), ona görə iki brokerin açıq paper
+mövqeyi və risk baseline-ı heç vaxt bir faylı paylaşmır. Bot
+işə düşəndə terminalın həqiqətən həmin serverdə olduğunu yoxlayır; olmasa
+**işləməkdən imtina edir** (`mt5/connector.ensure_logged_into`).
+
+**Real order icazəsi hesaba görədir.** `deploy/demo_roster.txt` hər Demo botun
+yanında hansı brokerdə işləyə biləcəyini yazır. Tək canlı bot
+(`OrbBreakoutwf_XAUUSD_Demo`) CFI-dədir: onun lot ölçüsü, stop qaydası və
+bootstrap zərfi CFI-nin spread, swap və 0.01-lot minimumu üzərində ölçülüb.
+İş kompüterində bütün Demo tasklar **bağlı** qalır, paper botlar işləyir —
+`install_tasks.ps1` bunu özü edir.
+
 ## Nə köçür, nə köçmür
 
 Repo daşınabiləndir — `.py`, `.bat` və `.vbs` fayllarının heç birində mütləq yol
@@ -14,7 +41,7 @@ yoxdur, launcher-lər `cd /d "%~dp0"` ilə başlayır. Maşına bağlı olan ü�
 | | Necə |
 |---|---|
 | Scheduled Task-lar | `install_tasks.ps1` avtomatik qurur |
-| `.env` | əl ilə köçürün — git-də saxlanmır |
+| `.env` | əl ilə köçürün — git-də saxlanmır, **hansı broker olduğunu da bu deyir** |
 | `.venv` | yenidən qurulur |
 
 **`data/history/*.csv` (~1GB) köçürməyin.** Canlı botlar barları MT5-dən çəkir;
@@ -50,7 +77,14 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install_tasks.ps1 -PaperOnly
 powershell -ExecutionPolicy Bypass -File .\deploy\install_tasks.ps1
 ```
 
-`preflight.py` 0 qaytarmayınca 6-cı addıma keçməyin.
+`preflight.py` 0 qaytarmayınca 6-cı addıma keçməyin. 3-cü addımda `.env`-dəki
+`MT5_SERVER` **bu maşının hesabını** göstərməlidir (VPS-də `CFI11-Demo`, iş
+kompüterində `FundingPips-Trial`) — botlar ticker-i ondan çıxarır.
+
+Broker dəyişdirmək üçün: MT5-i yeni hesaba salın, `.env`-i yeniləyin,
+`.venv\Scripts\python.exe scripts/capture_symbol_specs.py` ilə həmin brokerin
+spec-lərini götürün, `preflight.py` qaçırın, sonra `install_tasks.ps1`. Launcher
+faylına **toxunmaq lazım deyil**.
 
 ## `preflight.py` nəyi yoxlayır
 
@@ -60,11 +94,58 @@ nasazlığa uyğundur:
 - **AutoTrading bağlı** — real order `retcode 10027` ilə səssizcə rədd olunur.
   Bir dəfə bütün Demo sifarişləri günlərlə boşa çıxıb.
 - **Simvol adı fərqli** — broker dəyişəndən sonra `NAS100` yox olub (burada
-  `NDX100`-dür), botlar bir həftə mövcud olmayan simvolu yoxlayıb.
+  `NDX100`-dür), botlar bir həftə mövcud olmayan simvolu yoxlayıb. İndi preflight
+  əvvəlcə `.env`-dən brokeri tapır, sonra launcher-lərin adlandırdığı hər simvolu
+  **həmin brokerin ticker-i ilə** MT5-dən soruşur, və terminalın `.env`-dəki
+  serverdə olduğunu təsdiqləyir.
 - **Köhnə `risk/` faylları** — başqa hesabın equity baseline-i 99% zərər kimi
   oxunub və bütün real ticarəti dayandırıb.
 - **`tzdata` yoxdur** — Windows-da IANA bazası yoxdur, strategiyalar
   `America/New_York`-a bağlıdır və paket olmadan işləmir, xəta atır.
+- **Saat yalan danışır** — 2026-09-21 07:24 UTC-də bu VPS-in saati 2 saat irəli
+  atıldı (host agenti qonağın UTC-sinə öz **lokal** saatını yazdı, `dllhost.exe`),
+  Windows Time 2 dəq 04 san sonra geri qaytardı. İki polling gələcək tarixli
+  yazıldı və **heç bir yoxlama dinmədi**. NY 03:24 olduğu üçün heç nəyə başa
+  gəlmədi; 09:30 NY-də olsaydı opening range səhv barlardan yığılardı.
+
+## Saat: iki ayrı təhlükə, bir ölçü
+
+`mt5/clock.py` brokerin öz divar saatını (MT5 hər tick-də xam göndərir)
+`BROKER_TZ`-in həmin an üçün proqnozu ilə müqayisə edir. Uyğunluq **həm** OS
+saatının, **həm** timezone-un düz olduğunu bildirir. Tam saatlıq fərq isə
+birinin yanlış olduğunu — hansının, buradan bilinmir, amma ikisi də ticarəti
+dayandırmalıdır.
+
+| Nə tutur | Necə görünür |
+|---|---|
+| OS saatının sıçraması (yuxarıdakı hadisə) | broker saatı proqnozdan tam saat geridə/irəlidə |
+| `BROKER_TZ` köhnəlməsi | eyni əlamət, amma davamlı |
+
+**25 oktyabr 2026 riski:** `Europe/Bucharest` UTC+2-yə keçir, New York isə
+**1 noyabrda**. CFI ABŞ qrafikinə baxırsa, o bir həftə bar vaxtları 1 saat
+sürüşəcək. `mt5/rates.py`-dakı şərh açıq deyir: bu sabit FXTM-dən başqa heç bir
+broker üçün təsdiqlənməyib. Yoxlama indi bunu özü tutacaq — 25 oktyabrdan sonra
+ilk iş günü `preflight.py`-ı qaçırın. Fərq çıxsa, `.env`-ə `MT5_BROKER_TZ=...`
+yazın (kod dəyişikliyi lazım deyil).
+
+**Botlar nə edir:** fərq tam saatdırsa, **yeni giriş açılmır** (log-da
+`entry_blocked_clock_drift`), açıq mövqe isə idarə olunmağa davam edir — onun
+SL/TP-si onsuz da brokerdədir. Bazar bağlı olanda ölçmək mümkün olmur və bu
+**dayandırma səbəbi deyil**, yoxsa botlar hər bazar günü dayanardı.
+
+**Host saatını qonağa yazma yolunu bağlayın** (VPS-də, administrator kimi):
+
+```powershell
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\VMICTimeProvider' -Name Enabled -Value 0
+Set-Service vmictimesync -StartupType Disabled
+w32tm /config /syncfromflags:manual /manualpeerlist:"time.windows.com,0x8 pool.ntp.org,0x8" /update
+Restart-Service w32time
+w32tm /resync /force
+```
+
+`MaxPosPhaseCorrection` / `MaxNegPhaseCorrection`-u **kiçiltməyin**. İndi 54000
+saniyədir və məhz buna görə w32time 2 saatlıq səhvi geri qaytara bildi. Kiçiltsəniz,
+növbəti sıçrayışdan sonra düzəliş rədd olunar və saat səhv qalar.
 
 ## Sonra
 

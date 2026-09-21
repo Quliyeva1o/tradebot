@@ -15,6 +15,10 @@ actually gone wrong in this project and cost real trading days:
     ALL real trading for days.
   - Missing tzdata. Windows has no IANA database; every strategy here is
     defined against America/New_York and raises without it.
+  - A system clock that lies. On 2026-09-21 this VPS's clock jumped two hours
+    forward for 2m04s (a host agent wrote its local wall clock into the guest's
+    UTC) and nothing noticed. The same check catches a stale BROKER_TZ, which is
+    due to diverge from a US-DST broker between 2026-10-25 and 2026-11-01.
 
 It places no orders and changes nothing. Exit code 0 means safe to enable the
 paper tasks.
@@ -36,12 +40,12 @@ REPO = Path(__file__).parent.parent
 
 
 def _deployed_symbols() -> tuple[str, ...]:
-    """The tickers the launchers really pass to MT5, read from the launchers themselves.
+    """The symbols the launchers name, read from the launchers themselves.
 
     This check exists because a broker change once left the bots polling a symbol that no longer
     existed (see the module docstring). A list kept by hand here would go stale at exactly that
     moment -- and did: it still named the previous broker's six when the launchers had moved on.
-    The raw ticker is what MT5 is asked for, so `broker_ticker` wins over the repo's own name.
+    These are this repo's names; section 5 asks MT5 for whatever THIS broker calls each of them.
     """
     from backtest.live_replay.configs import parse_bat
     names = set()
@@ -51,7 +55,7 @@ def _deployed_symbols() -> tuple[str, ...]:
         except ValueError as exc:  # a malformed launcher is its own problem, reported below
             warnings.append(f"{path.name} oxunmadi: {exc}")
             continue
-        names.add(config.broker_ticker or config.symbol)
+        names.add(config.symbol)
     return tuple(sorted(names))
 
 
@@ -116,6 +120,26 @@ else:
         bad(f".env natamamdir, catismayan acarlar: {', '.join(missing)}")
     else:
         ok(".env var ve MT5 acarlarini ehtiva edir")
+
+# Which broker this machine trades. Since 2026-09-21 the launchers name the symbol this repo
+# uses and .env's MT5_SERVER decides the ticker (config/brokers.py), so a machine whose server
+# matches no captured profile has no way to resolve one -- and every bot on it would refuse to
+# start. Better to say so here than to find it in the logs.
+PROFILE = None
+try:
+    import config.brokers as machine
+    PROFILE = machine.local()
+    ok(f"broker: {PROFILE.name} ({PROFILE.server}) -- ticker-ler bundan hell olunur")
+except Exception as exc:  # noqa: BLE001 - the message is the whole point
+    bad(f"BROKER TEYIN OLUNMADI: {exc}")
+
+TICKERS: dict[str, str] = {}
+if PROFILE is not None:
+    for s in SYMBOLS:
+        try:
+            TICKERS[s] = PROFILE.ticker(s)
+        except Exception as exc:  # noqa: BLE001
+            bad(f"{s}: {exc}")
 
 # ------------------------------------------------- 3. leftovers from old box
 print("\n3) Kohne masindan qalan fayllar (kopyalanmamalidir)")
@@ -184,6 +208,12 @@ try:
                 bad("MT5 hesaba giris edilmeyib")
             else:
                 ok(f"hesab {ai.login} @ {ai.server}  equity {ai.equity:.2f} {ai.currency}")
+                if PROFILE is not None and ai.server != PROFILE.server:
+                    # The bots refuse to trade on this (mt5/connector.ensure_logged_into): every
+                    # ticker and every state-file name is derived from .env's server, so a
+                    # terminal on another account means the wrong symbols and the wrong files.
+                    bad(f"TERMINAL BASQA HESABDADIR: .env {PROFILE.server} deyir, terminal ise "
+                        f"{ai.server} -- botlar bu veziyyetde islemekden imtina edir")
                 if _live_baseline:
                     drift = abs(_live_baseline - ai.equity) / max(ai.equity, 1)
                     if drift > 0.5:
@@ -209,10 +239,12 @@ try:
                 ok("AutoTrading aciqdir")
 
             print("\n5) Simvollar")
-            for s in SYMBOLS:
+            for name, s in sorted(TICKERS.items()):
+                label = s if s == name else f"{name} -> {s}"
                 si = mt5.symbol_info(s)
                 if si is None:
-                    bad(f"{s} TAPILMADI -- broker adlandirmasi ferqli ola biler")
+                    bad(f"{label} TAPILMADI -- broker adlandirmasi ferqli ola biler, "
+                        f"scripts/capture_symbol_specs.py ile yeniden goturun")
                 elif not si.visible:
                     # Not blocking: MT5Connector.fetch_recent_bars calls
                     # mt5.symbol_select(symbol, True) before every fetch
@@ -220,16 +252,40 @@ try:
                     # itself on first run. Reported only so a genuinely absent
                     # symbol is not confused with a merely unselected one --
                     # that case raises [XXX] above instead.
-                    warn(f"{s} Market Watch-da gorunmur -- bloklayici DEYIL, "
+                    warn(f"{label} Market Watch-da gorunmur -- bloklayici DEYIL, "
                          "bot ilk qacisda ozu elave edir (connector.py:106)")
                 else:
-                    ok(f"{s} hazir (trade_mode={si.trade_mode})")
+                    ok(f"{label} hazir (trade_mode={si.trade_mode})")
+
+            # ------------------------------------------------ 6. saat ve BROKER_TZ
+            # Bu masinin saati 2026-09-21 07:24 UTC-de 2 saat irelie atildi (host agenti
+            # qonagin UTC-sine oz LOKAL saatini yazdi) ve Windows Time 2 deqiqe sonra geri
+            # qaytardi. Hec bir yoxlama dinmedi. Eyni sey 09:30 NY-de olsa, opening range
+            # sehv barlardan yigilar. Hemin olcu BROKER_TZ-i de yoxlayir: Europe/Bucharest
+            # 2026-10-25-de UTC+2-ye kecir, New York ise 2026-11-01-de -- ABS qrafikine
+            # baxan bir broker o hefte bir saat kenarda qalar. Bax mt5/clock.py.
+            print("\n6) Saat ve BROKER_TZ")
+            if not TICKERS:
+                warn("yoxlanacaq simvol yoxdur -- saat olculmedi")
+            for s in sorted(TICKERS.values()):
+                try:
+                    from mt5.clock import measure
+                    verdict = measure(s)
+                except Exception as exc:  # noqa: BLE001 - never block preflight on this
+                    warn(f"{s}: saat yoxlanmadi ({type(exc).__name__}: {exc})")
+                    continue
+                if verdict.wrong:
+                    bad(verdict.detail)
+                elif verdict.measurable:
+                    ok(verdict.detail)
+                else:
+                    warn(verdict.detail)
         finally:
             mt5.shutdown()
 except ImportError:
     bad("MetaTrader5 paketi yoxdur, MT5 yoxlamalari atlandi")
 
-# ----------------------------------------------------------------- 6. verdict
+# ----------------------------------------------------------------- 7. verdict
 print("\n" + "=" * 72)
 if problems:
     print(f"NETICE: {len(problems)} PROBLEM -- taskları ACMAYIN")

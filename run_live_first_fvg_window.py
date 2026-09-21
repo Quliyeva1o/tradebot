@@ -31,13 +31,15 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).parent.resolve()))
 
+from config.brokers import UnknownBrokerError
 from core.models import OrderType, SignalDirection
 from execution.interfaces import IBroker
 from execution.models import OrderRequest
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
 from execution.traded_setups import already_traded, record_traded
-from mt5.connector import MT5Connector
+from mt5 import clock
+from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import is_trading_halted
 from strategy.first_fvg_window import (
@@ -104,6 +106,14 @@ def run_once(
     sid = setup_id(symbol, plan)
     if already_traded(traded_setups_path, sid):
         return "already_traded"
+    # A session boundary an hour out builds this plan from the wrong candles -- see
+    # mt5/clock.py. Entry only: an open position is left to its broker-side SL/TP.
+    verdict = clock.measure(symbol)
+    if verdict.wrong:
+        logger.critical("SAAT UYGUNSUZLUGU -- yeni girise icaze verilmir: %s", verdict.detail)
+        _log_trade_event("entry_blocked_clock_drift", symbol=symbol, setup_id=sid,
+                         drift_seconds=round(verdict.drift or 0.0, 1), hours_off=verdict.hours_off)
+        return "clock_drift"
     if is_trading_halted(kill_switch_flag_path):
         logger.warning("Setup %s found but the kill-switch is active; not ordering.", sid)
         _log_trade_event("signal_blocked_kill_switch", symbol=symbol, setup_id=sid)
@@ -141,7 +151,9 @@ def run_once(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="10:00 First FVG paper bot (see module docstring).")
-    parser.add_argument("--symbol", required=True, help="MT5 symbol name on this account, e.g. NDX100")
+    parser.add_argument("--symbol", required=True,
+                        help="Symbol as THIS REPO names it (e.g. NDX100) -- the broker's own ticker "
+                             "is resolved from .env, see config/brokers.py")
     parser.add_argument("--tp-r", type=float, default=3.0)
     parser.add_argument("--session-start", default="10:00", help="NY time of the bar that must exist")
     parser.add_argument("--c1-bars-before", type=int, default=1)
@@ -159,7 +171,17 @@ def main(argv: list[str] | None = None) -> None:
         third_candle_before=time.fromisoformat(args.third_candle_before), tp_r=args.tp_r,
     )
 
-    symbol_tag = args.symbol.lower().replace(".", "_")
+    # This machine's broker and its own name for the symbol, resolved before the state files
+    # are named from it (see run_live_nasdaq_orb.main for why that order matters).
+    try:
+        profile, symbol = resolve_ticker(args.symbol)
+    except UnknownBrokerError as exc:
+        logger.critical("BROKER NOT RESOLVED: %s", exc)
+        print(f"REFUSING TO START: {exc}")
+        sys.exit(1)
+    logger.info("Broker %s (%s): %s -> %s", profile.name, profile.server, args.symbol, symbol)
+
+    symbol_tag = symbol.lower().replace(".", "_")
     risk_dir = Path(__file__).parent / "risk"
     kill_switch_flag_path = risk_dir / f"kill_switch_fvg_window_{symbol_tag}_paper.flag"
     if is_trading_halted(kill_switch_flag_path):
@@ -175,6 +197,12 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("Could not connect to MT5.")
         sys.exit(1)
     try:
+        try:
+            ensure_logged_into(profile)
+        except WrongBrokerError as exc:
+            logger.critical("WRONG BROKER: %s", exc)
+            print(f"REFUSING TO RUN: {exc}")
+            sys.exit(1)
         account_info = broker.get_account_info()
         DailyRiskTracker(
             state_file=risk_dir / f"daily_risk_state_fvg_window_{symbol_tag}_paper.json",
@@ -182,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
         ).check_and_update(account_info.equity, account_info.login)
         outcome = run_once(
             connector=connector, broker=broker, sizer=PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct),
-            symbol=args.symbol, cfg=cfg, now=datetime.now(UTC),
+            symbol=symbol, cfg=cfg, now=datetime.now(UTC),
             traded_setups_path=risk_dir / f"traded_setups_fvg_window_{symbol_tag}_paper.json",
             kill_switch_flag_path=kill_switch_flag_path,
         )

@@ -132,21 +132,57 @@ foreach ($bat in $bats) {
 
 Write-Host "`n$made task qeydiyyatdan kecdi."
 
-# --- enforce one Demo bot per symbol -----------------------------------------
+# --- enforce one Demo bot per symbol, on the right account -------------------
 # A .bat exists for every strategy/symbol pair, so the loop above registers a
 # Demo task for all of them -- which puts TWO on GER40, JP225 and XAUUSD. Two
 # bots on one symbol do not share: _partition_positions() reads the other's
 # position as foreign and refuses to enter, so one wins and the other logs
 # foreign_position_blocks_entry indefinitely. deploy/demo_roster.txt records
 # which one owns each symbol and why; anything absent from it is disabled here.
+#
+# Since 2026-09-21 the roster also names the ACCOUNT each permission belongs to:
+# the VPS trades CFI, this workstation FundingPips, off one launcher set. A
+# Demo bot listed for the other broker is disabled here, because the sizing and
+# stop rule behind it were measured on that broker's spread, swap and lot
+# minimum. Which broker this machine is comes from its own .env, via the same
+# module the bots use -- never guessed, and never duplicated in PowerShell.
 $rosterFile = Join-Path $PSScriptRoot 'demo_roster.txt'
 if (-not (Test-Path $rosterFile)) { $rosterFile = Join-Path $RepoPath 'deploy\demo_roster.txt' }
 
+$python = Join-Path $RepoPath '.venv\Scripts\python.exe'
+$broker = $null
+if (Test-Path $python) {
+    Push-Location $RepoPath
+    try {
+        $out = @(& $python -c "import config.brokers as b; print(b.local().name)" 2>&1)
+        if ($LASTEXITCODE -eq 0 -and $out.Count -gt 0) {
+            $broker = "$($out[-1])".Trim()
+        } else {
+            Write-Warning ("config.brokers: " + ($out -join ' '))
+        }
+    } finally { Pop-Location }
+}
+if ($broker) {
+    Write-Host "`nBu masinin brokeri: $broker (.env MT5_SERVER)"
+} else {
+    # No venv yet, or .env not filled in: refuse to guess. Every Demo task is
+    # disabled, which is the safe direction -- paper bots keep running, and a
+    # rerun after `preflight.py` passes enables the right ones.
+    Write-Warning "Brokeri teyin etmek olmadi (.venv / .env hazir deyilmi?) -- BUTUN Demo tasklar sondurulur"
+}
+
 if (Test-Path $rosterFile) {
-    $roster = Get-Content $rosterFile |
+    $roster = @(Get-Content $rosterFile |
         ForEach-Object { ($_ -split '#')[0].Trim() } |
-        Where-Object { $_ }
-    Write-Host "`nDemo roster ($($roster.Count) simvol sahibi):"
+        Where-Object { $_ } |
+        ForEach-Object {
+            $parts = $_ -split '\s+'
+            if ($parts.Count -lt 2) {
+                throw "demo_roster.txt: '$($parts[0])' brokeri gostermir -- '$($parts[0]) cfi' seklinde yazin"
+            }
+            if ($broker -and $parts[1] -eq $broker) { $parts[0] }
+        })
+    Write-Host "Demo roster (bu brokerde $($roster.Count) simvol sahibi):"
 
     $demoTasks = Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orb*_Demo' }
     foreach ($t in $demoTasks) {
@@ -157,7 +193,7 @@ if (Test-Path $rosterFile) {
                 Write-Host ("  ACIQ    {0}" -f $t.TaskName)
             } else {
                 Disable-ScheduledTask -TaskName $t.TaskName | Out-Null
-                Write-Host ("  sondu   {0}  (rosterde yoxdur -- simvolu basqa bot tutub)" -f $t.TaskName)
+                Write-Host ("  sondu   {0}  (bu hesabin rosterinde yoxdur -- basqa bot ve ya basqa broker)" -f $t.TaskName)
             }
         }
     }
@@ -189,9 +225,12 @@ BUNDAN SONRA, SIRA ILE:
        (tam requirements.txt YOX -- pytest/matplotlib serverde islenmir)
   4. Hazir olub-olmadigini yoxlayin -- hec ne deyismir, yalniz oxuyur:
        .venv\Scripts\python.exe deploy\preflight.py
-  5. Demo tasklar deploy\demo_roster.txt-e gore acilir/sondurulur.
-     Simvolun sahibini deyismek ucun HEMIN FAYLI redakte edin, Task
-     Scheduler-i el ile deyil -- yoxsa novbeti qurulusda geri qayidir.
+  5. Demo tasklar deploy\demo_roster.txt-e gore acilir/sondurulur -- ancaq
+     bu masinin brokerine aid olanlar (.env MT5_SERVER). VPS = CFI, is
+     kompyuteri = FundingPips; is kompyuterinde Demo tasklarin hamisi bagli
+     qalir, paper botlar isleyir. Simvolun sahibini deyismek ucun HEMIN FAYLI
+     redakte edin, Task Scheduler-i el ile deyil -- yoxsa novbeti qurulusda
+     geri qayidir.
   6. Yoxlayin: logs\run_live_nasdaq_orb.log, logs\run_live_first_fvg_window.log ve
        Get-ScheduledTask | ? TaskName -match '^(Orb|Fvg)' |
          % { '{0} {1}' -f `$_.TaskName, (`$_ | Get-ScheduledTaskInfo).LastTaskResult }
