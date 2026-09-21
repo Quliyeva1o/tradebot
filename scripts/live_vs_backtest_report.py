@@ -39,6 +39,7 @@ from backtest.live_replay.market import load_bars, load_fx, trim_to_real_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
 from execution.stop_and_reverse import is_reverse
+from scripts import kill_rule
 from scripts.consistency_analysis import agg, consistency
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
 
@@ -246,6 +247,7 @@ def main() -> None:
     total_profit = 0.0
     total_n = 0
     roster = _roster()
+    rules = kill_rule.load_rules()
     for config in sorted(deployed, key=lambda c: c.task):
         family = config.family.capitalize()             # "Breakout" | "Sweep", as _strategy_label says
         ticker = config.broker_ticker or config.symbol  # the name the account's deals carry
@@ -257,6 +259,12 @@ def main() -> None:
                              replay_baseline(config))
         total_n += n
         total_profit += pnl
+        # The pre-registered stop rule counts every trade since its adoption, not just --days' worth.
+        if config.task in rules:
+            prefix = BREAKOUT_TAG if family == "Breakout" else SWEEP_TAG
+            rule = rules[config.task]
+            for line in kill_rule.report_lines(rule, kill_rule.fetch_live_trades(rule, ticker, prefix)):
+                print(line)
         reversals = [r for r in live.get(ticker, []) if r["strategy"] == f"{family} reversal"]
         if reversals:
             n, pnl = _report_reversals(reversals)

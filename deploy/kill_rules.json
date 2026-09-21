@@ -1,0 +1,11 @@
+{
+  "OrbBreakoutwf_XAUUSD_Demo": {
+    "adopted": "2026-09-21T06:59:21+00:00",
+    "basis": "Fixed before the first live trade, in commit 0abd3a5 (whose timestamp is 'adopted'). Bootstrap envelopes of the 1-year CFI replay of the Paper twin, artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv: 125 trades, +34.5R. Each stop is the p99 max drawdown of the full-year envelope over that many trades; the checkpoint is its p05 net. See deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 17.0},
+      {"within_trades": 80, "max_drawdown_r": 22.0}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -5.8}
+  }
+}
