@@ -54,6 +54,10 @@ risk/*.json.lock
 # it on the new box while the old one still held it. A clone must start
 # with an empty paper account, not somebody else's trades.
 risk/paper_broker_state_*.json
+# The previous broker's paper state, moved aside (not deleted) when the bots changed
+# tickers on 2026-09-21. The risk/ patterns above match one level only, so without
+# this line one `git add -A` would commit six open FundingPips virtual positions.
+risk/archive_*/
 
 # Superseded backtest outputs, archived locally on 2026-08-27 (see
 # SESSION_HANDOFF.md). Kept out of git deliberately: they were produced
