@@ -80,3 +80,16 @@ def test_an_empty_window_is_cached_too(tmp_path: Path) -> None:
     assert cache.window("NDX100", MONDAY_OPEN, 60) == []
     assert cache.window("NDX100", MONDAY_OPEN, 60) == []
     assert len(calls) == 1
+
+
+def test_a_cache_only_miss_is_served_empty_and_never_written(tmp_path: Path) -> None:
+    """Otherwise a replay run with the terminal on another broker stores "no ticks" for good."""
+    cache = TickCache(tmp_path, fetch=None)
+    assert cache.window("NDX100", MONDAY_OPEN, 60) == []
+    assert not any(tmp_path.rglob("*.csv"))
+
+
+def test_a_cache_only_hit_is_still_served(tmp_path: Path) -> None:
+    TickCache(tmp_path, lambda s, a, b: [(a * 1000, 100.0, 101.0)]).window("NDX100", MONDAY_OPEN, 60)
+    assert TickCache(tmp_path, fetch=None).window("NDX100", MONDAY_OPEN, 60) == [
+        (MONDAY_OPEN * 1000, 100.0, 101.0)]

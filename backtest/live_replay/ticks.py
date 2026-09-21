@@ -59,7 +59,14 @@ def mt5_fetch(symbol: str, start: int, end: int) -> list[TickRow]:
 class TickCache:
     """Serves tick windows from disk, fetching (once) only what is missing."""
 
-    def __init__(self, cache_dir: Path, fetch: Fetch = mt5_fetch) -> None:
+    def __init__(self, cache_dir: Path, fetch: Fetch | None = mt5_fetch) -> None:
+        """`fetch=None` serves the cache only: a miss returns no ticks and is NOT written.
+
+        Every fetched window is cached for good, an empty one included. So a miss fetched from a
+        terminal logged into the wrong broker -- which knows no such symbol and returns nothing --
+        would be stored as "no ticks here" permanently. Callers that cannot vouch for the
+        connected account pass None.
+        """
         self._dir = Path(cache_dir)
         self._fetch = fetch
 
@@ -73,6 +80,8 @@ class TickCache:
             with path.open(newline="", encoding="utf-8") as handle:
                 return [(int(r["time_msc"]), float(r["bid"]), float(r["ask"]))
                         for r in csv.DictReader(handle)]
+        if self._fetch is None:
+            return []
         rows = self._fetch(symbol, start, start + seconds)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as handle:

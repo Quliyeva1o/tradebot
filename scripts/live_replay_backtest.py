@@ -1,9 +1,13 @@
 """Replay every deployed ORB bot the way the VPS runs it, beside the old batch backtests.
 
+Each bot is replayed on the broker its launcher names (backtest/live_replay/brokers.py): that
+broker's history, trimmed to its real minute data, its contract specs, FX files and tick cache.
+
 Usage:
     python -m scripts.live_replay_backtest
     python -m scripts.live_replay_backtest --configs OrbSweep_GER40_Demo --no-ablation
     python -m scripts.live_replay_backtest --data-dir data/history/fundingpips --out artifacts/live_replay
+      (--data-dir forces one folder, named and specced as FundingPips, for every bot)
 
 Writes artifacts/live_replay/<task>_trades.csv and LIVE_REPLAY_BACKTEST_REPORT.md.
 Read the spec before changing any of this: docs/superpowers/specs/2026-09-15-live-replay-backtest-design.md
@@ -25,9 +29,12 @@ import numpy as np
 
 import scripts.nasdaq_orb_m1_breakout_backtest as orb_mod
 import scripts.xauusd_orb_liquidity_sweep_backtest as sweep_mod
+from backtest.live_replay.brokers import (
+    BROKERS, Broker, broker_for, connected_server, history_path, tick_cache,
+)
 from backtest.live_replay.configs import BotConfig, scope
 from backtest.live_replay.engine import Flags, TradeRecord, run
-from backtest.live_replay.market import DEFAULT_DATA_DIR, BarFrame, load_fx, load_m1
+from backtest.live_replay.market import BarFrame, load_bars, load_fx, trim_to_real_m1
 from backtest.live_replay.metrics import equity_curve, stats, three_filters
 from backtest.live_replay.specs import load_specs
 from backtest.live_replay.ticks import TickCache
@@ -60,9 +67,8 @@ class ConfigResult:
     spread_sensitivity: tuple[float, float] | None = None  # (PF, net R) at spread_scale = spread_ratio
 
 
-def old_rs(config: BotConfig, data_dir: Path) -> list[tuple[date, float]]:
-    """The batch backtest's own trades, called exactly as scripts/live_vs_backtest_report.py does."""
-    csv_path = Path(data_dir) / f"{config.symbol}_M1.csv"
+def old_rs(config: BotConfig, csv_path: Path) -> list[tuple[date, float]]:
+    """The batch backtest's own trades on the same history file the replay reads."""
     spread = recent_spread(csv_path)
     if config.family == "breakout":
         trades = orb_mod.run_backtest(str(csv_path), "full", spread, config.tp_r, "long",
@@ -207,12 +213,15 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
 
     lines += [
         "", "## Məhdudiyyətlər", "",
-        "- Swap dərəcələri tarixi deyil: bütün tarixçəyə 2026-09-15 dərəcələri tətbiq olunub.",
+        "- Swap dərəcələri tarixi deyil: bütün tarixçəyə hər brokerin spec faylının capture "
+        "tarixindəki dərəcələri tətbiq olunub (FundingPips 2026-09-15, CFI 2026-09-20).",
+        "- Hər bot öz brokerinin datasında replay olunur, həmin brokerin real M1 datası "
+        "başlayandan (CFI qızılı 2017-dən).",
         "- Spread hər M1 barın öz spread sütunundandır; tick müqayisəsi yuxarıdakı nisbətdədir.",
         "- Tick tarixçəsi indekslərdə 2025-03, qızılda 2026-05-dən başlayır; ondan əvvəlki boşluq "
         "stopları bar close proksisi ilə qiymətləndirilib (`gap_proxy` sütunu bunun qiymətidir).",
         "- Poll saniyəsi sabit götürülüb; real jitter 4–6 saniyədir.",
-        "- Requote, reject, AutoTrading kəsintiləri və FundingPips-in məcburi bağlanışları modelləşdirilmir.",
+        "- Requote, reject, AutoTrading kəsintiləri və brokerin məcburi bağlanışları modelləşdirilmir.",
         "- Botlarda heç nə dəyişmir; 2026-10-12 dondurma planı qüvvədədir.",
         "",
     ]
@@ -222,26 +231,35 @@ def render_report(results: list[ConfigResult], end: date, generated: datetime,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--configs", default="", help="comma-separated task names; default all ten")
-    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
+    parser.add_argument("--data-dir", default="",
+                        help="replay every bot on this one folder with FundingPips specs "
+                             "(default: each bot on its own broker's)")
     parser.add_argument("--out", default="artifacts/live_replay")
     parser.add_argument("--no-ablation", action="store_true")
     parser.add_argument("--no-old", action="store_true")
     parser.add_argument("--validation-note", default="artifacts/live_replay/validation.md")
     args = parser.parse_args()
 
-    data_dir, out_dir = Path(args.data_dir), Path(args.out)
+    out_dir = Path(args.out)
     wanted = {name.strip() for name in args.configs.split(",") if name.strip()}
     configs = [c for c in scope() if not wanted or c.task in wanted]
-    specs = load_specs()
-    ticks = TickCache(data_dir / "ticks")
+    forced = (Broker("forced", args.data_dir, Path(args.data_dir), BROKERS["fundingpips"].specs_file)
+              if args.data_dir else None)
+    logged_into = connected_server()
+    caches: dict[str, TickCache] = {}
     results: list[ConfigResult] = []
     end = date.min  # "last year" is measured back from the newest bar, not from today
 
     for config in configs:
-        print(f"--- {config.task}")
-        spec = specs[config.symbol]
-        m1 = load_m1(config.symbol, data_dir)  # ~150MB: load once, replay it seven times
-        fx = load_fx(spec.profit_currency, data_dir)
+        broker = forced or broker_for(config)
+        print(f"--- {config.task}  ({broker.name})")
+        spec = load_specs(broker.specs_file)[config.symbol]
+        csv_path = history_path(broker, spec)
+        # ~150MB: load once, replay it seven times. Trimmed, or CFI's pre-2017 gold -- a few
+        # hundred coarse rows a year -- would be replayed as minute bars.
+        m1 = trim_to_real_m1(load_bars(csv_path, config.symbol, 1))
+        fx = load_fx(spec.profit_currency, broker.data_dir)
+        ticks = caches.setdefault(broker.name, tick_cache(broker, logged_into))
         trades = run(config, m1, spec, fx, ticks=ticks)
         end = max(end, datetime.fromtimestamp(int(m1.ts[-1]), UTC).date())
         ablation: dict[str, float] = {}
@@ -249,7 +267,10 @@ def main() -> None:
             for name in ABLATIONS:
                 without = run(config, m1, spec, fx, ticks=ticks, flags=Flags(**{name: False}))
                 ablation[name] = stats([t.r for t in without if t.exit_reason != "OPEN"]).net_r
-        old = [] if args.no_old else old_rs(config, data_dir)
+        # The batch backtest reads the whole CSV itself, padding included; its trades are dated,
+        # so the ones it took on non-minute rows are dropped here.
+        real_from = datetime.fromtimestamp(int(m1.ts[0]), UTC).date()
+        old = [] if args.no_old else [(d, r) for d, r in old_rs(config, csv_path) if d >= real_from]
         recorded = RECORDED_OLD_PF.get(config.task)
         reproduced = (stats([r for day, r in old if day <= RECORDED_OLD_END]).pf
                       if old and recorded is not None else None)

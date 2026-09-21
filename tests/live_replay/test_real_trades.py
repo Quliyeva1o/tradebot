@@ -35,7 +35,7 @@ ENTRY_TOLERANCE = {"NDX100": 3.5, "SPX500": 1.8, "DJI30": 2.5, "GER40": 4.5, "JP
 # slippage. A replay reading the wrong minute or a stale bar open would fall outside it.
 LATENCY_SECONDS = range(4, 8)
 SLIPPAGE = {"NDX100": 1.0, "SPX500": 0.4, "DJI30": 0.6, "GER40": 0.6, "JP225": 3.0, "XAUUSD": 0.05}
-TICKS = TickCache(DEFAULT_DATA_DIR / "ticks")
+TICKS = TickCache(DEFAULT_DATA_DIR / "ticks", fetch=None)  # read-only: a test never fills the cache
 
 
 def _quote_range(symbol: str, side: str, entry_time: datetime) -> tuple[float, float]:
@@ -92,7 +92,7 @@ def _key(config: BotConfig) -> str:
 @pytest.fixture(scope="module")
 def replayed() -> dict[str, list]:
     specs = load_specs()
-    ticks = TickCache(DEFAULT_DATA_DIR / "ticks")
+    ticks = TickCache(DEFAULT_DATA_DIR / "ticks", fetch=None)
     out: dict[str, list] = {}
     for config in DEMO_CONFIGS + PAPER_CONFIGS:
         if _key(config) in out:

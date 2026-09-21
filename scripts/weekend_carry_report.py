@@ -32,7 +32,7 @@ import argparse
 import statistics as st
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,12 +40,12 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 import pandas as pd
 
+from backtest.live_replay.brokers import BROKERS, connected_server, tick_cache
 from backtest.live_replay.configs import BotConfig, scope
 from backtest.live_replay.engine import TradeRecord, run
 from backtest.live_replay.market import BROKER_TZ, DEFAULT_DATA_DIR, load_fx, load_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
-from backtest.live_replay.ticks import TickCache
 
 REPORT_PATH = Path("WEEKEND_CARRY_REPORT.md")
 
@@ -87,7 +87,10 @@ def score(configs: list[BotConfig], data_dir: Path) -> tuple[list[Scored], dict[
     how deep each symbol's history actually goes, and the first trade can post-date the first bar
     by years.
     """
-    specs, ticks = load_specs(), TickCache(data_dir / "ticks")
+    # FundingPips' data, so its ticks are only fetched while MT5 is logged into FundingPips:
+    # a miss fetched from any other account would be cached as "no ticks" for good.
+    fundingpips = replace(BROKERS["fundingpips"], data_dir=Path(data_dir))
+    specs, ticks = load_specs(), tick_cache(fundingpips, connected_server())
     out: list[Scored] = []
     spans: dict[str, str] = {}
     for config in configs:
