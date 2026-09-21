@@ -35,7 +35,7 @@ import MetaTrader5 as mt5  # noqa: N813
 from backtest.live_replay.brokers import broker_for, history_path
 from backtest.live_replay.configs import BotConfig, parse_bat
 from backtest.live_replay.engine import run as replay
-from backtest.live_replay.market import load_bars, load_fx
+from backtest.live_replay.market import load_bars, load_fx, trim_to_real_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
 from execution.stop_and_reverse import is_reverse
@@ -163,7 +163,7 @@ def replay_baseline(config: BotConfig) -> dict:
         fx = load_fx(spec.profit_currency, broker.data_dir)
     except FileNotFoundError:
         return {}
-    m1 = load_bars(path, config.symbol, 1)
+    m1 = trim_to_real_m1(load_bars(path, config.symbol, 1))  # CFI pads pre-2017 gold with non-M1 rows
     t = [(tr.entry_time.date(), tr.r) for tr in replay(config, m1, spec, fx, ticks=None)
          if tr.exit_reason != "OPEN" and not tr.setup_id.endswith(REVERSE_SUFFIX)]
     if not t:

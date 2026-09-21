@@ -68,3 +68,39 @@ def test_fx_uses_the_previous_days_close_so_nothing_looks_ahead(tmp_path: Path) 
 
 def test_dollar_symbols_need_no_fx_file(tmp_path: Path) -> None:
     assert load_fx("USD", tmp_path).usd_per_unit(0) == 1.0
+
+
+def _frame_with_years(bars_per_year: dict[int, int]):
+    import numpy as np
+
+    from backtest.live_replay.market import BarFrame
+    ts = np.array([int(datetime(y, 3, 1, tzinfo=UTC).timestamp()) + 60 * k
+                   for y, n in sorted(bars_per_year.items()) for k in range(n)], dtype=np.int64)
+    ones = np.ones(len(ts))
+    return BarFrame(symbol="T", minutes=1, ts=ts, open=ones, high=ones, low=ones, close=ones,
+                    spread=ones * 0.0)
+
+
+def _years(frame) -> list[int]:
+    return sorted({datetime.fromtimestamp(int(t), UTC).year for t in frame.ts})
+
+
+def test_padded_years_before_real_minute_data_are_dropped() -> None:
+    """CFI's gold: a few hundred coarse rows a year until 2017, then real M1."""
+    from backtest.live_replay.market import trim_to_real_m1
+    frame = _frame_with_years({2015: 5, 2016: 4, 2017: 20, 2018: 20, 2019: 3})
+    assert _years(trim_to_real_m1(frame, min_bars=10)) == [2017, 2018, 2019]
+
+
+def test_a_hole_in_the_middle_starts_the_run_after_it() -> None:
+    """CFI's EURUSD: real M1 before a 2012-2018 hole does not make the file continuous."""
+    from backtest.live_replay.market import trim_to_real_m1
+    frame = _frame_with_years({2010: 20, 2011: 20, 2012: 2, 2013: 20, 2014: 7})
+    assert _years(trim_to_real_m1(frame, min_bars=10)) == [2013, 2014]
+
+
+def test_a_file_that_is_minute_data_throughout_is_left_whole() -> None:
+    """The partial current year is never held against it."""
+    from backtest.live_replay.market import trim_to_real_m1
+    frame = _frame_with_years({2009: 20, 2010: 20, 2011: 1})
+    assert len(trim_to_real_m1(frame, min_bars=10)) == len(frame)

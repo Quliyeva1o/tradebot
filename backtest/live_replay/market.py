@@ -83,6 +83,27 @@ def load_m1(symbol: str, data_dir: Path = DEFAULT_DATA_DIR, start: datetime | No
     return load_bars(Path(data_dir) / f"{symbol}_M1.csv", symbol, 1, start, end)
 
 
+def trim_to_real_m1(m1: BarFrame, min_bars: int = 200_000) -> BarFrame:
+    """`m1` from the first year of the unbroken run of real minute data that ends it.
+
+    A broker can pad years it holds no M1 for with a few hundred coarse rows -- CFI's gold has
+    ~520 a year for 2009-2015 and 4k in 2016 -- so a file's first timestamp claims history it does
+    not have, and a replay over it trades on bars that are not minutes (75 phantom trades worth
+    +32R in CFI's 2016). A full 24/5 year of M1 is ~360k bars; a year with fewer than `min_bars`
+    is not treated as M1. The last year is never held against the file: it is still being written.
+    """
+    years = pd.DatetimeIndex(pd.to_datetime(m1.ts, unit="s", utc=True)).year.to_numpy()
+    counts = pd.Series(years).value_counts().sort_index()
+    start = int(counts.index[-1])
+    for year, n in reversed(list(counts.items())[:-1]):
+        if n < min_bars:
+            break
+        start = int(year)
+    i = int(np.searchsorted(m1.ts, int(datetime(start, 1, 1, tzinfo=UTC).timestamp())))
+    return BarFrame(symbol=m1.symbol, minutes=m1.minutes, ts=m1.ts[i:], open=m1.open[i:],
+                    high=m1.high[i:], low=m1.low[i:], close=m1.close[i:], spread=m1.spread[i:])
+
+
 def aggregate(m1: BarFrame, minutes: int) -> BarFrame:
     """Builds M5/M15 the way MT5 does: clock-aligned buckets labelled by their open."""
     if minutes == m1.minutes:
