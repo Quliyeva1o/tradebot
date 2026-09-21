@@ -123,7 +123,12 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
     try:
         frm = datetime.now(UTC) - timedelta(days=days)
-        deals = mt5.history_deals_get(frm, datetime.now(UTC)) or []
+        # MT5 reads these bounds on the broker's wall clock, which on CFI runs +3h ahead of real
+        # UTC (measured 2026-09-21: tick epoch - time.time() = +10800 s). An upper bound of real
+        # "now" therefore ended the window three hours in the past and dropped every deal closed
+        # in the last ~3h before the report ran. Nothing is dated in the future, so padding the
+        # end costs nothing.
+        deals = mt5.history_deals_get(frm, datetime.now(UTC) + timedelta(days=1)) or []
         entries, exits = {}, {}
         for d in deals:
             (entries if d.entry == 0 else exits)[d.position_id] = d
