@@ -156,7 +156,8 @@ def replay(broker: Broker, configs: list[BotConfig], start: datetime, end: datet
         trades = run(config, m1, spec, fx, ticks=None, start_balance=START_BALANCE)
         capped = [t for t in trades if t.volume >= spec.volume_max - 1e-9]
         result = Result(broker=broker.name, config=config,
-                        deployed=not config.paper and config.task in roster, trades=trades,
+                        deployed=not config.paper and broker.name in roster.get(config.task, ()),
+                        trades=trades,
                         median_spread=float(np.median(m1.spread)),
                         financing_pct=financing_pct(spec, m1, fx),
                         capped_pct=100.0 * len(capped) / len(trades) if trades else 0.0,

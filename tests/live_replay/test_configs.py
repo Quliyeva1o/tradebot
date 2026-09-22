@@ -82,8 +82,18 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     """2026-09-20: cut from six to one. Five symbols lost over both the last 12 months and the
     last 3, so only the weekend-flat XAUUSD bot still placed real orders. 2026-09-22: the NDX100
     First FVG bot joined it, and later that day, on the user's call, every free symbol got its
-    best paper bot over the last year. The roster file's own comment blocks carry the numbers."""
-    assert load_roster(REPO) == dict.fromkeys(DEMO_BOTS, "cfi")
+    best paper bot over the last year -- on CFI first, then on FundingPips, whose own last year
+    picked the same six. The roster file's own comment blocks carry the numbers."""
+    assert load_roster(REPO) == dict.fromkeys(DEMO_BOTS, frozenset({"cfi", "fundingpips"}))
+
+
+def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: Path) -> None:
+    roster = tmp_path / "deploy" / "demo_roster.txt"
+    roster.parent.mkdir()
+    roster.write_text("OrbSweep_GER40_Demo cfi\nOrbSweep_GER40_Demo fundingpips\nOrbSweep_JP225_Demo cfi\n",
+                      encoding="utf-8")
+    assert load_roster(tmp_path) == {"OrbSweep_GER40_Demo": {"cfi", "fundingpips"},
+                                     "OrbSweep_JP225_Demo": {"cfi"}}
 
 
 def test_one_demo_bot_per_symbol() -> None:

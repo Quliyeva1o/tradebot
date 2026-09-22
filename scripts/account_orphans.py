@@ -55,7 +55,7 @@ def owned_symbols(profile: BrokerProfile, repo: Path = REPO) -> dict[str, str]:
     owned = {}
     for bat in sorted([*repo.glob("run_live_orb_*_demo.bat"), *repo.glob("run_live_fvg_*_demo.bat")]):
         task = task_name(bat.name)
-        if roster.get(task) == profile.name:
+        if profile.name in roster.get(task, ()):
             owned[profile.ticker(launcher_symbol(bat))] = task
     return owned
 

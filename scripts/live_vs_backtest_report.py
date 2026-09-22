@@ -297,7 +297,7 @@ def main() -> None:
     total_n = 0
     profile = machine.local()
     roster = _roster(broker=profile.name)
-    rules = kill_rule.load_rules()
+    rules = kill_rule.load_rules(profile.name)
     for config in sorted(deployed, key=lambda c: c.task):
         family = config.family.capitalize()   # "Breakout" | "Sweep", as _strategy_label says
         ticker = profile.ticker(config.symbol)  # the name THIS account's deals carry

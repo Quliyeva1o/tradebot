@@ -33,7 +33,7 @@ def _trades(rs: list[float]) -> list[kr.LiveTrade]:
 
 class TestAdoptedRuleIsPinned:
     def test_the_live_bots_numbers_are_the_ones_fixed_before_its_first_trade(self) -> None:
-        rule = kr.load_rules()["OrbBreakoutwf_XAUUSD_Demo"]
+        rule = kr.load_rules("cfi")["OrbBreakoutwf_XAUUSD_Demo"]
 
         assert rule.adopted == datetime(2026, 9, 21, 6, 59, 21, tzinfo=UTC)   # commit 0abd3a5
         assert rule.stops == (kr.StopClause(40, 17.0), kr.StopClause(80, 22.0))
@@ -44,7 +44,7 @@ class TestAdoptedRuleIsPinned:
         # scripts/fvg_window_envelope.py, full CFI history with swap, seed 20260922. Adopted at
         # 25.1/35.4/-14.3 on Bucharest-read bars; revised the same day, before any live trade, to
         # the same script on the broker's real clock -- tighter on every clause, never looser.
-        rule = kr.load_rules()["FvgWindow_NDX100_Demo"]
+        rule = kr.load_rules("cfi")["FvgWindow_NDX100_Demo"]
 
         assert rule.adopted == datetime(2026, 9, 22, 6, 22, 57, tzinfo=UTC)
         assert rule.stops == (kr.StopClause(40, 24.8), kr.StopClause(80, 34.7))
@@ -60,30 +60,53 @@ class TestAdoptedRuleIsPinned:
         self, task: str, dd40: float, dd80: float, net40: float
     ) -> None:
         # Full CFI history (2025-01..2026-09), the same bootstrap as the FVG bot, fixed before deployment.
-        rule = kr.load_rules()[task]
+        rule = kr.load_rules("cfi")[task]
 
         assert rule.adopted == datetime(2026, 9, 22, 11, 47, 35, tzinfo=UTC)
         assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
 
-    def test_every_rule_names_a_bot_the_roster_deploys(self) -> None:
-        assert set(kr.load_rules()) <= set(load_roster())
+    @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
+        ("OrbBreakoutwf_XAUUSD_Demo", 17.6, 22.6, -6.1),
+        ("FvgWindow_NDX100_Demo", 26.3, 37.9, -15.6),
+        ("OrbBreakoutinv_DJI30_Demo", 11.4, 17.2, -7.8),
+        ("OrbBreakoutinv_SPX500_Demo", 12.0, 18.2, -8.6),
+        ("OrbSweep_GER40_Demo", 19.6, 27.8, -11.8),
+        ("OrbSweep_JP225_Demo", 25.3, 38.3, -17.6),
+    ])
+    def test_the_fundingpips_rules_are_pinned_and_are_not_cfis(
+        self, task: str, dd40: float, dd80: float, net40: float
+    ) -> None:
+        # The same tasks on FundingPips' own prices, fixed before that account's first order.
+        rule = kr.load_rules("fundingpips")[task]
 
-    def test_every_bot_the_roster_deploys_has_a_rule(self) -> None:
+        assert rule.adopted == datetime(2026, 9, 22, 13, 52, 21, tzinfo=UTC)
+        assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
+        assert rule != kr.load_rules("cfi")[task]
+
+    @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
+    def test_every_rule_names_a_bot_the_roster_deploys_on_that_account(self, broker: str) -> None:
+        deployed = {task for task, brokers in load_roster().items() if broker in brokers}
+        assert set(kr.load_rules(broker)) <= deployed
+
+    @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
+    def test_every_bot_the_roster_deploys_has_a_rule_on_that_account(self, broker: str) -> None:
         """A Demo bot with no pre-registered stop is a bot nothing will ever take out."""
-        assert set(load_roster()) <= set(kr.load_rules())
+        deployed = {task for task, brokers in load_roster().items() if broker in brokers}
+        assert deployed <= set(kr.load_rules(broker))
 
     def test_a_missing_file_means_no_rules_rather_than_a_crash(self, tmp_path) -> None:
-        assert kr.load_rules(tmp_path / "nope.json") == {}
+        assert kr.load_rules("cfi", tmp_path / "nope.json") == {}
 
     def test_an_adoption_time_without_an_offset_is_refused(self, tmp_path) -> None:
         # A naive time would be read as local time on whatever machine runs the report.
         path = tmp_path / "rules.json"
-        path.write_text('{"T": {"adopted": "2026-09-21T06:59:21", "stops": [], '
-                        '"checkpoint": {"at_trades": 40, "min_net_r": -5.8}}}', encoding="utf-8")
+        path.write_text('{"cfi": {"T": {"adopted": "2026-09-21T06:59:21", "stops": [], '
+                        '"checkpoint": {"at_trades": 40, "min_net_r": -5.8}}}}', encoding="utf-8")
 
         with pytest.raises(ValueError):
-            kr.load_rules(path)
+            kr.load_rules("cfi", path)
 
 
 class TestMt5Constants:

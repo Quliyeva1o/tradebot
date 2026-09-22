@@ -63,14 +63,19 @@ class KillRule:
         return max([s.within_trades for s in self.stops] + [self.checkpoint_at])
 
 
-def load_rules(path: Path = RULES_FILE) -> dict[str, KillRule]:
-    """Every Demo bot's rule, keyed by its task name. Empty when the file is missing."""
+def load_rules(broker: str, path: Path = RULES_FILE) -> dict[str, KillRule]:
+    """Every Demo bot's rule on `broker`'s account, keyed by task name. Empty when the file is missing.
+
+    The file is keyed by broker first: since 2026-09-22 one task can trade on both accounts, and
+    each deployment's rule comes from its own broker's replay -- the same launcher's thresholds
+    are not the same numbers on CFI's prices as on FundingPips'.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     rules = {}
-    for task, spec in raw.items():
+    for task, spec in raw.get(broker, {}).items():
         adopted = datetime.fromisoformat(spec["adopted"])
         if adopted.tzinfo is None:
             raise ValueError(f"{path.name}: {task} 'adopted' needs a UTC offset, got {spec['adopted']!r}")

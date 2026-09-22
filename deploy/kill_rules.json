@@ -1,58 +1,224 @@
 {
-  "OrbBreakoutwf_XAUUSD_Demo": {
-    "adopted": "2026-09-21T06:59:21+00:00",
-    "basis": "Fixed before the first live trade, in commit 0abd3a5 (whose timestamp is 'adopted'). Bootstrap envelopes of the 1-year CFI replay of the Paper twin, artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv: 125 trades, +34.5R. Each stop is the p99 max drawdown of the full-year envelope over that many trades; the checkpoint is its p05 net. See deploy/demo_roster.txt.",
-    "rechecked": "2026-09-22, after the broker clock fix (core/broker_clock.py): that replay was read on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year. Re-replayed on the right clock, same window (2025-09-19..2026-09-18): 119 trades, +31.5R, PF 1.473. scripts/fvg_window_envelope.envelope (100000 draws, seed 20260922) gives p99 DD 17.4R/40 and 22.3R/80, p05 net -5.9R@40 -- against 17.3/22.2/-5.8 from the same method on the old replay. Within bootstrap noise, so the adopted whole-R values stand; raising them after a live trade would be loosening a pre-registered rule.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 17.0},
-      {"within_trades": 80, "max_drawdown_r": 22.0}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -5.8}
+  "cfi": {
+    "OrbBreakoutwf_XAUUSD_Demo": {
+      "adopted": "2026-09-21T06:59:21+00:00",
+      "basis": "Fixed before the first live trade, in commit 0abd3a5 (whose timestamp is 'adopted'). Bootstrap envelopes of the 1-year CFI replay of the Paper twin, artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv: 125 trades, +34.5R. Each stop is the p99 max drawdown of the full-year envelope over that many trades; the checkpoint is its p05 net. See deploy/demo_roster.txt.",
+      "rechecked": "2026-09-22, after the broker clock fix (core/broker_clock.py): that replay was read on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year. Re-replayed on the right clock, same window (2025-09-19..2026-09-18): 119 trades, +31.5R, PF 1.473. scripts/fvg_window_envelope.envelope (100000 draws, seed 20260922) gives p99 DD 17.4R/40 and 22.3R/80, p05 net -5.9R@40 -- against 17.3/22.2/-5.8 from the same method on the old replay. Within bootstrap noise, so the adopted whole-R values stand; raising them after a live trade would be loosening a pre-registered rule.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 17.0
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 22.0
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -5.8
+      }
+    },
+    "FvgWindow_NDX100_Demo": {
+      "adopted": "2026-09-22T06:22:57+00:00",
+      "basis": "Fixed before the bot was deployed, so before any live trade. Bootstrap envelopes (100000 draws, seed 20260922) of scripts/fvg_window_envelope.py: the launcher's own config backtested on CFI US100_Spot M1, 2019-03..2026-09, spread 0.8 and today's CFI swap charged on every night held. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Full history, not the last year: see that script. See deploy/demo_roster.txt.",
+      "revised": "2026-09-22, before the bot's first live trade, after the broker clock fix (core/broker_clock.py). The adopted numbers came from the same script reading CFI's bars on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year: 732 trades, PF 1.140, +76.9R, stops 25.1R/40 and 35.4R/80, checkpoint -14.3R@40. On the right clock: 728 trades, PF 1.149, +81.4R, and the envelope below -- slightly TIGHTER, so taking it loosens nothing.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 24.8
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 34.7
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -14.1
+      }
+    },
+    "OrbBreakoutinv_DJI30_Demo": {
+      "adopted": "2026-09-22T11:47:35+00:00",
+      "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 85 trades, PF 0.855, -2.9R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as DJI30's best paper bot over the last year (+0.7R); see deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 10.6
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 15.7
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -7.1
+      }
+    },
+    "OrbBreakoutinv_SPX500_Demo": {
+      "adopted": "2026-09-22T11:47:35+00:00",
+      "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US500_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 99 trades, PF 0.898, -2.3R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as SPX500's best paper bot over the last year (+2.5R); see deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 10.3
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 15.0
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -6.8
+      }
+    },
+    "OrbSweep_GER40_Demo": {
+      "adopted": "2026-09-22T11:47:35+00:00",
+      "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI GER30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 38 trades, PF 1.604, +10.1R -- a small sample, which is why the checkpoint is tight. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as GER40's best paper bot over the last year (+2.6R); see deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 12.0
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 14.6
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -1.4
+      }
+    },
+    "OrbSweep_JP225_Demo": {
+      "adopted": "2026-09-22T11:47:35+00:00",
+      "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI JPN225_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 49 trades, PF 0.835, -5.6R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as JP225's best paper bot over the last year (-0.5R -- every JP225 candidate lost); see deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 26.9
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 40.8
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -19.0
+      }
+    }
   },
-  "FvgWindow_NDX100_Demo": {
-    "adopted": "2026-09-22T06:22:57+00:00",
-    "basis": "Fixed before the bot was deployed, so before any live trade. Bootstrap envelopes (100000 draws, seed 20260922) of scripts/fvg_window_envelope.py: the launcher's own config backtested on CFI US100_Spot M1, 2019-03..2026-09, spread 0.8 and today's CFI swap charged on every night held. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Full history, not the last year: see that script. See deploy/demo_roster.txt.",
-    "revised": "2026-09-22, before the bot's first live trade, after the broker clock fix (core/broker_clock.py). The adopted numbers came from the same script reading CFI's bars on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year: 732 trades, PF 1.140, +76.9R, stops 25.1R/40 and 35.4R/80, checkpoint -14.3R@40. On the right clock: 728 trades, PF 1.149, +81.4R, and the envelope below -- slightly TIGHTER, so taking it loosens nothing.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 24.8},
-      {"within_trades": 80, "max_drawdown_r": 34.7}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -14.1}
-  },
-  "OrbBreakoutinv_DJI30_Demo": {
-    "adopted": "2026-09-22T11:47:35+00:00",
-    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 85 trades, PF 0.855, -2.9R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as DJI30's best paper bot over the last year (+0.7R); see deploy/demo_roster.txt.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 10.6},
-      {"within_trades": 80, "max_drawdown_r": 15.7}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -7.1}
-  },
-  "OrbBreakoutinv_SPX500_Demo": {
-    "adopted": "2026-09-22T11:47:35+00:00",
-    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US500_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 99 trades, PF 0.898, -2.3R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as SPX500's best paper bot over the last year (+2.5R); see deploy/demo_roster.txt.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 10.3},
-      {"within_trades": 80, "max_drawdown_r": 15.0}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -6.8}
-  },
-  "OrbSweep_GER40_Demo": {
-    "adopted": "2026-09-22T11:47:35+00:00",
-    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI GER30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 38 trades, PF 1.604, +10.1R -- a small sample, which is why the checkpoint is tight. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as GER40's best paper bot over the last year (+2.6R); see deploy/demo_roster.txt.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 12.0},
-      {"within_trades": 80, "max_drawdown_r": 14.6}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -1.4}
-  },
-  "OrbSweep_JP225_Demo": {
-    "adopted": "2026-09-22T11:47:35+00:00",
-    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI JPN225_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 49 trades, PF 0.835, -5.6R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as JP225's best paper bot over the last year (-0.5R -- every JP225 candidate lost); see deploy/demo_roster.txt.",
-    "stops": [
-      {"within_trades": 40, "max_drawdown_r": 26.9},
-      {"within_trades": 80, "max_drawdown_r": 40.8}
-    ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -19.0}
+  "fundingpips": {
+    "OrbBreakoutwf_XAUUSD_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the 1-year FundingPips replay of the Paper twin, 2025-09-19..2026-09-18 (artifacts/orb_1y/fundingpips): 118 trades, PF 1.463, +31.1R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 17.6
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 22.6
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -6.1
+      }
+    },
+    "FvgWindow_NDX100_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the scripts/fvg_window_envelope.py on FundingPips NDX100 M1, 2019-03-29..2026-09-18, spread and today's swap charged: 726 trades, PF 1.071, +39.5R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 26.3
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 37.9
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -15.6
+      }
+    },
+    "OrbBreakoutinv_DJI30_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on FundingPips DJI30, all its real M1 (2019-01-01..2026-09-18): 459 trades, PF 0.782, -24.0R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 11.4
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 17.2
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -7.8
+      }
+    },
+    "OrbBreakoutinv_SPX500_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on FundingPips SPX500, all its real M1 (2019-01-01..2026-09-18): 479 trades, PF 0.743, -31.0R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 12.0
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 18.2
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -8.6
+      }
+    },
+    "OrbSweep_GER40_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on FundingPips GER40, all its real M1 (2022-01-02..2026-09-18): 122 trades, PF 1.042, +2.9R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 19.6
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 27.8
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -11.8
+      }
+    },
+    "OrbSweep_JP225_Demo": {
+      "adopted": "2026-09-22T13:52:21+00:00",
+      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on FundingPips JP225, all its real M1 (2024-04-01..2026-09-18): 81 trades, PF 0.836, -8.5R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
+      "stops": [
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 25.3
+        },
+        {
+          "within_trades": 80,
+          "max_drawdown_r": 38.3
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 40,
+        "min_net_r": -17.6
+      }
+    }
   }
 }

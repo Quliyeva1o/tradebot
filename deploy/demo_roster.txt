@@ -150,6 +150,34 @@
 #   OrbSweep_JP225_Demo         26.9R/40  40.8R/80 -19.0R@40
 # At 20-40 trades a year for the three thinner ones, the 40-trade checkpoint is one to two years out.
 
+# 2026-09-22: FUNDINGPIPS PLACES REAL ORDERS TOO -- THE USER'S CALL.
+# This ends the 2026-09-21 rule above that the FundingPips account stays paper. The user asked for
+# the strategies to trade on both accounts. The same selection was run on FundingPips' own prices
+# (its spread, swap, and $5/lot commission on gold), last year 2025-09-19..2026-09-18 on the New York
+# close clock, and it picks the SAME six bots, so both accounts run one launcher set:
+#                            last year on FundingPips      (runner-up)
+#   XAUUSD  breakout wf      118 tr PF 1.46 +31.1R         breakout 60m/3R +20.6R, sweep +3.9R
+#   NDX100  First FVG         85 tr PF 1.20 +12.5R         inverse -0.7R, breakout -10.2R
+#   DJI30   inverse           51 tr PF 0.98  -0.2R         breakout -14.7R
+#   SPX500  inverse           61 tr PF 0.99  -0.1R         breakout -18.5R
+#   GER40   sweep             27 tr PF 0.96  -0.6R         breakout -1.7R, sweep inverse -6.5R
+#   JP225   sweep             33 tr PF 0.81  -4.6R         breakout -8.1R, inverse -8.6R
+# On FundingPips four of the six LOST the year: they are here because the instruction was one bot per
+# symbol on both accounts. Its longer history (since 2019) is harsher still on the inverse bots:
+# DJI30 inverse PF 0.78 (-24.0R, 459 trades), SPX500 inverse PF 0.74 (-31.0R, 479 trades).
+# FundingPips is a prop TRIAL account; its own loss limits apply on top of the rules below.
+#
+# STOP rules for the FundingPips account, fixed before its first order (deploy/kill_rules.json,
+# key "fundingpips"), each on the same basis as the task's CFI rule but on FundingPips' prices:
+#   OrbBreakoutwf_XAUUSD_Demo   17.6R/40  22.6R/80  -6.1R@40    (1-year replay, as on CFI)
+#   FvgWindow_NDX100_Demo       26.3R/40  37.9R/80 -15.6R@40    (2019-03..2026-09, swap charged)
+#   OrbBreakoutinv_DJI30_Demo   11.4R/40  17.2R/80  -7.8R@40    (2019-01..2026-09)
+#   OrbBreakoutinv_SPX500_Demo  12.0R/40  18.2R/80  -8.6R@40    (2019-01..2026-09)
+#   OrbSweep_GER40_Demo         19.6R/40  27.8R/80 -11.8R@40    (2022-01..2026-09)
+#   OrbSweep_JP225_Demo         25.3R/40  38.3R/80 -17.6R@40    (2024-04..2026-09)
+# A task listed for both accounts has one line per account below, and each account's weekly report
+# judges its own bots by its own rules.
+
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
@@ -157,3 +185,10 @@ OrbBreakoutinv_DJI30_Demo    cfi    # CFI US30_SPOT, inverse of 60m OR / M1 / 4R
 OrbBreakoutinv_SPX500_Demo   cfi    # CFI US500_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
 OrbSweep_GER40_Demo          cfi    # CFI GER30_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
 OrbSweep_JP225_Demo          cfi    # CFI JPN225_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
+
+OrbBreakoutwf_XAUUSD_Demo    fundingpips    # FundingPips XAUUSD, same launcher
+FvgWindow_NDX100_Demo        fundingpips    # FundingPips NDX100
+OrbBreakoutinv_DJI30_Demo    fundingpips    # FundingPips DJI30
+OrbBreakoutinv_SPX500_Demo   fundingpips    # FundingPips SPX500
+OrbSweep_GER40_Demo          fundingpips    # FundingPips GER40
+OrbSweep_JP225_Demo          fundingpips    # FundingPips JP225

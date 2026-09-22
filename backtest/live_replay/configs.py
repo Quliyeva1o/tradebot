@@ -101,24 +101,26 @@ def parse_bat(path: Path) -> BotConfig:
                      or_minutes=None, tp_r=None, entry_window_end=_flag(text, "entry-window-end"))
 
 
-def load_roster(repo: Path = REPO) -> dict[str, str]:
-    """Which Demo task may place real orders, and on whose account: task name -> broker name.
+def load_roster(repo: Path = REPO) -> dict[str, frozenset[str]]:
+    """Which Demo task may place real orders, and on whose accounts: task name -> broker names.
 
-    Real-order permission is per broker, not per bot. The one Demo bot in the roster was sized,
-    stopped and stop-ruled on CFI's replay -- its lot minimum, its spread, its swap -- so the
-    same launcher running on the FundingPips machine is a DIFFERENT deployment and stays paper
-    until someone does that work for it. Membership tests still read naturally: a dict answers
-    `task in roster` on its keys.
+    Real-order permission is per broker, not per bot: a bot is sized, stopped and stop-ruled on
+    one broker's replay -- its lot minimum, its spread, its swap -- so the same launcher on the
+    other broker's machine is a DIFFERENT deployment. Since 2026-09-22 both accounts trade, and a
+    task allowed on both is listed once per broker, each line with the rule its own replay set.
+    Membership tests read naturally: `task in roster`, `"cfi" in roster[task]`.
     """
     lines = (repo / "deploy" / "demo_roster.txt").read_text(encoding="utf-8").splitlines()
     rows = [parts for parts in (line.split("#", 1)[0].split() for line in lines) if parts]
+    roster: dict[str, set[str]] = {}
     for parts in rows:
         if len(parts) < 2:
             raise ValueError(
                 f"demo_roster.txt: {parts[0]} names no broker -- write `{parts[0]} cfi`. "
                 f"A Demo bot may only place real orders on the account it was validated on."
             )
-    return {parts[0]: parts[1] for parts in rows}
+        roster.setdefault(parts[0], set()).add(parts[1])
+    return {task: frozenset(brokers) for task, brokers in roster.items()}
 
 
 def scope(repo: Path = REPO, broker: str | None = None) -> list[BotConfig]:
@@ -130,7 +132,7 @@ def scope(repo: Path = REPO, broker: str | None = None) -> list[BotConfig]:
     configs = [parse_bat(p) for p in sorted(repo.glob("run_live_orb_*.bat"))]
     roster = load_roster(repo)
     demo = [c for c in configs if not c.paper and c.task in roster
-            and (broker is None or roster[c.task] == broker)]
+            and (broker is None or broker in roster[c.task])]
     demo_keys = {c.key for c in demo}
     paper = [c for c in configs if c.paper and c.key not in demo_keys]
     return demo + paper
