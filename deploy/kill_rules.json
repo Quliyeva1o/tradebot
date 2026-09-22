@@ -18,5 +18,41 @@
       {"within_trades": 80, "max_drawdown_r": 34.7}
     ],
     "checkpoint": {"at_trades": 40, "min_net_r": -14.1}
+  },
+  "OrbBreakoutinv_DJI30_Demo": {
+    "adopted": "2026-09-22T11:47:35+00:00",
+    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 85 trades, PF 0.855, -2.9R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as DJI30's best paper bot over the last year (+0.7R); see deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 10.6},
+      {"within_trades": 80, "max_drawdown_r": 15.7}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -7.1}
+  },
+  "OrbBreakoutinv_SPX500_Demo": {
+    "adopted": "2026-09-22T11:47:35+00:00",
+    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI US500_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 99 trades, PF 0.898, -2.3R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as SPX500's best paper bot over the last year (+2.5R); see deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 10.3},
+      {"within_trades": 80, "max_drawdown_r": 15.0}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -6.8}
+  },
+  "OrbSweep_GER40_Demo": {
+    "adopted": "2026-09-22T11:47:35+00:00",
+    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI GER30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 38 trades, PF 1.604, +10.1R -- a small sample, which is why the checkpoint is tight. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as GER40's best paper bot over the last year (+2.6R); see deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 12.0},
+      {"within_trades": 80, "max_drawdown_r": 14.6}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -1.4}
+  },
+  "OrbSweep_JP225_Demo": {
+    "adopted": "2026-09-22T11:47:35+00:00",
+    "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI JPN225_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 49 trades, PF 0.835, -5.6R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as JP225's best paper bot over the last year (-0.5R -- every JP225 candidate lost); see deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 26.9},
+      {"within_trades": 80, "max_drawdown_r": 40.8}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -19.0}
   }
 }

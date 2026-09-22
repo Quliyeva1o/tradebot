@@ -50,8 +50,28 @@ class TestAdoptedRuleIsPinned:
         assert rule.stops == (kr.StopClause(40, 24.8), kr.StopClause(80, 34.7))
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.1)
 
+    @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
+        ("OrbBreakoutinv_DJI30_Demo", 10.6, 15.7, -7.1),
+        ("OrbBreakoutinv_SPX500_Demo", 10.3, 15.0, -6.8),
+        ("OrbSweep_GER40_Demo", 12.0, 14.6, -1.4),
+        ("OrbSweep_JP225_Demo", 26.9, 40.8, -19.0),
+    ])
+    def test_the_four_bots_added_on_every_free_symbol_are_pinned_too(
+        self, task: str, dd40: float, dd80: float, net40: float
+    ) -> None:
+        # Full CFI history (2025-01..2026-09), the same bootstrap as the FVG bot, fixed before deployment.
+        rule = kr.load_rules()[task]
+
+        assert rule.adopted == datetime(2026, 9, 22, 11, 47, 35, tzinfo=UTC)
+        assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
+
     def test_every_rule_names_a_bot_the_roster_deploys(self) -> None:
         assert set(kr.load_rules()) <= set(load_roster())
+
+    def test_every_bot_the_roster_deploys_has_a_rule(self) -> None:
+        """A Demo bot with no pre-registered stop is a bot nothing will ever take out."""
+        assert set(load_roster()) <= set(kr.load_rules())
 
     def test_a_missing_file_means_no_rules_rather_than_a_crash(self, tmp_path) -> None:
         assert kr.load_rules(tmp_path / "nope.json") == {}

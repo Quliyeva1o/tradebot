@@ -109,6 +109,51 @@
 #     +76.9R); last 12 months +13.1R, PF 1.21 (was +17.0R, 1.27). Its envelope is TIGHTER on every
 #     clause, and the bot had no live trade yet, so its rule took the corrected numbers above.
 
+# 2026-09-22: A DEMO BOT ON EVERY SYMBOL -- THE USER'S CALL, WITH THE EVIDENCE WRITTEN DOWN.
+# Asked for: put as many paper bots on real Demo orders as possible, and where a symbol has several
+# candidates take the one with the best result. One bot per symbol still holds (see the top of this
+# file), so XAUUSD and NDX100 keep theirs -- each already the best on its symbol -- and the four free
+# symbols each get their best paper bot, ranked by the last year on CFI (2025-09-19..2026-09-18, the
+# window every decision above used). CFI's replay, New York close clock, full = 2025-01..2026-09
+# (the real M1 CFI has for these indices):
+#                            last year               full history        last quarter
+#   DJI30   inverse   <-     50 tr PF 1.07  +0.7R    85 tr PF 0.86  -2.9R    +0.5R
+#           breakout         50 tr PF 0.76 -11.3R    85 tr PF 0.97  -2.5R    -3.9R
+#   SPX500  inverse   <-     61 tr PF 1.23  +2.5R    99 tr PF 0.90  -2.3R    +1.3R
+#           breakout         61 tr PF 0.66 -20.4R    99 tr PF 0.90  -8.9R    -6.7R
+#   GER40   sweep     <-     26 tr PF 1.21  +2.6R    38 tr PF 1.60 +10.1R    -2.7R
+#           breakout        115 tr PF 0.95  -4.7R   203 tr PF 1.24 +40.3R    -2.9R
+#           sweep inv        26 tr PF 0.58  -6.7R    38 tr PF 0.66  -8.2R    +2.2R
+#   JP225   sweep     <-     33 tr PF 0.98  -0.5R    49 tr PF 0.84  -5.6R    +0.8R
+#           breakout        183 tr PF 0.96  -6.1R   316 tr PF 1.03  +6.6R   -18.9R
+#           inverse         181 tr PF 0.83  -7.5R   313 tr PF 0.77 -18.0R    +3.7R
+#
+# KNOW WHAT THESE FOUR ARE. None has the evidence the two bots above had when they were deployed:
+#   - the inverse bots win only while the breakout they mirror loses (strategy/inverse.py): over
+#     FundingPips' 6.7 years the six inverse bots pooled PF 0.76. On CFI both are negative over the
+#     full 21 months. Each trade risks the breakout's 4R target to win its 1R stop: a win rate
+#     near 80% is needed and any regime change in the breakout hurts twice.
+#   - JP225's best candidate LOST over the year; every JP225 candidate did. It is here because
+#     the instruction was one bot per symbol, not because it has an edge.
+#   - GER40 sweep is the one with a positive year AND full history, on 26 and 38 trades -- a
+#     sample so small that its stop rule below is tight by construction.
+# Risk 0.25%, like the two bots above: none of the four earned more.
+#
+# STOP -- take a bot out of this file -- on the same terms as above, each counted from its first
+# live trade: drawdown from peak beyond its p99 within 40 or 80 trades, or net below its p05 at the
+# 40-trade checkpoint. Bootstrap (100000 draws, seed 20260922) of its full CFI history, the same
+# function the NDX100 rule came from (scripts/fvg_window_envelope.envelope). Numbers in
+# deploy/kill_rules.json; set before any live trade, do not loosen:
+#   OrbBreakoutinv_DJI30_Demo   10.6R/40  15.7R/80  -7.1R@40
+#   OrbBreakoutinv_SPX500_Demo  10.3R/40  15.0R/80  -6.8R@40
+#   OrbSweep_GER40_Demo         12.0R/40  14.6R/80  -1.4R@40
+#   OrbSweep_JP225_Demo         26.9R/40  40.8R/80 -19.0R@40
+# At 20-40 trades a year for the three thinner ones, the 40-trade checkpoint is one to two years out.
+
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
+OrbBreakoutinv_DJI30_Demo    cfi    # CFI US30_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
+OrbBreakoutinv_SPX500_Demo   cfi    # CFI US500_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
+OrbSweep_GER40_Demo          cfi    # CFI GER30_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
+OrbSweep_JP225_Demo          cfi    # CFI JPN225_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk

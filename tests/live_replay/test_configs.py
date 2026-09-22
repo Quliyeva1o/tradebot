@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from backtest.live_replay.configs import REPO, BotConfig, load_roster, parse_bat, scope
+from backtest.live_replay.configs import (
+    REPO,
+    BotConfig,
+    launcher_symbol,
+    load_roster,
+    parse_bat,
+    scope,
+    task_name,
+)
 
 
 def _bat(tmp_path: Path, name: str, args: str) -> Path:
@@ -66,35 +74,48 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
+DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo", "OrbBreakoutinv_DJI30_Demo",
+             "OrbBreakoutinv_SPX500_Demo", "OrbSweep_GER40_Demo", "OrbSweep_JP225_Demo"}
+
+
 def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     """2026-09-20: cut from six to one. Five symbols lost over both the last 12 months and the
-    last 3, so only the weekend-flat XAUUSD bot still places real orders. 2026-09-22: the NDX100
-    First FVG bot joins it, on a symbol no other Demo bot trades. The roster file's own comment
-    blocks carry the numbers."""
-    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo": "cfi", "FvgWindow_NDX100_Demo": "cfi"}
+    last 3, so only the weekend-flat XAUUSD bot still placed real orders. 2026-09-22: the NDX100
+    First FVG bot joined it, and later that day, on the user's call, every free symbol got its
+    best paper bot over the last year. The roster file's own comment blocks carry the numbers."""
+    assert load_roster(REPO) == dict.fromkeys(DEMO_BOTS, "cfi")
+
+
+def test_one_demo_bot_per_symbol() -> None:
+    """Two bots on one symbol read each other's position as foreign and block each other."""
+    symbols = [launcher_symbol(bat) for bat in [*REPO.glob("run_live_orb_*_demo.bat"),
+                                                *REPO.glob("run_live_fvg_*_demo.bat")]
+               if task_name(bat.name) in DEMO_BOTS]
+    assert sorted(symbols) == sorted(set(symbols)) and len(symbols) == len(DEMO_BOTS)
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
-    # One deployed Demo bot since 2026-09-20, plus every Paper configuration that is not its
-    # twin. The weekend-flat Paper bot IS its twin -- same CFI ticker, same parameters -- so it
-    # is covered by the Demo entry, as a twin always has been. The five stood-down symbols have
-    # no Demo side left, so all of their Paper bots are listed.
+    # The deployed ORB Demo bots, plus every Paper configuration that is not one of their twins.
+    # A twin -- same CFI ticker, same parameters, only the risk differs -- is covered by its Demo
+    # entry, as a twin always has been.
     assert {c.task for c in scope(REPO)} == {
-        "OrbBreakoutwf_XAUUSD_Demo",
+        "OrbBreakoutwf_XAUUSD_Demo", "OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo",
+        "OrbSweep_GER40_Demo", "OrbSweep_JP225_Demo",
         "OrbBreakout_XAUUSD_Paper", "OrbBreakout_GER40_Paper", "OrbSweep_XAUUSD_Paper",
-        "OrbSweep_JP225_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
-        "OrbBreakout_JP225_Paper", "OrbSweep_GER40_Paper",
-        "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper", "OrbBreakoutinv_SPX500_Paper",
-        "OrbBreakoutinv_DJI30_Paper", "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
+        "OrbBreakout_JP225_Paper",
+        "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper",
+        "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
     }
 
 
-def test_the_one_live_bot_risks_a_quarter_percent() -> None:
-    """2026-09-21: halved before its first live trade. Its edge was already decaying inside the
-    year it was chosen on, and a drawdown stop catches collapse, not decay -- see the roster."""
+def test_every_live_bot_risks_a_quarter_percent() -> None:
+    """2026-09-21: the XAUUSD bot halved before its first live trade -- its edge was already
+    decaying inside the year it was chosen on, and a drawdown stop catches collapse, not decay.
+    Every Demo bot since has evidence no stronger, so none risks more -- see the roster."""
     live = [c for c in scope(REPO) if not c.paper]
-    assert [(c.task, c.risk_pct) for c in live] == [("OrbBreakoutwf_XAUUSD_Demo", 0.0025)]
+    assert {(c.task, c.risk_pct) for c in live} == {
+        (task, 0.0025) for task in DEMO_BOTS if task != "FvgWindow_NDX100_Demo"}
 
 
 def test_no_bot_that_places_real_orders_reverses_on_a_stop() -> None:
