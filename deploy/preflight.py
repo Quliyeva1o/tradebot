@@ -141,6 +141,47 @@ if PROFILE is not None:
         except Exception as exc:  # noqa: BLE001
             bad(f"{s}: {exc}")
 
+
+def _installed_terminals() -> list[str]:
+    """Every MT5 installation this Windows user has run, from the data folder MT5 keeps for each.
+
+    Each gets %APPDATA%\\MetaQuotes\\Terminal\\<hash>\\origin.txt naming its install folder. The
+    data folder outlives an uninstall, so only those whose terminal64.exe is still there count.
+    """
+    import os
+    root = Path(os.environ.get("APPDATA", "")) / "MetaQuotes" / "Terminal"
+    found = []
+    for origin in sorted(root.glob("*/origin.txt")) if root.is_dir() else []:
+        raw = origin.read_bytes()
+        text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8", "replace")
+        folder = text.strip().lstrip("\ufeff")
+        if folder and (Path(folder) / "terminal64.exe").exists():
+            found.append(folder)
+    return found
+
+
+# Since 2026-09-22 this VPS runs two brokers, each checkout on its own terminal: C:\tradebot on
+# CFI's, C:\tradebot_fp on FundingPips'. With two installed, a bare mt5.initialize() attaches to
+# whichever the MetaTrader5 package finds first, so MT5_PATH is what says which one is this
+# checkout's. mt5/connector.initialize_terminal() refuses the wrong terminal; this says so first.
+import os  # noqa: E402
+
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(REPO / ".env")
+MT5_PATH = os.getenv("MT5_PATH", "")
+_terminals = _installed_terminals()
+if MT5_PATH:
+    if Path(MT5_PATH).exists():
+        ok(f"MT5_PATH: {MT5_PATH}")
+    else:
+        bad(f"MT5_PATH movcud deyil: {MT5_PATH}")
+elif len(_terminals) > 1:
+    bad(f"bu masinda {len(_terminals)} MT5 terminali var ({'; '.join(_terminals)}), .env-de ise "
+        f"MT5_PATH yoxdur -- bot hansina qosulacagini bilmir. Bu checkout-un terminalini yazin")
+else:
+    ok("MT5_PATH bosdur, amma masinda tek terminal var")
+
 # ------------------------------------------------- 3. leftovers from old box
 print("\n3) Kohne masindan qalan fayllar (kopyalanmamalidir)")
 flags = list((REPO / "risk").glob("*.flag")) if (REPO / "risk").exists() else []
@@ -199,9 +240,16 @@ else:
 print("\n4) MT5 terminal ve hesab")
 try:
     import MetaTrader5 as mt5  # noqa: N813
-    if not mt5.initialize():
+
+    from mt5.connector import WrongBrokerError, WrongTerminalError, initialize_terminal
+    try:
+        attached = initialize_terminal()  # MT5_PATH's terminal, the one the bots will use
+    except (WrongTerminalError, WrongBrokerError) as exc:
+        bad(f"TERMINAL RED EDILDI: {exc}")
+        attached = None
+    if attached is False:
         bad(f"MT5 initialize ALINMADI: {mt5.last_error()} -- terminal aciqdirmi?")
-    else:
+    elif attached:
         try:
             ti, ai = mt5.terminal_info(), mt5.account_info()
             if ai is None:
@@ -302,16 +350,35 @@ if warnings:
 # with "next: install the paper tasks" on every run, including on a healthy
 # machine mid-session -- which reads as "your Demo bots are not on yet" and
 # invites a pointless re-install.
+# Only THIS checkout's tasks -- the ones whose action runs this repo's launcher. Since 2026-09-22
+# the VPS also carries the other broker's checkout, whose tasks share every name with these.
+_legacy: list[str] = []
 try:
     import subprocess
-    _q = ("Get-ScheduledTask | Where-Object { $_.TaskName -match '^(Orb|Fvg)' } | "
-          "ForEach-Object { $_.TaskName + '=' + $_.State }")
+    _vbs = str((REPO / "run_hidden.vbs").resolve()).replace("'", "''")
+    _q = ("Get-ScheduledTask | Where-Object { $_.TaskName -match '^(Orb|Fvg)' -and "
+          f"(($_.Actions | ForEach-Object {{ $_.Arguments }}) -join ' ').IndexOf('{_vbs}', "
+          "[StringComparison]::OrdinalIgnoreCase) -ge 0 } | "
+          "ForEach-Object { $_.TaskPath + '|' + $_.TaskName + '=' + $_.State }")
     _out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", _q],
                           capture_output=True, text=True, timeout=30).stdout
-    _tasks = dict(l.strip().split("=", 1) for l in _out.splitlines() if "=" in l)
+    _tasks = {}
+    for _line in (ln.strip() for ln in _out.splitlines()):
+        if "=" in _line and "|" in _line:
+            _where, _rest = _line.split("|", 1)
+            _name, _state = _rest.split("=", 1)
+            _tasks[_name] = _state
+            if _where == "\\":
+                _legacy.append(_name)
 except Exception as exc:  # noqa: BLE001 - cosmetic; never block on this
     print(f"\n(task siyahisi oxunmadi: {type(exc).__name__})")
     _tasks = {}
+
+if _legacy:
+    # Registered before tasks got a folder per broker. Harmless while this is the only checkout on
+    # the machine; a second one would have overwritten them by name. install_tasks.ps1 moves them.
+    print(f"\n{len(_legacy)} task hele kohne yerdedir (Task Scheduler koku, broker qovlugu yox) -- "
+          "install_tasks.ps1-i yeniden isledin, ozu kocurur.")
 
 if _tasks:
     _demo = {k: v for k, v in _tasks.items() if k.endswith("_Demo")}

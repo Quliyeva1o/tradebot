@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from core.models import AccountInfo
-from mt5.connector import MT5Connector
+from mt5.connector import MT5Connector, WrongBrokerError, WrongTerminalError, initialize_terminal
 
 
 def _symbol_info(point: float) -> SimpleNamespace:
@@ -323,3 +323,114 @@ class TestFetchSymbolInfo:
             constraints = connector.fetch_symbol_info("NDX100")
 
         assert constraints.tick_value == 0.2
+
+
+CFI_EXE = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+FP_FOLDER = r"C:\Program Files\FundingPips MT5 Terminal"
+
+
+@pytest.fixture
+def cfi_checkout(monkeypatch):
+    """The CFI checkout's .env, on a VPS that also carries FundingPips' terminal.
+
+    load_dotenv is disabled so a real .env next to the tests can never fill in what a test unset.
+    """
+    monkeypatch.setattr("mt5.connector.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("MT5_PATH", CFI_EXE)
+    monkeypatch.setenv("MT5_SERVER", "CFI11-Demo")
+    monkeypatch.setenv("MT5_LOGIN", "1234")
+    monkeypatch.setenv("MT5_PASSWORD", "x")
+
+
+def _terminal(folder: str) -> SimpleNamespace:
+    return SimpleNamespace(path=folder)
+
+
+def _account(server: str) -> SimpleNamespace:
+    return SimpleNamespace(server=server)
+
+
+class TestInitializeTerminal:
+    """Two brokers share one VPS since 2026-09-22; each checkout must reach only its own terminal."""
+
+    def test_attaches_to_the_terminal_mt5_path_names(self, cfi_checkout) -> None:
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True) as init,
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(r"c:\program files\metatrader 5")),
+            patch("mt5.connector.mt5.account_info", return_value=_account("CFI11-Demo")),
+        ):
+            assert initialize_terminal() is True
+        init.assert_called_once_with(path=CFI_EXE)
+
+    def test_refuses_the_other_brokers_terminal(self, cfi_checkout) -> None:
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True),
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(FP_FOLDER)),
+            patch("mt5.connector.mt5.account_info", return_value=_account("CFI11-Demo")),
+            patch("mt5.connector.mt5.shutdown") as shutdown,
+            pytest.raises(WrongTerminalError, match="FundingPips MT5 Terminal"),
+        ):
+            initialize_terminal()
+        shutdown.assert_called_once()
+
+    def test_refuses_a_terminal_logged_into_another_broker(self, cfi_checkout) -> None:
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True),
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(r"C:\Program Files\MetaTrader 5")),
+            patch("mt5.connector.mt5.account_info", return_value=_account("FundingPips-Trial")),
+            patch("mt5.connector.mt5.shutdown") as shutdown,
+            pytest.raises(WrongBrokerError, match="FundingPips-Trial"),
+        ):
+            initialize_terminal()
+        shutdown.assert_called_once()
+
+    def test_a_terminal_not_logged_in_yet_is_left_to_login(self, cfi_checkout) -> None:
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True),
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(r"C:\Program Files\MetaTrader 5")),
+            patch("mt5.connector.mt5.account_info", return_value=None),
+        ):
+            assert initialize_terminal() is True
+
+    def test_without_mt5_path_mt5_picks_the_terminal_but_the_broker_is_still_checked(
+        self, cfi_checkout, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("MT5_PATH")
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True) as init,
+            patch("mt5.connector.mt5.account_info", return_value=_account("FundingPips-Trial")),
+            patch("mt5.connector.mt5.shutdown"),
+            pytest.raises(WrongBrokerError),
+        ):
+            initialize_terminal()
+        init.assert_called_once_with()
+
+    def test_a_failed_initialize_is_false_not_an_exception(self, cfi_checkout) -> None:
+        with patch("mt5.connector.mt5.initialize", return_value=False):
+            assert initialize_terminal() is False
+
+
+class TestConnectNeverSwitchesBrokers:
+    def test_connect_does_not_log_another_brokers_terminal_in(self, cfi_checkout) -> None:
+        # The failure this prevents: CFI's bot attaching to FundingPips' terminal and calling
+        # mt5.login() with CFI's account, moving that terminal -- and every FundingPips bot on it
+        # -- onto CFI between one bot's account check and its order_send.
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True),
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(r"C:\Program Files\MetaTrader 5")),
+            patch("mt5.connector.mt5.account_info", return_value=_account("FundingPips-Trial")),
+            patch("mt5.connector.mt5.shutdown"),
+            patch("mt5.connector.mt5.login") as login,
+        ):
+            assert MT5Connector().connect() is False
+        login.assert_not_called()
+
+    def test_connect_logs_in_on_its_own_terminal(self, cfi_checkout) -> None:
+        with (
+            patch("mt5.connector.mt5.initialize", return_value=True),
+            patch("mt5.connector.mt5.terminal_info", return_value=_terminal(r"C:\Program Files\MetaTrader 5")),
+            patch("mt5.connector.mt5.account_info", return_value=_account("CFI11-Demo")),
+            patch("mt5.connector.mt5.login", return_value=True) as login,
+        ):
+            assert MT5Connector().connect() is True
+        login.assert_called_once_with(login=1234, password="x", server="CFI11-Demo")

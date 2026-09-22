@@ -19,6 +19,14 @@
     MT5 directly. Only the backtest and analysis scripts read those files, so a
     trading-only VPS can skip them entirely.
 
+    Since 2026-09-22 one machine can carry two checkouts, one per broker
+    (C:\tradebot on CFI, C:\tradebot_fp on FundingPips), whose launchers share
+    every name. So each checkout's tasks go in a Task Scheduler folder named
+    after the broker its .env resolves to -- \tradebot\cfi\, \tradebot\fundingpips\
+    -- and this script only ever enables, disables or replaces tasks in its own.
+    Tasks registered before that lived in the root folder; the ones that run
+    THIS checkout's launchers are moved into the folder as they are replaced.
+
 .PARAMETER RepoPath
     Where the repo lives on THIS machine. Defaults to the script's own parent.
 
@@ -74,6 +82,7 @@ if (-not $RepoPath) {
     $RepoPath = Split-Path -Parent $scriptDir
 }
 
+$RepoPath = (Resolve-Path $RepoPath).Path
 $vbs = Join-Path $RepoPath 'run_hidden.vbs'
 if (-not (Test-Path $vbs)) { throw "run_hidden.vbs tapilmadi: $vbs -- RepoPath duzgundurmu?" }
 
@@ -93,7 +102,47 @@ function Get-TaskNameFromBat {
     return "$(& $cap $parts[0])$(& $cap $parts[1])`_$($parts[2].ToUpper())`_$(& $cap $parts[3])"
 }
 
+# --- which broker this checkout trades ---------------------------------------
+# Resolved before anything is registered: it names the folder the tasks go in.
+# It comes from this checkout's own .env via the same module the bots use --
+# never guessed, and never duplicated in PowerShell. With no broker there is no
+# folder, and every launcher here would refuse to start anyway, so stop.
+$python = Join-Path $RepoPath '.venv\Scripts\python.exe'
+if (-not (Test-Path $python)) {
+    throw ".venv tapilmadi: $python -- evvelce venv qurun, .env-i doldurun, preflight.py isledin"
+}
+Push-Location $RepoPath
+$prevPref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'   # python's stderr is the message, not a reason to throw
+try {
+    $out = @(& $python -c "import config.brokers as b; print(b.local().name)" 2>&1)
+    $code = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $prevPref
+    Pop-Location
+}
+if ($code -ne 0 -or $out.Count -eq 0) {
+    throw ("Brokeri teyin etmek olmadi (.env MT5_SERVER?) -- hec bir task qurulmadi. config.brokers: " +
+           ($out -join ' '))
+}
+$broker = "$($out[-1])".Trim()
+$taskPath = "\tradebot\$broker\"
+
+# Tasks registered before 2026-09-22 sit in the root folder. Only the ones whose
+# action runs THIS checkout's launcher are ours to move; the quotes make
+# C:\tradebot never match C:\tradebot_fp.
+$vbsArg = '"{0}"' -f $vbs
+$legacy = @{}
+Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.TaskName -match '^(Orb|Fvg)' -and
+        (($_.Actions | ForEach-Object { $_.Arguments }) -join ' ').IndexOf(
+            $vbsArg, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    } |
+    ForEach-Object { $legacy[$_.TaskName] = $_ }
+
 Write-Host "Repo    : $RepoPath"
+Write-Host "Broker  : $broker (.env MT5_SERVER) -> Task Scheduler qovlugu $taskPath"
 Write-Host "Kadans  : her $IntervalMinutes deqiqe"
 Write-Host "Tapildi : $($bats.Count) launcher`n"
 
@@ -103,6 +152,16 @@ foreach ($bat in $bats) {
     if (-not $taskName) {
         Write-Warning "Adi tanimadim, atlanir: $($bat.Name)"
         continue
+    }
+
+    # Old root task first, new one after: the new trigger starts a minute out,
+    # so the two never poll the same launcher's state file side by side.
+    if ($legacy.ContainsKey($taskName)) {
+        if ($PSCmdlet.ShouldProcess("\$taskName", 'Unregister-ScheduledTask (koke qeydiyyat, qovluga kocur)')) {
+            Unregister-ScheduledTask -TaskName $taskName -TaskPath '\' -Confirm:$false
+            Write-Host ("  kocdu   \{0} -> {1}" -f $taskName, $taskPath)
+        }
+        $legacy.Remove($taskName)
     }
 
     $action = New-ScheduledTaskAction -Execute 'wscript.exe' `
@@ -120,8 +179,8 @@ foreach ($bat in $bats) {
         -ExecutionTimeLimit (New-TimeSpan -Hours 72) `
         -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries -StartWhenAvailable
 
-    if ($PSCmdlet.ShouldProcess($taskName, 'Register-ScheduledTask')) {
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+    if ($PSCmdlet.ShouldProcess("$taskPath$taskName", 'Register-ScheduledTask')) {
+        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger $trigger `
             -Settings $settings -Force | Out-Null
         Write-Host ("  {0,-28} <- {1}" -f $taskName, $bat.Name)
         $made++
@@ -140,36 +199,20 @@ Write-Host "`n$made task qeydiyyatdan kecdi."
 # foreign_position_blocks_entry indefinitely. deploy/demo_roster.txt records
 # which one owns each symbol and why; anything absent from it is disabled here.
 #
-# Since 2026-09-21 the roster also names the ACCOUNT each permission belongs to:
-# the VPS trades CFI, this workstation FundingPips, off one launcher set. A
-# Demo bot listed for the other broker is disabled here, because the sizing and
+# Since 2026-09-21 the roster also names the ACCOUNT each permission belongs to.
+# A Demo bot listed for the other broker is disabled here, because the sizing and
 # stop rule behind it were measured on that broker's spread, swap and lot
-# minimum. Which broker this machine is comes from its own .env, via the same
-# module the bots use -- never guessed, and never duplicated in PowerShell.
+# minimum. Everything below acts on THIS checkout's folder only ($taskPath):
+# since 2026-09-22 the other broker's checkout may share the machine, and its
+# tasks carry the same names. Before that, this loop ran over every task on the
+# machine and would have switched the other broker's live bot off.
+if ($legacy.Count -gt 0) {
+    Write-Warning ("Kokde bu checkout-un {0} kohne taski qaldi (-PaperOnly ve ya .bat-i silinib), toxunulmadi: {1}" -f
+        $legacy.Count, (($legacy.Keys | Sort-Object) -join ', '))
+}
+
 $rosterFile = Join-Path $PSScriptRoot 'demo_roster.txt'
 if (-not (Test-Path $rosterFile)) { $rosterFile = Join-Path $RepoPath 'deploy\demo_roster.txt' }
-
-$python = Join-Path $RepoPath '.venv\Scripts\python.exe'
-$broker = $null
-if (Test-Path $python) {
-    Push-Location $RepoPath
-    try {
-        $out = @(& $python -c "import config.brokers as b; print(b.local().name)" 2>&1)
-        if ($LASTEXITCODE -eq 0 -and $out.Count -gt 0) {
-            $broker = "$($out[-1])".Trim()
-        } else {
-            Write-Warning ("config.brokers: " + ($out -join ' '))
-        }
-    } finally { Pop-Location }
-}
-if ($broker) {
-    Write-Host "`nBu masinin brokeri: $broker (.env MT5_SERVER)"
-} else {
-    # No venv yet, or .env not filled in: refuse to guess. Every Demo task is
-    # disabled, which is the safe direction -- paper bots keep running, and a
-    # rerun after `preflight.py` passes enables the right ones.
-    Write-Warning "Brokeri teyin etmek olmadi (.venv / .env hazir deyilmi?) -- BUTUN Demo tasklar sondurulur"
-}
 
 if (Test-Path $rosterFile) {
     $roster = @(Get-Content $rosterFile |
@@ -180,26 +223,28 @@ if (Test-Path $rosterFile) {
             if ($parts.Count -lt 2) {
                 throw "demo_roster.txt: '$($parts[0])' brokeri gostermir -- '$($parts[0]) cfi' seklinde yazin"
             }
-            if ($broker -and $parts[1] -eq $broker) { $parts[0] }
+            if ($parts[1] -eq $broker) { $parts[0] }
         })
-    Write-Host "Demo roster (bu brokerde $($roster.Count) simvol sahibi):"
+    Write-Host "`nDemo roster ($broker, $taskPath -- $($roster.Count) simvol sahibi):"
 
-    $demoTasks = Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orb*_Demo' }
+    $demoTasks = @(Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.TaskName -like '*_Demo' })
     foreach ($t in $demoTasks) {
         $wanted = $roster -contains $t.TaskName
-        if ($PSCmdlet.ShouldProcess($t.TaskName, $(if ($wanted) { 'Enable' } else { 'Disable' }))) {
+        if ($PSCmdlet.ShouldProcess("$taskPath$($t.TaskName)", $(if ($wanted) { 'Enable' } else { 'Disable' }))) {
             if ($wanted) {
-                Enable-ScheduledTask -TaskName $t.TaskName | Out-Null
+                Enable-ScheduledTask -TaskName $t.TaskName -TaskPath $taskPath | Out-Null
                 Write-Host ("  ACIQ    {0}" -f $t.TaskName)
             } else {
-                Disable-ScheduledTask -TaskName $t.TaskName | Out-Null
+                Disable-ScheduledTask -TaskName $t.TaskName -TaskPath $taskPath | Out-Null
                 Write-Host ("  sondu   {0}  (bu hesabin rosterinde yoxdur -- basqa bot ve ya basqa broker)" -f $t.TaskName)
             }
         }
     }
 
-    $dupes = Get-ScheduledTask |
-        Where-Object { $_.TaskName -like 'Orb*_Demo' -and $_.State -ne 'Disabled' } |
+    # Same symbol on the OTHER broker's folder is a different account, not a collision.
+    $dupes = Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.TaskName -like '*_Demo' -and $_.State -ne 'Disabled' } |
         Group-Object { ($_.TaskName -split '_')[1] } |
         Where-Object { $_.Count -gt 1 }
     if ($dupes) {
@@ -220,19 +265,21 @@ BUNDAN SONRA, SIRA ILE:
      (Ctrl+E). Bagli qalarsa real orderler sessizce retcode 10027 ile redd
      olunur -- bu layihede artiq bir defe bas verib.
   2. .env faylini kopyalayin (git-de yoxdur: MT5_LOGIN/PASSWORD/SERVER/PATH).
+     Bir masinda iki broker varsa, MT5_PATH MUTLEQDIR ve bu checkout-un OZ
+     terminalini gostermelidir (C:\tradebot -> CFI, C:\tradebot_fp -> FundingPips).
   3. python -m venv .venv
      .venv\Scripts\pip install -r deploy\requirements-live.txt
        (tam requirements.txt YOX -- pytest/matplotlib serverde islenmir)
   4. Hazir olub-olmadigini yoxlayin -- hec ne deyismir, yalniz oxuyur:
        .venv\Scripts\python.exe deploy\preflight.py
   5. Demo tasklar deploy\demo_roster.txt-e gore acilir/sondurulur -- ancaq
-     bu masinin brokerine aid olanlar (.env MT5_SERVER). VPS = CFI, is
-     kompyuteri = FundingPips; is kompyuterinde Demo tasklarin hamisi bagli
-     qalir, paper botlar isleyir. Simvolun sahibini deyismek ucun HEMIN FAYLI
+     bu checkout-un brokerine aid olanlar (.env MT5_SERVER), oz qovlugunda
+     ($taskPath). FundingPips-de Demo tasklarin hamisi bagli qalir, paper
+     botlar isleyir. Simvolun sahibini deyismek ucun HEMIN FAYLI
      redakte edin, Task Scheduler-i el ile deyil -- yoxsa novbeti qurulusda
      geri qayidir.
   6. Yoxlayin: logs\run_live_nasdaq_orb.log, logs\run_live_first_fvg_window.log ve
-       Get-ScheduledTask | ? TaskName -match '^(Orb|Fvg)' |
+       Get-ScheduledTask -TaskPath '$taskPath' |
          % { '{0} {1}' -f `$_.TaskName, (`$_ | Get-ScheduledTaskInfo).LastTaskResult }
      Hamisinin neticesi 0 olmalidir.
 

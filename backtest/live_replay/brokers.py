@@ -54,9 +54,14 @@ def connected_server() -> str | None:
     """The server the MT5 terminal is logged into, or None when there is no terminal to ask."""
     try:
         import MetaTrader5 as mt5  # noqa: N813
+
+        from mt5.connector import WrongBrokerError, WrongTerminalError, initialize_terminal
     except ImportError:
         return None
-    if not mt5.initialize():
+    try:
+        if not initialize_terminal():  # this checkout's terminal, not whichever MT5 finds first
+            return None
+    except (WrongTerminalError, WrongBrokerError):
         return None
     info = mt5.account_info()
     return None if info is None else info.server

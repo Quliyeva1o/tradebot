@@ -45,6 +45,7 @@ from backtest.live_replay.market import load_bars, load_fx, trim_to_real_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
 from execution.stop_and_reverse import is_reverse
+from mt5.connector import initialize_terminal
 from scripts import kill_rule
 from scripts.consistency_analysis import agg, consistency
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
@@ -129,7 +130,7 @@ def closed_live_trades(days: int) -> dict[str, list[dict]]:
     stop/target were added to trade_opened (2026-09-09) have no other record of
     their risk distance.
     """
-    if not mt5.initialize():
+    if not initialize_terminal():  # this checkout's terminal: two brokers share the VPS
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
     try:
         frm = datetime.now(UTC) - timedelta(days=days)

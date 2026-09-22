@@ -250,7 +250,11 @@ def fetch_live_trades(rule: KillRule, symbol: str, prefix: str) -> list[LiveTrad
     """The closed trades on the connected account that this rule counts. Needs a running terminal."""
     import MetaTrader5 as mt5  # noqa: N813 -- imported here so the pure functions above need no terminal
 
-    if not mt5.initialize():
+    from mt5.connector import initialize_terminal
+
+    # This checkout's own terminal. Two brokers share the VPS, and a bare mt5.initialize() could
+    # read the other one's account, find none of this bot's trades, and report "keep trading".
+    if not initialize_terminal():
         raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
     try:
         # MT5 reads these bounds as broker wall clock, which on CFI runs ahead of UTC, so pad both

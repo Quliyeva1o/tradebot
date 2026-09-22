@@ -18,6 +18,67 @@ class WrongBrokerError(RuntimeError):
     """The terminal is logged into an account other than the one .env names."""
 
 
+class WrongTerminalError(RuntimeError):
+    """MT5 attached to a terminal installation other than the one .env's MT5_PATH names."""
+
+
+def terminal_folder(path: str) -> str:
+    """The installation folder MT5_PATH names; it may point at terminal64.exe or at its folder."""
+    folder = os.path.dirname(path) if path.lower().endswith(".exe") else path
+    return os.path.normcase(os.path.normpath(folder))
+
+
+def initialize_terminal() -> bool:
+    """mt5.initialize() on THIS checkout's terminal, and only while it is on this checkout's broker.
+
+    Since 2026-09-22 one VPS runs two brokers: C:\\tradebot on CFI's terminal and C:\\tradebot_fp
+    on FundingPips', each with its own .env. A bare mt5.initialize() lets the MetaTrader5 package
+    pick a terminal by itself, which with two installed is whichever it finds. connect() then
+    calls mt5.login() with ITS .env's account, and that would switch the other broker's terminal
+    onto this one -- under a bot that already checked which account it was on. So:
+
+      - with MT5_PATH set, the terminal that answered must be the one installed there;
+      - a terminal already logged into a server other than .env's MT5_SERVER is refused, never
+        switched. No bot here needs to move a terminal between brokers: a person does that by
+        hand when the broker changes (deploy/README.md).
+
+    Every script that reads an account goes through this, not only the bots: the weekly report
+    and the kill rule read "the connected account", and a report on the wrong one is silent.
+
+    Returns:
+        True when attached, False when mt5.initialize() itself failed (mt5.last_error() says why).
+
+    Raises:
+        WrongTerminalError: The terminal that answered is not installed at MT5_PATH.
+        WrongBrokerError: The terminal is logged into a server other than MT5_SERVER.
+    """
+    load_dotenv()
+    path = os.getenv("MT5_PATH", "")
+    server = os.getenv("MT5_SERVER", "")
+
+    if not (mt5.initialize(path=path) if path else mt5.initialize()):
+        return False
+
+    if path:
+        info = mt5.terminal_info()
+        actual = getattr(info, "path", None)
+        if not actual or os.path.normcase(os.path.normpath(actual)) != terminal_folder(path):
+            mt5.shutdown()
+            raise WrongTerminalError(
+                f"MT5_PATH names the terminal in {os.path.dirname(path) or path}, but the one "
+                f"that answered is installed in {actual!r}. Refusing to use another broker's terminal."
+            )
+
+    account = mt5.account_info()
+    if server and account is not None and account.server != server:
+        mt5.shutdown()
+        raise WrongBrokerError(
+            f"the terminal is logged into {account.server!r}, but .env names {server!r}. Refusing "
+            f"to log it into another broker -- check MT5_PATH, or log in by hand if the broker changed."
+        )
+    return True
+
+
 def resolve_ticker(symbol: str) -> tuple[BrokerProfile, str]:
     """This machine's broker, and the ticker IT uses for the name a launcher passed.
 
@@ -68,7 +129,6 @@ class MT5Connector:
         login_str = os.getenv("MT5_LOGIN", "0")
         password = os.getenv("MT5_PASSWORD", "")
         server = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
-        path = os.getenv("MT5_PATH", "")
 
         try:
             login = int(login_str)
@@ -78,11 +138,11 @@ class MT5Connector:
 
         logger.info("Initializing MT5 terminal...")
 
-        # Initialize terminal
-        if path:
-            init_success = mt5.initialize(path=path)
-        else:
-            init_success = mt5.initialize()
+        try:
+            init_success = initialize_terminal()
+        except (WrongTerminalError, WrongBrokerError) as exc:
+            logger.error("%s", exc)
+            return False
 
         if not init_success:
             logger.error("Failed to initialize MT5 terminal. Error code: %s", mt5.last_error())

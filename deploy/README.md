@@ -30,8 +30,40 @@ işə düşəndə terminalın həqiqətən həmin serverdə olduğunu yoxlayır;
 yanında hansı brokerdə işləyə biləcəyini yazır. Tək canlı bot
 (`OrbBreakoutwf_XAUUSD_Demo`) CFI-dədir: onun lot ölçüsü, stop qaydası və
 bootstrap zərfi CFI-nin spread, swap və 0.01-lot minimumu üzərində ölçülüb.
-İş kompüterində bütün Demo tasklar **bağlı** qalır, paper botlar işləyir —
+FundingPips-də bütün Demo tasklar **bağlı** qalır, paper botlar işləyir —
 `install_tasks.ps1` bunu özü edir.
+
+## Bir VPS, iki broker
+
+2026-09-22-dən FundingPips iş kompüterindən **eyni VPS-ə** köçür: iki checkout,
+iki terminal, iki `.env`.
+
+| | CFI | FundingPips |
+|---|---|---|
+| Checkout | `C:\tradebot` | `C:\tradebot_fp` |
+| Terminal (`MT5_PATH`) | `C:\Program Files\MetaTrader 5\terminal64.exe` | ikinci MT5, **ayrı qovluğa** qurulur |
+| `MT5_SERVER` | `CFI11-Demo` | `FundingPips-Trial` |
+| Task Scheduler qovluğu | `\tradebot\cfi\` | `\tradebot\fundingpips\` |
+
+İkisinin də launcher-ləri eyni adlıdır, ona görə:
+
+- **Tasklar broker qovluğuna yazılır.** `install_tasks.ps1` qovluğu checkout-un
+  `.env`-indən çıxarır və yalnız **öz qovluğundakı** taskları açıb-bağlayır.
+  Əvvəl Demo-ları bütün maşın üzrə söndürürdü; FundingPips checkout-undan
+  işə salınsaydı CFI-nin canlı botunu da söndürərdi. Kökdə (`\`) qalmış köhnə
+  tasklar — yalnız **bu** checkout-un launcher-ini işlədənlər — yenidən
+  qurulanda qovluğa köçür.
+- **`MT5_PATH` iki `.env`-də də mütləqdir.** Onsuz `mt5.initialize()` tapdığı
+  ilk terminala qoşulur, bot isə `mt5.login()` ilə **o terminalın hesabını
+  dəyişərdi** — o terminaldakı o biri brokerin botlarının altından.
+  `mt5/connector.initialize_terminal()` indi səhv terminala və başqa serverdə
+  olan terminala qoşulmaqdan imtina edir; hesabat və kill-rule da ondan keçir.
+  `preflight.py` maşında iki terminal görüb `MT5_PATH` boş olanda dayanır.
+- **Resurs:** ölçülüb — ən yüklü anda 27 python prosesi ~0.5 GB tutur, 8 GB-lıq
+  VPS-də 3.2 GB boş qalır. İkinci dəst sığır.
+
+FundingPips checkout-unu qurduqdan sonra **iş kompüterindəki taskları
+söndürün** — yoxsa eyni hesabın paper nəticələri iki yerə bölünər.
 
 ## Nə köçür, nə köçmür
 

@@ -22,6 +22,7 @@ def test_the_deal_window_reaches_past_the_brokers_clock_offset(monkeypatch) -> N
     monkeypatch.setattr(report, "mt5", SimpleNamespace(
         initialize=lambda: True, shutdown=lambda: None, last_error=lambda: None,
         history_deals_get=history_deals_get))
+    monkeypatch.setattr(report, "initialize_terminal", lambda: True)
 
     report.closed_live_trades(30)
 
