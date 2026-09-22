@@ -11,6 +11,8 @@ The bot only polls every two minutes, so the order is kept in step at each poll:
     target, was closed by hand or by the broker) -> cancel it
   - the reverse trade itself is open -> nothing rests
 A resting order is also cancelled while trading is halted: it is a new entry waiting to happen.
+And a bot running WITHOUT the flag still cancels any reverse order its tag left on its symbol
+(cancel_reverse_orders): the order never expires, and nothing else would ever remove it.
 
 Needs a HEDGING account (FundingPips-Trial reports margin_mode 2): on a netting account the
 pending order would close the original position instead of opening a second one. PaperBroker
@@ -127,3 +129,20 @@ def sync_reverse_order(
               order_type=wanted.order_type.name, price=wanted.price, stop_loss=wanted.stop_loss,
               take_profit=wanted.take_profit, volume=wanted.volume, retcode=result.retcode,
               reason=result.comment)
+
+
+def cancel_reverse_orders(
+    broker: IBroker,
+    symbol: str,
+    strategy_tag: str,
+    log_event: Callable[..., None],
+    halted: bool = False,
+) -> None:
+    """Cancels every reverse order this bot's tag has resting on `symbol`, whatever it is doing.
+
+    For a bot that no longer reverses. Taking --reverse-on-stop off every launcher on 2026-09-21
+    left the orders those bots had already placed at the broker: never expiring, and removable
+    only by the poll that placed them -- which, without the flag, no longer looked. On FundingPips
+    one outlived its trade's target by a day and was still waiting to open a 0.09-lot NDX100 short.
+    """
+    sync_reverse_order(broker, symbol, strategy_tag, [], 0.0, log_event, halted=halted)

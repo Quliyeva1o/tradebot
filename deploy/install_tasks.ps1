@@ -191,6 +191,35 @@ foreach ($bat in $bats) {
 
 Write-Host "`n$made task qeydiyyatdan kecdi."
 
+# --- the weekly report, one per checkout --------------------------------------
+# It reads THIS checkout's account: live vs backtest, the kill rules, and whatever is at the
+# broker that no rostered bot manages (scripts/account_orphans.py). It used to be registered by
+# hand, once, in the root folder, for C:\tradebot alone -- so the FundingPips account, where two
+# never-expiring orders outlived their bots on 2026-09-21, had no report at all. Registered with
+# -PaperOnly too: it only reads.
+$weeklyBat = Join-Path $RepoPath 'run_weekly_report.bat'
+if (Test-Path $weeklyBat) {
+    $oldWeekly = Get-ScheduledTask -TaskPath '\' -TaskName 'WeeklyReport' -ErrorAction SilentlyContinue |
+        Where-Object {
+            (($_.Actions | ForEach-Object { $_.Arguments }) -join ' ').IndexOf(
+                $vbsArg, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        }
+    if ($oldWeekly -and $PSCmdlet.ShouldProcess('\WeeklyReport', 'Unregister-ScheduledTask (koke qeydiyyat, qovluga kocur)')) {
+        Unregister-ScheduledTask -TaskName 'WeeklyReport' -TaskPath '\' -Confirm:$false
+        Write-Host ("  kocdu   \WeeklyReport -> {0}" -f $taskPath)
+    }
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}" "{1}"' -f $vbs, $weeklyBat)
+    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At '09:00'
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+        -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries -StartWhenAvailable
+    if ($PSCmdlet.ShouldProcess("${taskPath}WeeklyReport", 'Register-ScheduledTask')) {
+        Register-ScheduledTask -TaskName 'WeeklyReport' -TaskPath $taskPath -Action $action -Trigger $trigger `
+            -Settings $settings -Force | Out-Null
+        Write-Host ("  {0,-28} <- run_weekly_report.bat (her senbe 09:00)" -f 'WeeklyReport')
+    }
+}
+
 # --- enforce one Demo bot per symbol, on the right account -------------------
 # A .bat exists for every strategy/symbol pair, so the loop above registers a
 # Demo task for all of them -- which puts TWO on GER40, JP225 and XAUUSD. Two

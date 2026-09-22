@@ -97,6 +97,9 @@ class _PaperBroker:
         self.positions = [p for p in self.positions if p.id != position_id]
         return SimpleNamespace(success=True, retcode=0, comment="closed")
 
+    def get_pending_orders(self, symbol: str) -> list:
+        return []  # every poll now looks for a leftover reverse order (cancel_reverse_orders)
+
 
 def _gold_position() -> Position:
     return Position(id="p1", symbol="XAUUSD", order_type=OrderType.BUY_MARKET, volume=0.02,

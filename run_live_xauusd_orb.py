@@ -54,7 +54,7 @@ from execution.mt5_broker import MT5Broker
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
-from execution.stop_and_reverse import sync_reverse_order
+from execution.stop_and_reverse import cancel_reverse_orders, sync_reverse_order
 from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
@@ -424,6 +424,9 @@ def run_once(
         mine, _ = _partition_positions(broker.get_open_positions(), symbol)
         sync_reverse_order(broker, symbol, STRATEGY_TAG, mine, reverse_on_stop_r, _log_trade_event,
                            halted=is_trading_halted(kill_switch_flag_path))
+    else:
+        # one placed back when this launcher still had the flag would otherwise rest forever
+        cancel_reverse_orders(broker, symbol, STRATEGY_TAG, _log_trade_event)
 
 
 def _poll_once(

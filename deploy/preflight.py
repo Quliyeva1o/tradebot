@@ -328,6 +328,26 @@ try:
                     ok(verdict.detail)
                 else:
                     warn(verdict.detail)
+
+            # ------------------------------------- 7. hec bir botun idare etmediyi seyler
+            # 2026-09-21 the VPS stood its FundingPips Demo bots down and moved to CFI with an
+            # SPX500 trade still open and two never-expiring reverse orders beside it; nothing
+            # noticed for a day. A warning, not a stop: it does not make the tasks unsafe to run,
+            # and what to do with a real position is a person's call. See scripts/account_orphans.py.
+            print("\n7) Hesabda hec bir botun idare etmediyi movqe / order")
+            if PROFILE is None:
+                warn("broker teyin olunmayib -- yoxlanmadi")
+            else:
+                try:
+                    from scripts.account_orphans import read as read_orphans
+                    orphans = read_orphans(PROFILE)
+                except Exception as exc:  # noqa: BLE001 - never block preflight on this
+                    warn(f"yoxlanmadi ({type(exc).__name__}: {exc})")
+                else:
+                    for o in orphans:
+                        warn(f"SAHIBSIZ {o.line()} -- terminalda baxin")
+                    if not orphans:
+                        ok("yoxdur -- hesabdaki her sey rosterdeki bir botundur")
         finally:
             mt5.shutdown()
 except ImportError:

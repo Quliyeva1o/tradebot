@@ -123,10 +123,27 @@ def test_a_flat_bot_cancels_the_order_its_closed_trade_left_behind(runner, symbo
 
 
 @pytest.mark.parametrize("runner, symbol", [(run_live_nasdaq_orb, "XAUUSD"), (run_live_xauusd_orb, "GER40")])
-def test_without_the_flag_no_order_is_touched(runner, symbol, tmp_path, events) -> None:
+def test_without_the_flag_a_reverse_order_left_from_when_it_had_one_is_cancelled(
+        runner, symbol, tmp_path, events) -> None:
+    # 2026-09-22: the flag came off every launcher on 2026-09-21, and FundingPips still held two
+    # such orders a day later -- the old rule here ("without the flag, touch nothing") kept them.
     left = PendingOrder(id="501", symbol=symbol, order_type=OrderType.SELL_STOP, volume=0.16, price=99.0,
                         comment=reverse_comment(runner.STRATEGY_TAG, "12884987"))
     broker = FakeBroker([], [left])
+    _run_once(runner, broker, tmp_path, symbol, reverse_on_stop_r=None)
+    assert (broker.canceled, broker.placed) == (["501"], [])
+    assert "reverse_order_canceled" in [name for name, _ in events]
+
+
+@pytest.mark.parametrize("runner, symbol", [(run_live_nasdaq_orb, "XAUUSD"), (run_live_xauusd_orb, "GER40")])
+def test_without_the_flag_an_open_trade_gets_no_reverse_order_and_others_orders_stay(
+        runner, symbol, tmp_path, events) -> None:
+    original = Position(id="12884987", symbol=symbol, order_type=OrderType.BUY_MARKET, volume=0.16,
+                        open_price=101.0, current_price=100.0, stop_loss=99.0, take_profit=105.0,
+                        timestamp=NOW - timedelta(hours=1), comment=f"{runner.STRATEGY_TAG}__9f089d26")
+    foreign = PendingOrder(id="777", symbol=symbol, order_type=OrderType.BUY_LIMIT, volume=0.1, price=98.0,
+                           comment="setup_first_fvg_window_limit")
+    broker = FakeBroker([original], [foreign])
     _run_once(runner, broker, tmp_path, symbol, reverse_on_stop_r=None)
     assert (broker.canceled, broker.placed) == ([], [])
 

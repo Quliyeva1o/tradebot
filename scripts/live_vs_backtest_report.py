@@ -42,14 +42,14 @@ import MetaTrader5 as mt5  # noqa: N813
 import config.brokers as machine
 import run_live_first_fvg_window as fvg_runner
 from backtest.live_replay.brokers import deployed_broker, history_path
-from backtest.live_replay.configs import BotConfig, parse_bat
+from backtest.live_replay.configs import BotConfig, parse_bat, task_name
 from backtest.live_replay.engine import run as replay
 from backtest.live_replay.market import load_bars, load_fx, trim_to_real_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
 from execution.stop_and_reverse import is_reverse
 from mt5.connector import initialize_terminal
-from scripts import kill_rule
+from scripts import account_orphans, kill_rule
 from scripts.consistency_analysis import agg, consistency
 from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
 
@@ -99,12 +99,7 @@ def _roster(path: Path = REPO / "deploy" / "demo_roster.txt",
     return {parts[0] for parts in rows if broker is None or parts[1:2] == [broker]}
 
 
-def _task_name(bat: str) -> str:
-    """run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo,
-    run_live_fvg_window_ndx100_demo.bat -> FvgWindow_NDX100_Demo (install_tasks.ps1's own rule)."""
-    stem = bat.removeprefix("run_live_").removesuffix(".bat")
-    prefix, family, symbol, mode = stem.split("_")
-    return f"{prefix.capitalize()}{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
+_task_name = task_name  # moved to configs so scripts/account_orphans.py reads the roster the same way
 
 
 def deployed_fvg_launchers() -> list[Path]:
@@ -345,6 +340,17 @@ def main() -> None:
     if total_n < 20:
         print(f"Numune hele kicikdir ({total_n} trade) -- walk-forward gozlentisi (PF 1.1-1.3) ile")
         print("muqayise ucun en azi 20-30 trade lazimdir. Bu hesabat heftelik isledilmelidir.")
+
+    # What a stood-down bot left at the broker: nothing else looks (see scripts/account_orphans.py).
+    print("\n" + "-" * 104)
+    print("HESABDA HEC BIR BOTUN IDARE ETMEDIYI MOVQE / ORDER")
+    try:
+        orphans = account_orphans.fetch(profile)
+    except RuntimeError as exc:  # includes WrongTerminalError / WrongBrokerError
+        print(f"   YOXLANMADI: {exc}")
+    else:
+        for line in account_orphans.report_lines(orphans, profile):
+            print(line)
 
 
 if __name__ == "__main__":

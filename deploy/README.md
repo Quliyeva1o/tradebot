@@ -66,6 +66,24 @@ iki terminal, iki `.env`.
 FundingPips checkout-unu qurduqdan sonra **iş kompüterindəki taskları
 söndürün** — yoxsa eyni hesabın paper nəticələri iki yerə bölünər.
 
+## Botu söndürəndə brokerdə qalanlar
+
+Demo bot yalnız öz açdığını izləyir. Onu rosterdən çıxaranda və ya maşını başqa
+brokerə keçirəndə, brokerdə hələ açıq mövqeyi və ya pending order-i varsa, o
+sahibsiz qalır. 2026-09-21-də belə oldu: FundingPips-də açıq SPX500 mövqeyi və
+müddəti bitməyən iki reverse order bir gün heç kimin xəbəri olmadan qaldı.
+
+- **Hər checkout-un öz həftəlik hesabatı var** (`WeeklyReport`, şənbə 09:00,
+  broker qovluğunda). `install_tasks.ps1` onu qurur. Hesabatın sonunda, eləcə də
+  `preflight.py`-ın 7-ci bölməsində, hesabda **rosterdəki heç bir botun idarə
+  etmədiyi** mövqe və order-lər sadalanır (`scripts/account_orphans.py`). Əllə
+  yoxlamaq üçün: `.venv\Scripts\python.exe -m scripts.account_orphans`.
+- **Heç nə avtomatik silinmir və ya bağlanmır.** Real mövqe ilə nə etmək insanın
+  qərarıdır; yoxlama yalnız göstərir.
+- **Reverse order-lər:** ORB botu `--reverse-on-stop` olmadan işləyəndə də öz
+  simvolunda qalmış `_sar` order-lərini silir. Əvvəl flag götürüləndə köhnə
+  order-lərə heç kim toxunmurdu.
+
 ## Nə köçür, nə köçmür
 
 Repo daşınabiləndir — `.py`, `.bat` və `.vbs` fayllarının heç birində mütləq yol

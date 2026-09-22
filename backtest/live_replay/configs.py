@@ -54,6 +54,22 @@ def _flag(text: str, name: str, default: str | None = None) -> str | None:
     return match.group(1) if match else default
 
 
+def task_name(bat: str) -> str:
+    """run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo,
+    run_live_fvg_window_ndx100_demo.bat -> FvgWindow_NDX100_Demo (install_tasks.ps1's own rule)."""
+    stem = bat.removeprefix("run_live_").removesuffix(".bat")
+    prefix, family, symbol, mode = stem.split("_")
+    return f"{prefix.capitalize()}{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
+
+
+def launcher_symbol(path: Path) -> str:
+    """The --symbol any launcher passes (this repo's name, not the broker's ticker), whichever runner."""
+    symbol = _flag(path.read_text(encoding="utf-8"), "symbol")
+    if symbol is None:
+        raise ValueError(f"{path.name}: no --symbol")
+    return symbol
+
+
 # The strategy family is whichever runner a launcher calls. The file name's first token only names
 # the task, so a variant launcher such as run_live_orb_breakoutwf_xauusd_paper.bat needs no case.
 _RUNNER_FAMILY = {"run_live_nasdaq_orb.py": "breakout", "run_live_xauusd_orb.py": "sweep"}
