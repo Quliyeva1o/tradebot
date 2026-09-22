@@ -143,12 +143,15 @@ def deployed_configs() -> list[BotConfig]:
 
 
 def _label(config: BotConfig) -> str:
+    # An inverse bot trades the opposite of its label's strategy -- say so, or its report reads
+    # as the breakout's own.
+    inverse = " / TERSI (inverse)" if config.inverse else ""
     if config.family == "breakout":
         label = f"{config.or_minutes}m OR / M{config.scan_minutes} / {config.tp_r:g}R"
-        return label + (" / hefte sonu bagli" if config.weekend_flat else "")
+        return label + (" / hefte sonu bagli" if config.weekend_flat else "") + inverse
     defaults = XauusdOrbLiquiditySweepConfig()
     end = config.entry_window_end or f"{defaults.entry_window_end:%H:%M}"
-    return f"{config.scan_minutes}m OR / {end} / {defaults.fixed_tp_r:g}R"
+    return f"{config.scan_minutes}m OR / {end} / {defaults.fixed_tp_r:g}R" + inverse
 
 
 def closed_live_trades(days: int) -> dict[str, list[dict]]:

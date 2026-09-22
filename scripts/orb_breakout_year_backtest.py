@@ -180,10 +180,11 @@ def write_trades(path: Path, trades: list[TradeRecord]) -> None:
 
 def case(config: BotConfig) -> str:
     """The launcher's own words for what this bot is, in one column."""
+    mode = "Paper" if config.paper else "Demo"
     if config.inverse:
-        return "Paper (inverse)"
+        return f"{mode} (inverse)"
     if config.weekend_flat:
-        return "Paper (həftə sonu bağlı)"
+        return f"{mode} (həftə sonu bağlı)"
     if config.paper:
         return "Paper"
     return "Demo" + (f" (rev {config.reverse_on_stop_r:g}R)" if config.reverse_on_stop_r else "")
