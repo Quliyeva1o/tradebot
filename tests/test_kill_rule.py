@@ -40,13 +40,15 @@ class TestAdoptedRuleIsPinned:
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -5.8)
         assert rule.horizon == 80
 
-    def test_the_fvg_bots_numbers_are_the_ones_fixed_before_it_was_deployed(self) -> None:
-        # scripts/fvg_window_envelope.py, full CFI history with swap, seed 20260922.
+    def test_the_fvg_bots_numbers_are_the_ones_fixed_before_its_first_trade(self) -> None:
+        # scripts/fvg_window_envelope.py, full CFI history with swap, seed 20260922. Adopted at
+        # 25.1/35.4/-14.3 on Bucharest-read bars; revised the same day, before any live trade, to
+        # the same script on the broker's real clock -- tighter on every clause, never looser.
         rule = kr.load_rules()["FvgWindow_NDX100_Demo"]
 
         assert rule.adopted == datetime(2026, 9, 22, 6, 22, 57, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, 25.1), kr.StopClause(80, 35.4))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.3)
+        assert rule.stops == (kr.StopClause(40, 24.8), kr.StopClause(80, 34.7))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.1)
 
     def test_every_rule_names_a_bot_the_roster_deploys(self) -> None:
         assert set(kr.load_rules()) <= set(load_roster())

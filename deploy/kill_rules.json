@@ -2,6 +2,7 @@
   "OrbBreakoutwf_XAUUSD_Demo": {
     "adopted": "2026-09-21T06:59:21+00:00",
     "basis": "Fixed before the first live trade, in commit 0abd3a5 (whose timestamp is 'adopted'). Bootstrap envelopes of the 1-year CFI replay of the Paper twin, artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv: 125 trades, +34.5R. Each stop is the p99 max drawdown of the full-year envelope over that many trades; the checkpoint is its p05 net. See deploy/demo_roster.txt.",
+    "rechecked": "2026-09-22, after the broker clock fix (core/broker_clock.py): that replay was read on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year. Re-replayed on the right clock, same window (2025-09-19..2026-09-18): 119 trades, +31.5R, PF 1.473. scripts/fvg_window_envelope.envelope (100000 draws, seed 20260922) gives p99 DD 17.4R/40 and 22.3R/80, p05 net -5.9R@40 -- against 17.3/22.2/-5.8 from the same method on the old replay. Within bootstrap noise, so the adopted whole-R values stand; raising them after a live trade would be loosening a pre-registered rule.",
     "stops": [
       {"within_trades": 40, "max_drawdown_r": 17.0},
       {"within_trades": 80, "max_drawdown_r": 22.0}
@@ -10,11 +11,12 @@
   },
   "FvgWindow_NDX100_Demo": {
     "adopted": "2026-09-22T06:22:57+00:00",
-    "basis": "Fixed before the bot was deployed, so before any live trade. Bootstrap envelopes (100000 draws, seed 20260922) of scripts/fvg_window_envelope.py: the launcher's own config backtested on CFI US100_Spot M1, 2019-03..2026-09, 732 trades, spread 0.8 and today's CFI swap charged on every night held, PF 1.140, +76.9R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Full history, not the last year (PF 1.27, the rule's best): see that script. See deploy/demo_roster.txt.",
+    "basis": "Fixed before the bot was deployed, so before any live trade. Bootstrap envelopes (100000 draws, seed 20260922) of scripts/fvg_window_envelope.py: the launcher's own config backtested on CFI US100_Spot M1, 2019-03..2026-09, spread 0.8 and today's CFI swap charged on every night held. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Full history, not the last year: see that script. See deploy/demo_roster.txt.",
+    "revised": "2026-09-22, before the bot's first live trade, after the broker clock fix (core/broker_clock.py). The adopted numbers came from the same script reading CFI's bars on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year: 732 trades, PF 1.140, +76.9R, stops 25.1R/40 and 35.4R/80, checkpoint -14.3R@40. On the right clock: 728 trades, PF 1.149, +81.4R, and the envelope below -- slightly TIGHTER, so taking it loosens nothing.",
     "stops": [
-      {"within_trades": 40, "max_drawdown_r": 25.1},
-      {"within_trades": 80, "max_drawdown_r": 35.4}
+      {"within_trades": 40, "max_drawdown_r": 24.8},
+      {"within_trades": 80, "max_drawdown_r": 34.7}
     ],
-    "checkpoint": {"at_trades": 40, "min_net_r": -14.3}
+    "checkpoint": {"at_trades": 40, "min_net_r": -14.1}
   }
 }

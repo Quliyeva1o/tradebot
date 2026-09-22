@@ -81,15 +81,33 @@
 #   Weaker than the XAUUSD bot (+34.5R, PF 1.49 over its year); what it adds is a second symbol.
 #
 # STOP -- take FvgWindow_NDX100_Demo out of this file -- if, counted from its first live trade,
-# drawdown from peak exceeds 25.1R within 40 trades or 35.4R within 80, or if at the 40-trade
-# checkpoint (about 6 months at ~7 trades a month) the net is below -14.3R. Each is the p99 / p05
+# drawdown from peak exceeds 24.8R within 40 trades or 34.7R within 80, or if at the 40-trade
+# checkpoint (about 6 months at ~7 trades a month) the net is below -14.1R. Each is the p99 / p05
 # of the full-history bootstrap (deploy/kill_rules.json). Set before deployment; do not loosen.
+# (Adopted as 25.1 / 35.4 / -14.3; tightened the same day, before any live trade -- see below.)
 #   These are wide because the strategy is: a 29% win rate at 3R means long losing runs are normal.
 #   The same bootstrap stops a copy of the backtest's own edge 5% of the time by trade 40, a copy
 #   with ZERO edge only 11% by trade 40 and 12% by trade 80, one losing 0.2R a trade 38% by trade 80.
 #   So, as for the XAUUSD bot, this rule catches collapse, not decay, and size is the real lever:
 #   0.25% risk, so 25R is 6.25% of the account. At 0.25% the stop is never wide enough for the
 #   0.01-lot minimum to bind (it would take a stop of more than 625 points on this account).
+
+# 2026-09-22: EVERY NUMBER ABOVE WAS MEASURED ON A CLOCK AN HOUR OFF FOR ~3 WEEKS A YEAR.
+# Both brokers' servers run New York close (New York + 7h, on the AMERICAN daylight-saving dates),
+# not the Europe/Bucharest this repo assumed (config/brokers.py SERVER_CLOCKS has the measurement).
+# In the weeks when Europe and the US change clocks on different dates, every replay built the
+# 09:30 range and the 10:00 FVG window from bars an hour early. Re-run on the right clock, same
+# windows and method:
+#   - OrbBreakoutwf_XAUUSD, the year behind its stop rule: 119 trades, +31.5R, PF 1.47 (was 125,
+#     +34.5R, 1.49). Edge decay unchanged: +0.492R/trade to 2026-03-22, +0.062R after (was +0.484
+#     and +0.090). Envelope 17.4R/40, 22.3R/80, -5.9R@40 against 17.3/22.2/-5.8 by the same
+#     bootstrap on the old year -- noise, so its rule stays 17 / 22 / -5.8. Last quarter unchanged,
+#     +2.4R. Over its whole CFI history it weakens: +21.7R, PF 1.03 (was +41.6R, PF 1.06).
+#   - the five cut symbols, their current launchers on CFI: -56.7R over the year, -38.5R over the
+#     last quarter. Still losing in both windows.
+#   - FvgWindow_NDX100, full history with swap: 728 trades, PF 1.149, +81.4R (was 732, 1.140,
+#     +76.9R); last 12 months +13.1R, PF 1.21 (was +17.0R, 1.27). Its envelope is TIGHTER on every
+#     clause, and the bot had no live trade yet, so its rule took the corrected numbers above.
 
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
