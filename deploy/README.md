@@ -27,9 +27,10 @@ işə düşəndə terminalın həqiqətən həmin serverdə olduğunu yoxlayır;
 **işləməkdən imtina edir** (`mt5/connector.ensure_logged_into`).
 
 **Real order icazəsi hesaba görədir.** `deploy/demo_roster.txt` hər Demo botun
-yanında hansı brokerdə işləyə biləcəyini yazır. Tək canlı bot
-(`OrbBreakoutwf_XAUUSD_Demo`) CFI-dədir: onun lot ölçüsü, stop qaydası və
-bootstrap zərfi CFI-nin spread, swap və 0.01-lot minimumu üzərində ölçülüb.
+yanında hansı brokerdə işləyə biləcəyini yazır. İki canlı bot
+(`OrbBreakoutwf_XAUUSD_Demo` və 2026-09-22-dən `FvgWindow_NDX100_Demo`) CFI-dədir:
+onların lot ölçüsü, stop qaydası və bootstrap zərfi CFI-nin spread, swap və
+0.01-lot minimumu üzərində ölçülüb.
 FundingPips-də bütün Demo tasklar **bağlı** qalır, paper botlar işləyir —
 `install_tasks.ps1` bunu özü edir.
 

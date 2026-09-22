@@ -588,7 +588,7 @@ class PaperBroker(IBroker):
         return [PendingOrder(id=o.order_id, symbol=o.request.symbol, order_type=o.request.order_type,
                              volume=o.request.volume, price=o.request.price or 0.0,
                              stop_loss=o.request.stop_loss, take_profit=o.request.take_profit,
-                             comment=o.request.comment)
+                             comment=o.request.comment, expires_at=o.request.expires_at)
                 for o in orders]
 
     # ~7 trading days of M1: a limit working a whole NY day plus a position held

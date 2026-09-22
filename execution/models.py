@@ -102,6 +102,8 @@ class PendingOrder:
     stop_loss: float | None = None
     take_profit: float | None = None
     comment: str = ""
+    expires_at: datetime | None = None
+    """When the venue cancels it unfilled, in real UTC; None for an order that works until cancelled."""
 
 
 class TradeManagerAction(Enum):

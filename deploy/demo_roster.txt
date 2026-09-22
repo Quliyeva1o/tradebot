@@ -68,5 +68,29 @@
 # runs PAPER until someone does that work for it. install_tasks.ps1 asks this machine which
 # broker it is and disables every Demo task not listed for it -- on the workstation, all of them.
 
-# --- the one bot allowed to place real orders ---
+# 2026-09-22: A SECOND REAL BOT, ON A SYMBOL NO OTHER DEMO BOT TRADES -- NDX100 FIRST FVG.
+# FvgWindow_NDX100_Paper has run since 2026-09-15. Backtested on CFI's own US100_Spot M1
+# (scripts/fvg_window_envelope.py, the launcher's exact flags), 2019-03..2026-09:
+#   - 732 trades, PF 1.140, +76.9R with CFI's spread AND today's swap charged; PF 1.200, +106.8R
+#     without swap. The truth lies between: today's swap on every year overstates the low-rate ones.
+#   - swap is the real cost here: 45% of trades are held overnight and a long pays $106.69 per lot
+#     per night. After swap the LONG side is flat (PF 0.998, -0.8R over 409 trades) and every R of
+#     the edge comes from the SHORTS (PF 1.342, +77.7R). Both sides stay on: picking a side after
+#     seeing this is the selection the fib/sweep research warned against.
+#   - last 12 months +17.0R (PF 1.27), last 6 months -2.8R, 2025 -2.4R. Positive in 5 of 8 years.
+#   Weaker than the XAUUSD bot (+34.5R, PF 1.49 over its year); what it adds is a second symbol.
+#
+# STOP -- take FvgWindow_NDX100_Demo out of this file -- if, counted from its first live trade,
+# drawdown from peak exceeds 25.1R within 40 trades or 35.4R within 80, or if at the 40-trade
+# checkpoint (about 6 months at ~7 trades a month) the net is below -14.3R. Each is the p99 / p05
+# of the full-history bootstrap (deploy/kill_rules.json). Set before deployment; do not loosen.
+#   These are wide because the strategy is: a 29% win rate at 3R means long losing runs are normal.
+#   The same bootstrap stops a copy of the backtest's own edge 5% of the time by trade 40, a copy
+#   with ZERO edge only 11% by trade 40 and 12% by trade 80, one losing 0.2R a trade 38% by trade 80.
+#   So, as for the XAUUSD bot, this rule catches collapse, not decay, and size is the real lever:
+#   0.25% risk, so 25R is 6.25% of the account. At 0.25% the stop is never wide enough for the
+#   0.01-lot minimum to bind (it would take a stop of more than 625 points on this account).
+
+# --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
+FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk

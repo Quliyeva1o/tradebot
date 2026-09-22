@@ -9,11 +9,13 @@ The live configuration is read out of the run_live_orb_*_demo.bat files (by
 backtest/live_replay/configs.parse_bat) rather than hardcoded, and the baseline
 is the live-twin replay of exactly that configuration on the broker THIS machine
 is logged into -- the same account whose deals are being counted, resolved from
-.env by config/brokers.py. Change a .bat and the comparison follows it.
+.env by config/brokers.py. Change a .bat and the comparison follows it. The First
+FVG bot (run_live_fvg_*_demo.bat) is not an ORB configuration the replay can model,
+so its baseline is its own backtest with swap (scripts/fvg_window_envelope.py).
 
 Run it where the account is: the VPS reports its CFI bots, the workstation its
 FundingPips ones. A bot the roster does not allow real orders on this account is
-skipped by name, so the one Demo bot rostered on CFI is not reported as live here.
+skipped by name, so the Demo bots rostered on CFI are not reported as live there.
 
 Judgement is deliberately loose: with the handful of trades a 1-2 month sample
 provides, a live PF anywhere near the walk-forward's honest 1.1-1.3 band is
@@ -38,6 +40,7 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 import MetaTrader5 as mt5  # noqa: N813
 
 import config.brokers as machine
+import run_live_first_fvg_window as fvg_runner
 from backtest.live_replay.brokers import deployed_broker, history_path
 from backtest.live_replay.configs import BotConfig, parse_bat
 from backtest.live_replay.engine import run as replay
@@ -53,6 +56,8 @@ from strategy.xauusd_orb_liquidity_sweep import XauusdOrbLiquiditySweepConfig
 REPO = Path(__file__).parent.parent
 BREAKOUT_TAG = "setup_nasdaq_orb_m1"     # STRATEGY_TAG in run_live_nasdaq_orb.py
 SWEEP_TAG = "setup_xauusd_orb"           # STRATEGY_TAG in run_live_xauusd_orb.py
+FVG_TAG = "setup_fvg_window"             # STRATEGY_TAG in strategy/first_fvg_window.py
+FVG_FAMILY = "FvgWindow"
 
 
 def _strategy_label(comment: str) -> str | None:
@@ -64,6 +69,8 @@ def _strategy_label(comment: str) -> str | None:
     for tag, family in ((BREAKOUT_TAG, "Breakout"), (SWEEP_TAG, "Sweep")):
         if comment.startswith(tag):
             return f"{family} reversal" if is_reverse(comment, tag) else family
+    if comment.startswith(FVG_TAG):
+        return FVG_FAMILY
     return None
 
 
@@ -93,10 +100,38 @@ def _roster(path: Path = REPO / "deploy" / "demo_roster.txt",
 
 
 def _task_name(bat: str) -> str:
-    """run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo"""
-    stem = bat.removeprefix("run_live_orb_").removesuffix(".bat")
-    family, symbol, mode = stem.split("_")
-    return f"Orb{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
+    """run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo,
+    run_live_fvg_window_ndx100_demo.bat -> FvgWindow_NDX100_Demo (install_tasks.ps1's own rule)."""
+    stem = bat.removeprefix("run_live_").removesuffix(".bat")
+    prefix, family, symbol, mode = stem.split("_")
+    return f"{prefix.capitalize()}{family.capitalize()}_{symbol.upper()}_{mode.capitalize()}"
+
+
+def deployed_fvg_launchers() -> list[Path]:
+    """Every First FVG Demo launcher. The ORB replay cannot model this strategy, so these are
+    reported beside deployed_configs() rather than parsed into BotConfigs."""
+    return sorted(REPO.glob("run_live_fvg_*_demo.bat"))
+
+
+def fvg_baseline() -> dict:
+    """What the First FVG backtest expects on this machine's broker, swap charged -- or {} without
+    history. It is measured on CFI because that is where the bot is rostered (see
+    scripts/fvg_window_envelope.py); any other broker has no validated expectation to compare to."""
+    from scripts.fvg_window_envelope import backtest_trades
+
+    broker = deployed_broker()
+    if broker.name != "cfi":
+        return {}
+    frame = backtest_trades(broker_name=broker.name)
+    if frame.empty:
+        return {}
+    t = list(zip(frame["day"], frame["r_swap"]))
+    n, wr, pf, net = agg([v for _, v in t])
+    since = date.today() - timedelta(days=365)
+    n1, wr1, pf1, net1 = agg([v for d, v in t if d >= since])
+    span_months = max((max(d for d, _ in t) - min(d for d, _ in t)).days / 30.4, 1)
+    return dict(n=n, wr=wr, pf=pf, net=net, wr_1y=wr1, pf_1y=pf1,
+                green=consistency(t)["green_pct"], per_month=len(t) / span_months)
 
 
 def deployed_configs() -> list[BotConfig]:
@@ -287,6 +322,23 @@ def main() -> None:
             n, pnl = _report_reversals(reversals)
             total_n += n
             total_profit += pnl
+
+    for bat in deployed_fvg_launchers():
+        task = _task_name(bat.name)
+        if roster is not None and task not in roster:
+            print(f"\n### {task}   -- {profile.name} hesabinin rosterinde yoxdur, atlanir")
+            continue
+        args = fvg_runner.launcher_args(bat)
+        ticker = profile.ticker(args.symbol)
+        rows = [r for r in live.get(ticker, []) if r["strategy"] == FVG_FAMILY]
+        label = f"{args.session_start} First FVG / M15 limit / {args.tp_r:g}R"
+        n, pnl = _report_bot(ticker, FVG_FAMILY, label, args.risk_per_trade_pct, rows, fvg_baseline())
+        total_n += n
+        total_profit += pnl
+        if task in rules:
+            rule = rules[task]
+            for line in kill_rule.report_lines(rule, kill_rule.fetch_live_trades(rule, ticker, FVG_TAG)):
+                print(line)
 
     print("\n" + "-" * 104)
     print(f"CEMI: {total_n} bagli trade, P&L ${total_profit:+,.2f}")

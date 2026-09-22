@@ -43,10 +43,16 @@ def test_the_roster_is_read_per_account(tmp_path):
 def test_every_bot_in_the_real_roster_has_a_deployed_bat():
     """A roster name the report cannot map to a .bat would silently drop out of the report."""
     names = report._roster(REPO / "deploy" / "demo_roster.txt")
-    bats = {report._task_name(b.name) for b in REPO.glob("run_live_orb_*_demo.bat")}
+    bats = {report._task_name(b.name) for b in [*REPO.glob("run_live_orb_*_demo.bat"),
+                                                *REPO.glob("run_live_fvg_*_demo.bat")]}
 
     assert names, "the real roster should not be empty"
     assert names <= bats
+
+
+def test_task_names_follow_install_tasks_for_both_launcher_families():
+    assert report._task_name("run_live_orb_breakoutwf_xauusd_demo.bat") == "OrbBreakoutwf_XAUUSD_Demo"
+    assert report._task_name("run_live_fvg_window_ndx100_demo.bat") == "FvgWindow_NDX100_Demo"
 
 
 def test_report_no_longer_consults_the_local_task_scheduler():
@@ -60,16 +66,30 @@ def test_reverse_trades_are_labelled_apart_from_their_bots_own():
     assert report._strategy_label("setup_xauusd_orb_rev_d929727e") == "Sweep"
     assert report._strategy_label("setup_nasdaq_orb_m1_sar884987") == "Breakout reversal"
     assert report._strategy_label("setup_xauusd_orb_sar12884987") == "Sweep reversal"
+    assert report._strategy_label("setup_fvg_window_US1_1a2b3c4d") == "FvgWindow"
     assert report._strategy_label("manual") is None
 
 
 def test_the_report_sees_every_bot_the_roster_deploys():
     """It globbed run_live_orb_breakout_*_demo.bat, so the one bot left on 2026-09-20 --
-    run_live_orb_breakoutwf_xauusd_demo.bat -- was invisible to the only check on it."""
+    run_live_orb_breakoutwf_xauusd_demo.bat -- was invisible to the only check on it. The First FVG
+    bot is not an ORB config at all, so it is seen through its own launchers."""
     roster = report._roster(REPO / "deploy" / "demo_roster.txt")
-    seen = {c.task for c in report.deployed_configs()}
+    seen = ({c.task for c in report.deployed_configs()}
+            | {report._task_name(b.name) for b in report.deployed_fvg_launchers()})
 
     assert roster <= seen
+
+
+def test_the_fvg_launcher_is_read_with_the_bots_own_parser():
+    """The report and the stop-rule envelope must describe the flags the Demo bot really runs."""
+    import run_live_first_fvg_window as runner
+
+    [bat] = report.deployed_fvg_launchers()
+    args = runner.launcher_args(bat)
+
+    assert (args.symbol, args.tp_r, args.session_start, args.risk_per_trade_pct, args.paper) == (
+        "NDX100", 3.0, "10:00", 0.0025, False)
 
 
 def test_the_report_matches_live_deals_by_the_brokers_own_ticker():

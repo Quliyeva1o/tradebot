@@ -66,11 +66,12 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-def test_the_roster_lists_the_one_demo_bot_that_may_trade() -> None:
+def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     """2026-09-20: cut from six to one. Five symbols lost over both the last 12 months and the
-    last 3, so only the weekend-flat XAUUSD bot still places real orders -- the roster file's
-    own comment block carries the numbers."""
-    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo": "cfi"}
+    last 3, so only the weekend-flat XAUUSD bot still places real orders. 2026-09-22: the NDX100
+    First FVG bot joins it, on a symbol no other Demo bot trades. The roster file's own comment
+    blocks carry the numbers."""
+    assert load_roster(REPO) == {"OrbBreakoutwf_XAUUSD_Demo": "cfi", "FvgWindow_NDX100_Demo": "cfi"}
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:

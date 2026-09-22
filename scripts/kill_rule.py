@@ -1,7 +1,7 @@
 """The live bot's pre-registered stop rule, measured on its real trades.
 
-A stop rule nobody checks is not a rule. deploy/demo_roster.txt records, for the one Demo bot,
-thresholds fixed on 2026-09-21 before its first live trade -- and until this module nothing read
+A stop rule nobody checks is not a rule. deploy/demo_roster.txt records, for each Demo bot,
+thresholds fixed before its first live trade (the first on 2026-09-21) -- and until this module nothing read
 them: the weekly report judged live PF by a deliberately loose band, and nothing scheduled it.
 
 The rule is data, in deploy/kill_rules.json, so a change to it is a reviewed diff beside the roster

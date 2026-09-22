@@ -74,6 +74,49 @@ def _mt5_comment(comment: str) -> str:
     return f"{comment[:prefix_length]}_{digest}"
 
 
+def _utcnow() -> datetime:
+    """The real time an order window is judged against. A function so tests can pin it."""
+    return datetime.now(UTC)
+
+
+def _mt5_expiration(expires_at: datetime) -> int:
+    """`expires_at` as the epoch MT5 reads an order's expiration from.
+
+    MT5 speaks the broker's wall clock encoded as if it were UTC -- the same quirk mt5/rates.py
+    corrects for bars and positions -- so a real 04:00 UTC on CFI in summer must be sent as the
+    epoch that reads 07:00. Sending the real instant would keep a limit working three hours past
+    New York midnight. BROKER_TZ is what the bots already trust for every session boundary, and
+    mt5/clock.py refuses entry whenever the broker's own clock disagrees with it.
+    """
+    return int(expires_at.astimezone(BROKER_TZ).replace(tzinfo=UTC).timestamp())
+
+
+def _broker_epoch_to_utc(epoch: int) -> datetime:
+    """The inverse of _mt5_expiration: a broker wall-clock epoch as a real UTC instant."""
+    return datetime.fromtimestamp(int(epoch), tz=UTC).replace(tzinfo=BROKER_TZ).astimezone(UTC)
+
+
+def _check_order_window(order: OrderRequest, is_market: bool, now: datetime) -> None:
+    """Refuses an order window MT5 cannot honour, rather than dropping it silently.
+
+    MT5 has an expiry for pending orders and nothing else: no activation time, and no window at all
+    for a market order. So a valid_from already reached is simply met -- the order is live from
+    now -- while one still ahead would fill early, and an expiry already passed would work a limit
+    the strategy has given up on.
+    """
+    if order.valid_from is None and order.expires_at is None:
+        return
+    if is_market:
+        raise ValueError(f"{order.order_type.name} for {order.symbol}: a market order has no order window "
+                         "in MT5; valid_from/expires_at only apply to pending orders.")
+    if order.valid_from is not None and order.valid_from > now:
+        raise ValueError(f"{order.order_type.name} for {order.symbol}: valid_from {order.valid_from.isoformat()} "
+                         "is still ahead and MT5 has no activation time -- place the order when it is due.")
+    if order.expires_at is not None and order.expires_at <= now:
+        raise ValueError(f"{order.order_type.name} for {order.symbol}: expires_at {order.expires_at.isoformat()} "
+                         "has already passed.")
+
+
 # MQL5's SYMBOL_FILLING_MODE bitmask flags on symbol_info().filling_mode --
 # the Python MetaTrader5 package exposes the request-side ORDER_FILLING_*
 # enum (used below) but not these symbol-side bit names, so the bit values
@@ -285,21 +328,16 @@ class MT5Broker(IBroker):
                 symbol_info() is unavailable (see _resolve_type_filling()),
                 or mt5.order_send() returns None.
             ValueError: If order.order_type is a pending order type
-                (*_LIMIT/*_STOP) and order.price is not set.
+                (*_LIMIT/*_STOP) and order.price is not set, or the order
+                carries a window MT5 cannot honour (see _check_order_window()).
+                expires_at is sent as ORDER_TIME_SPECIFIED on the broker's clock.
         """
-        if order.valid_from is not None or order.expires_at is not None:
-            # Not mapped to MT5's type_time/expiration yet. Sending the order without
-            # them would leave a limit working past the session it was defined for.
-            raise ValueError(
-                "MT5Broker does not support valid_from/expires_at yet; refusing to send "
-                f"{order.order_type.name} for {order.symbol} without its order window."
-            )
+        mt5_type = _ORDER_TYPE_MAP[order.order_type]
+        is_market = order.order_type in _MARKET_ORDER_TYPES
+        _check_order_window(order, is_market, _utcnow())
 
         if not mt5.symbol_select(order.symbol, True):
             raise RuntimeError(f"Symbol {order.symbol} is not available in the MT5 terminal.")
-
-        mt5_type = _ORDER_TYPE_MAP[order.order_type]
-        is_market = order.order_type in _MARKET_ORDER_TYPES
 
         price = order.price
         if price is None:
@@ -328,6 +366,9 @@ class MT5Broker(IBroker):
             request["tp"] = order.take_profit
         if order.comment:
             request["comment"] = _mt5_comment(order.comment)
+        if order.expires_at is not None:
+            request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+            request["expiration"] = _mt5_expiration(order.expires_at)
 
         result = mt5.order_send(request)
         if result is None:
@@ -336,8 +377,13 @@ class MT5Broker(IBroker):
         success = result.retcode in _SUCCESS_RETCODES
         if success:
             logger.info(
-                "Order placed for %s: ticket=%s price=%s", order.symbol, result.order, result.price
+                "Order placed for %s: ticket=%s price=%s%s", order.symbol, result.order, result.price,
+                f" expires {order.expires_at.isoformat()} (MT5 {request['expiration']})"
+                if order.expires_at is not None else "",
             )
+        if success and is_market:
+            # A pending order accepted is not a fill: it has no execution price yet, and logging one
+            # would book a slippage of the whole order price into execution_events.log.
             log_fill(
                 broker="MT5Broker",
                 event="open",
@@ -564,6 +610,12 @@ class MT5Broker(IBroker):
                 stop_loss=order.sl or None,
                 take_profit=order.tp or None,
                 comment=getattr(order, "comment", "") or "",
+                # Read from the expiry itself, not type_time: a broker that stores SPECIFIED as
+                # SPECIFIED_DAY still carries it, and a working-until-cancelled order carries 0.
+                expires_at=(
+                    _broker_epoch_to_utc(order.time_expiration)
+                    if getattr(order, "time_expiration", 0) else None
+                ),
             )
             for order in orders
             if order.type in _PENDING_TYPE_BY_MT5

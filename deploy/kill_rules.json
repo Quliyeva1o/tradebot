@@ -7,5 +7,14 @@
       {"within_trades": 80, "max_drawdown_r": 22.0}
     ],
     "checkpoint": {"at_trades": 40, "min_net_r": -5.8}
+  },
+  "FvgWindow_NDX100_Demo": {
+    "adopted": "2026-09-22T06:22:57+00:00",
+    "basis": "Fixed before the bot was deployed, so before any live trade. Bootstrap envelopes (100000 draws, seed 20260922) of scripts/fvg_window_envelope.py: the launcher's own config backtested on CFI US100_Spot M1, 2019-03..2026-09, 732 trades, spread 0.8 and today's CFI swap charged on every night held, PF 1.140, +76.9R. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Full history, not the last year (PF 1.27, the rule's best): see that script. See deploy/demo_roster.txt.",
+    "stops": [
+      {"within_trades": 40, "max_drawdown_r": 25.1},
+      {"within_trades": 80, "max_drawdown_r": 35.4}
+    ],
+    "checkpoint": {"at_trades": 40, "min_net_r": -14.3}
   }
 }

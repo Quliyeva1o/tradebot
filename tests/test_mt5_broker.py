@@ -306,22 +306,95 @@ class TestPlaceOrder:
             with pytest.raises(ValueError, match="price is required"):
                 broker.place_order(order)
 
-    def test_order_window_is_refused_rather_than_silently_dropped(self) -> None:
-        # An expiry the venue never receives would leave a limit order working
-        # past the session the strategy defined it for.
-        broker = MT5Broker()
-        order = OrderRequest(
-            symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.2, price=29000.0,
-            expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC),
-        )
+    def test_pending_order_without_a_window_works_until_cancelled(self) -> None:
+        order = OrderRequest(symbol="USTEC", order_type=OrderType.BUY_LIMIT, volume=0.2, price=29000.0)
 
         with (
             patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
             patch("execution.mt5_broker.mt5.order_send", return_value=_order_send_result()) as mock_send,
         ):
-            with pytest.raises(ValueError, match="expires_at"):
-                broker.place_order(order)
+            MT5Broker().place_order(order)
+
+        assert "type_time" not in mock_send.call_args[0][0]
+        assert "expiration" not in mock_send.call_args[0][0]
+
+
+class TestPlaceOrderWindow:
+    """expires_at reaches MT5 as ORDER_TIME_SPECIFIED on the broker's wall clock.
+
+    The First FVG limit works until New York midnight: 04:00 UTC in September. MT5 reads every
+    epoch as the broker's wall clock (mt5/rates.py), which Bucharest puts at 07:00 in summer and
+    06:00 in winter. Sending the real instant would keep the limit working three hours longer.
+    """
+
+    NOW = datetime(2026, 9, 14, 14, 32, tzinfo=UTC)
+
+    def _send(self, order: OrderRequest) -> dict:
+        with (
+            patch("execution.mt5_broker._utcnow", return_value=self.NOW),
+            patch("execution.mt5_broker.mt5.symbol_select", return_value=True),
+            patch("execution.mt5_broker.mt5.order_send", return_value=_order_send_result()) as mock_send,
+        ):
+            MT5Broker().place_order(order)
+        return mock_send.call_args[0][0]
+
+    @staticmethod
+    def _limit(**window: datetime) -> OrderRequest:
+        return OrderRequest(symbol="US100_Spot", order_type=OrderType.BUY_LIMIT, volume=0.06,
+                            price=30144.98, stop_loss=30047.61, take_profit=30437.09, **window)
+
+    def test_summer_expiry_is_sent_on_the_broker_clock(self) -> None:
+        sent = self._send(self._limit(expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC)))
+
+        assert sent["type_time"] == mt5.ORDER_TIME_SPECIFIED
+        assert sent["expiration"] == int(datetime(2026, 9, 15, 7, 0, tzinfo=UTC).timestamp())
+
+    def test_winter_expiry_uses_the_winter_offset(self) -> None:
+        self.NOW = datetime(2026, 12, 14, 15, 32, tzinfo=UTC)
+        sent = self._send(self._limit(expires_at=datetime(2026, 12, 15, 5, 0, tzinfo=UTC)))
+
+        assert sent["expiration"] == int(datetime(2026, 12, 15, 7, 0, tzinfo=UTC).timestamp())
+
+    def test_a_valid_from_already_reached_is_simply_met(self) -> None:
+        sent = self._send(self._limit(valid_from=datetime(2026, 9, 14, 14, 30, tzinfo=UTC),
+                                      expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC)))
+
+        assert sent["action"] == mt5.TRADE_ACTION_PENDING
+
+    @pytest.mark.parametrize(("window", "match"), [
+        ({"valid_from": datetime(2026, 9, 14, 15, 0, tzinfo=UTC)}, "activation time"),
+        ({"expires_at": datetime(2026, 9, 14, 14, 0, tzinfo=UTC)}, "already passed"),
+    ])
+    def test_a_window_mt5_cannot_honour_is_refused(self, window: dict, match: str) -> None:
+        with (
+            patch("execution.mt5_broker._utcnow", return_value=self.NOW),
+            patch("execution.mt5_broker.mt5.order_send") as mock_send,
+        ):
+            with pytest.raises(ValueError, match=match):
+                MT5Broker().place_order(self._limit(**window))
         mock_send.assert_not_called()
+
+    def test_a_market_order_with_a_window_is_refused(self) -> None:
+        order = OrderRequest(symbol="US100_Spot", order_type=OrderType.BUY_MARKET, volume=0.06,
+                             expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC))
+        with (
+            patch("execution.mt5_broker._utcnow", return_value=self.NOW),
+            patch("execution.mt5_broker.mt5.order_send") as mock_send,
+        ):
+            with pytest.raises(ValueError, match="market order"):
+                MT5Broker().place_order(order)
+        mock_send.assert_not_called()
+
+    def test_an_accepted_pending_order_is_not_logged_as_a_fill(self) -> None:
+        with patch("execution.mt5_broker.log_fill") as mock_log_fill:
+            self._send(self._limit(expires_at=datetime(2026, 9, 15, 4, 0, tzinfo=UTC)))
+        mock_log_fill.assert_not_called()
+
+    def test_a_market_order_is_still_logged_as_a_fill(self) -> None:
+        order = OrderRequest(symbol="US100_Spot", order_type=OrderType.BUY_MARKET, volume=0.06, price=30150.0)
+        with patch("execution.mt5_broker.log_fill") as mock_log_fill:
+            self._send(order)
+        mock_log_fill.assert_called_once()
 
     def test_stop_loss_and_take_profit_included_when_provided(self) -> None:
         broker = MT5Broker()
@@ -980,3 +1053,18 @@ class TestGetPendingOrders:
         stop_limit = _mt5_order(type_=mt5.ORDER_TYPE_SELL_STOP_LIMIT)
         with patch("execution.mt5_broker.mt5.orders_get", return_value=(stop_limit,)):
             assert MT5Broker().get_pending_orders("XAUUSD") == []
+
+    def test_expiry_is_read_back_as_real_utc(self) -> None:
+        # The inverse of what place_order sends: 07:00 on the broker's summer clock is 04:00 UTC.
+        order = _mt5_order()
+        order.time_expiration = int(datetime(2026, 9, 15, 7, 0, tzinfo=UTC).timestamp())
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=(order,)):
+            [pending] = MT5Broker().get_pending_orders("XAUUSD")
+        assert pending.expires_at == datetime(2026, 9, 15, 4, 0, tzinfo=UTC)
+
+    def test_an_order_without_expiry_reads_back_none(self) -> None:
+        order = _mt5_order()
+        order.time_expiration = 0
+        with patch("execution.mt5_broker.mt5.orders_get", return_value=(order,)):
+            [pending] = MT5Broker().get_pending_orders("XAUUSD")
+        assert pending.expires_at is None
