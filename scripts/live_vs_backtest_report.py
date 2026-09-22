@@ -110,13 +110,11 @@ def deployed_fvg_launchers() -> list[Path]:
 
 def fvg_baseline() -> dict:
     """What the First FVG backtest expects on this machine's broker, swap charged -- or {} without
-    history. It is measured on CFI because that is where the bot is rostered (see
-    scripts/fvg_window_envelope.py); any other broker has no validated expectation to compare to."""
+    history. Measured on this machine's own broker: since 2026-09-22 the bot is rostered on both
+    accounts, each with its stop rule from its own broker's run of scripts/fvg_window_envelope.py."""
     from scripts.fvg_window_envelope import backtest_trades
 
     broker = deployed_broker()
-    if broker.name != "cfi":
-        return {}
     frame = backtest_trades(broker_name=broker.name)
     if frame.empty:
         return {}
