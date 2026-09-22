@@ -7,7 +7,7 @@ import pytest
 
 from backtest.live_replay.configs import BotConfig
 from backtest.live_replay.engine import Flags, run
-from backtest.live_replay.market import BROKER_TZ, NY, FxSeries, frame_from_bars
+from backtest.live_replay.market import DEFAULT_CLOCK, NY, FxSeries, frame_from_bars
 from backtest.live_replay.specs import SymbolSpec
 from core.models import Bar
 
@@ -148,13 +148,19 @@ def _flat_until(bars: list[Bar], last: datetime) -> list[Bar]:
     return bars
 
 
-def test_weekend_flat_closes_at_the_first_poll_from_friday_2340_server_and_pays_no_weekend_swap() -> None:
-    bars = _flat_until(_session(FRIDAY, FLAT), datetime(2026, 9, 11, 16, 47, tzinfo=NY))
-    monday = datetime(2026, 9, 14, 9, 30, tzinfo=NY)
+@pytest.mark.parametrize("friday", [FRIDAY, datetime(2026, 10, 30, 9, 30, tzinfo=NY)])
+def test_weekend_flat_closes_at_the_first_poll_from_friday_2340_server_and_pays_no_weekend_swap(
+    friday: datetime,
+) -> None:
+    # 2026-10-30: Europe has left summer time, New York has not. The server (New York close) is
+    # still on UTC+3, so 23:40 server is 16:40 New York as in any other week.
+    bars = _flat_until(_session(friday, FLAT), friday.replace(hour=16, minute=47))
+    monday = friday.replace(hour=9, minute=30) + timedelta(days=3)
     bars += [_bar(monday + timedelta(minutes=i), 101.5, 101.6, 101.2, 101.4) for i in range(3)]
     trade = _run(bars, config=WEEKEND_FLAT, spec=replace(SYN, swap_long=-7.33))[0]
     assert trade.exit_reason == "WEEKEND_FLAT"
-    assert trade.exit_time.astimezone(BROKER_TZ).strftime("%a %H:%M") == "Fri 23:40"
+    assert trade.exit_time.astimezone(DEFAULT_CLOCK).strftime("%a %H:%M") == "Fri 23:40"
+    assert trade.exit_time.astimezone(NY).strftime("%H:%M") == "16:40"
     assert trade.exit == pytest.approx(101.5)  # a long sells at the bid: that bar's open, no ticks
     assert trade.swap_usd == 0.0
 

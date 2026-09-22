@@ -14,13 +14,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import numpy as np
-import pandas as pd
 
+from core.broker_clock import BrokerClock
 from core.models import SignalDirection
 from strategy.risk_reward import resolve_stop_and_target
 
 from backtest.live_replay.configs import BotConfig
-from backtest.live_replay.market import BROKER_TZ, BarFrame, FxSeries, aggregate
+from backtest.live_replay.market import DEFAULT_CLOCK, BarFrame, FxSeries, aggregate, server_wall
 from backtest.live_replay.pricing import entry_price, exit_on_bar, rollover_days, size_position, swap_usd
 from backtest.live_replay.reversal import reverse_trade
 from backtest.live_replay.signals import make_signals
@@ -40,9 +40,9 @@ POLL_OFFSET_SECONDS = 6
 WEEKEND_FLAT_CUTOFF_MINUTE = 23 * 60 + 40
 
 
-def weekend_flat_due(epoch: int) -> bool:
-    """True from Friday's cutoff, in broker server time, until the week reopens."""
-    server = datetime.fromtimestamp(epoch, BROKER_TZ)
+def weekend_flat_due(epoch: int, clock: BrokerClock = DEFAULT_CLOCK) -> bool:
+    """True from Friday's cutoff, in broker server time (`clock`), until the week reopens."""
+    server = datetime.fromtimestamp(epoch, clock)
     return server.weekday() >= 5 or (
         server.weekday() == 4 and server.hour * 60 + server.minute >= WEEKEND_FLAT_CUTOFF_MINUTE)
 
@@ -99,9 +99,9 @@ class _Position:
     swap_usd: float = 0.0
 
 
-def _server_days(ts: np.ndarray) -> np.ndarray:
+def _server_days(ts: np.ndarray, clock: BrokerClock) -> np.ndarray:
     """yyyymmdd of each bar in broker server time, for spotting midnight rollovers."""
-    local = pd.DatetimeIndex(pd.to_datetime(ts, unit="s", utc=True)).tz_convert(BROKER_TZ)
+    local = server_wall(ts, clock)
     return (local.year * 10000 + local.month * 100 + local.day).to_numpy(dtype=np.int64)
 
 
@@ -116,7 +116,7 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         raise ValueError(f"{config.task}: --reverse-on-stop with --weekend-flat is not modelled")
     scan = aggregate(m1, config.scan_minutes)
     signals = make_signals(config, scan)
-    server_day = _server_days(m1.ts)
+    server_day = _server_days(m1.ts, m1.clock)
     traded: set[str] = set()
     trades: list[TradeRecord] = []
     balance = start_balance
@@ -205,7 +205,7 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
 
     for j in range(len(m1)):
         poll = int(m1.ts[j]) if not flags.poll_clock else poll_time(j)
-        flat_for_weekend = config.weekend_flat and poll is not None and weekend_flat_due(poll)
+        flat_for_weekend = config.weekend_flat and poll is not None and weekend_flat_due(poll, m1.clock)
         if position is not None:
             if flags.swap and j > 0 and server_day[j] > server_day[j - 1]:
                 days = rollover_days(_as_date(server_day[j - 1]), _as_date(server_day[j]),

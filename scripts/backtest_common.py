@@ -22,17 +22,19 @@ from __future__ import annotations
 
 import csv
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
+from config.brokers import history_clock
+
 # All backtests work in New York time (the session all three strategies are
-# defined against); the broker's CSV timestamps are Europe/Bucharest wall
-# clock, so load_m1 converts once at load and nothing downstream re-localises.
+# defined against); the broker's CSV timestamps are its server's wall clock
+# (config/brokers.history_clock names which, per file), so load_m1 converts once
+# at load and nothing downstream re-localises.
 NY = ZoneInfo("America/New_York")
-BROKER_TZ = ZoneInfo("Europe/Bucharest")
 
 
 # --------------------------------------------------------------------------
@@ -42,16 +44,25 @@ BROKER_TZ = ZoneInfo("Europe/Bucharest")
 def load_m1(path: str) -> pd.DataFrame:
     """Loads a broker M1 CSV, converting broker-local timestamps to NY time.
 
+    The file's server clock comes from the broker folder it sits in
+    (config/brokers.history_clock): New York close for data/history/cfi*/ and
+    data/history/fundingpips/, Europe/Bucharest for the legacy files directly in
+    data/history/. Until 2026-09-22 every file was read as Bucharest, which put
+    CFI's and FundingPips' bars an hour late for about three weeks a year.
+
     Also usable for any other bar size (the parser only cares about the
     OHLCV+time columns) -- `order_flow_daily_bias_backtest.run_backtest_native_h1`
     relies on that to feed it a native H1 file.
     """
+    clock = history_clock(path)
+    # The clock's own zone plus its whole-hour shift: the same instant as
+    # replace(tzinfo=clock) with fold=0, without a Python-level tzinfo per row.
+    zone, shift = clock.zone, timedelta(hours=clock.shift_hours)
     rows = []
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             naive = datetime.strptime(row["time"], "%Y-%m-%d %H:%M:%S")
-            broker_local = naive.replace(tzinfo=BROKER_TZ)
-            ny_ts = broker_local.astimezone(NY)
+            ny_ts = (naive - shift).replace(tzinfo=zone).astimezone(NY)
             rows.append(
                 (ny_ts, float(row["open"]), float(row["high"]), float(row["low"]),
                  float(row["close"]), float(row["volume"]))

@@ -570,10 +570,10 @@ class MT5Broker(IBroker):
                 stop_loss=pos.sl or None,
                 take_profit=pos.tp or None,
                 profit=pos.profit,
-                # pos.time is MT5's raw epoch -- broker-local (Bucharest) wall-clock
+                # pos.time is MT5's raw epoch -- the broker's server wall-clock
                 # mislabeled as UTC, same as copy_rates_*()'s `time` field (see
-                # mt5/rates.py's BROKER_TZ comment). Re-label to Bucharest then
-                # convert to genuine UTC, matching rates_to_bars()'s fix.
+                # mt5/rates.py's BROKER_TZ comment). Re-label to the server clock
+                # then convert to genuine UTC, matching rates_to_bars()'s fix.
                 timestamp=datetime.fromtimestamp(int(pos.time), tz=UTC).replace(tzinfo=BROKER_TZ).astimezone(UTC),
                 # Carries the opening setup_id, so a caller can tell WHICH
                 # strategy owns this position -- essential when two bots

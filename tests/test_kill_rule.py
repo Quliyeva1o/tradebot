@@ -20,7 +20,9 @@ T0 = datetime(2026, 9, 22, 14, 0, tzinfo=UTC)
 RULE = kr.KillRule(task="T", adopted=datetime(2026, 9, 21, 6, 59, 21, tzinfo=UTC),
                    stops=(kr.StopClause(40, 17.0), kr.StopClause(80, 22.0)),
                    checkpoint_at=40, checkpoint_min_net_r=-5.8)
-BUCHAREST = str(kr.BROKER_TZ) == "Europe/Bucharest"
+# The expected offsets below are the server's September UTC+3: New York close on both brokers, and
+# also what an MT5_BROKER_TZ override to Europe/Bucharest reads in September.
+SERVER_ON_UTC_PLUS_3 = datetime(2026, 9, 21, tzinfo=UTC).astimezone(kr.BROKER_TZ).utcoffset() == timedelta(hours=3)
 
 
 def _trades(rs: list[float]) -> list[kr.LiveTrade]:
@@ -69,10 +71,10 @@ class TestMt5Constants:
         assert kr.DEAL_TYPE_BUY == mt5.DEAL_TYPE_BUY
 
 
-@pytest.mark.skipif(not BUCHAREST, reason="the expected offsets are CFI's Europe/Bucharest")
+@pytest.mark.skipif(not SERVER_ON_UTC_PLUS_3, reason="the expected offsets are the server's September UTC+3")
 class TestDealTime:
     def test_a_summer_broker_stamp_is_three_hours_ahead_of_utc(self) -> None:
-        stamp = datetime(2026, 9, 22, 16, 30, tzinfo=UTC)   # how MT5 encodes 16:30 Bucharest
+        stamp = datetime(2026, 9, 22, 16, 30, tzinfo=UTC)   # how MT5 encodes 16:30 server time
 
         assert kr.deal_time_utc(int(stamp.timestamp())) == datetime(2026, 9, 22, 13, 30, tzinfo=UTC)
 
@@ -164,7 +166,7 @@ class TestPairTrades:
 
         assert [t.position for t in _pair(deals)] == [2, 3, 1]
 
-    @pytest.mark.skipif(not BUCHAREST, reason="the expected offsets are CFI's Europe/Bucharest")
+    @pytest.mark.skipif(not SERVER_ON_UTC_PLUS_3, reason="the expected offsets are the server's September UTC+3")
     def test_the_adoption_boundary_is_read_in_real_utc_not_broker_time(self) -> None:
         # 08:00 on the broker's clock is 05:00 UTC -- before the 06:59 adoption. Read raw, the
         # stamp says 08:00 and this trade would wrongly count against the new bot.

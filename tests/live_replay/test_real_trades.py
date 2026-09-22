@@ -11,17 +11,16 @@ from __future__ import annotations
 import csv
 from datetime import UTC, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from backtest.live_replay.configs import BotConfig
 from backtest.live_replay.engine import run
-from backtest.live_replay.market import DEFAULT_DATA_DIR, load_fx, load_m1
+from backtest.live_replay.market import DEFAULT_CLOCK, DEFAULT_DATA_DIR, load_fx, load_m1
 from backtest.live_replay.specs import load_specs
 from backtest.live_replay.ticks import TickCache
 
-BROKER_TZ = ZoneInfo("Europe/Bucharest")
+BROKER_TZ = DEFAULT_CLOCK  # FundingPips' server clock, which the fixture's times are written in
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "live_replay"
 REPLAY_FROM = datetime(2026, 8, 24, tzinfo=UTC)
 REPLAY_TO = datetime(2026, 9, 16, tzinfo=UTC)

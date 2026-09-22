@@ -29,6 +29,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from core.broker_clock import BUCHAREST, NEW_YORK_CLOSE, BrokerClock
+
 # The specs files live with the replay that captured them (scripts/capture_symbol_specs.py).
 # They are broker profiles, not backtest data: server, tickers and contract facts.
 SPECS_DIR = Path(__file__).resolve().parent.parent / "backtest" / "live_replay"
@@ -36,6 +38,31 @@ SPECS_FILES = {
     "fundingpips": SPECS_DIR / "symbol_specs.json",
     "cfi": SPECS_DIR / "symbol_specs_cfi.json",
 }
+
+# Each broker's server clock: what the raw epoch on every MT5 bar, tick, deal, position and order
+# expiry reads as (core/broker_clock.py). Both are New York close -- New York + 7h, changing on the
+# AMERICAN daylight-saving dates -- and not Europe/Bucharest, which this project assumed until
+# 2026-09-22 and which is an hour off for about three weeks a year.
+#
+# Measured on each broker's own M1 history, in every week where the two rules disagree, 2019-2026
+# (15 windows per broker): the US cash open at 09:30 New York jumps the index's one-minute range
+# 3-9x against the ten minutes before it, and that jump sits at 16:30 server time in every one of
+# those weeks -- where Bucharest would put it at 15:30. 15:30 jumps only on the days with an 08:30
+# New York release (payrolls: 16x on 2023-11-03), and 14:30, which Bucharest would make the release
+# time, stays quiet. FundingPips' gold agrees from 2012 on; its earlier gold is too sparse to say.
+#
+# A broker added here without that measurement is a guess. The live check in mt5/clock.py compares
+# the running server's clock with its prediction on every entry, so a wrong entry here refuses
+# trades rather than mis-timing them -- but only in the weeks where the two rules differ.
+SERVER_CLOCKS: dict[str, BrokerClock] = {
+    "fundingpips": NEW_YORK_CLOSE,
+    "cfi": NEW_YORK_CLOSE,
+}
+
+# The history CSVs that sit directly in data/history/ came from this project's first brokers (FXTM,
+# HFM) and were always read as Bucharest. Those servers can no longer be measured, and the scripts
+# that read those files are the old research ones, so their reading is left as it was.
+LEGACY_HISTORY_CLOCK = BUCHAREST
 
 
 class UnknownBrokerError(LookupError):
@@ -49,6 +76,11 @@ class BrokerProfile:
     name: str
     server: str
     tickers: dict[str, str]  # this repo's symbol -> the broker's own ticker
+
+    @property
+    def clock(self) -> BrokerClock:
+        """The wall clock this broker's server stamps everything in -- see SERVER_CLOCKS."""
+        return SERVER_CLOCKS[self.name]
 
     def ticker(self, symbol: str) -> str:
         """The name to send to MT5 for `symbol`.
@@ -120,3 +152,18 @@ def local() -> BrokerProfile:
             "(see deploy/README.md). Copy .env.example and fill it in."
         )
     return for_server(server)
+
+
+def history_clock(path: str | Path) -> BrokerClock:
+    """The server clock a history CSV's "time" column is written in, from the folder it sits in.
+
+    The downloaders write each bar's raw server wall clock, so a file carries the clock of the
+    broker whose terminal wrote it, and each broker's files live in its own folder:
+    data/history/cfi/, data/history/cfi_portfolio/, data/history/fundingpips/. A file directly in
+    data/history/ is from before that layout -- see LEGACY_HISTORY_CLOCK.
+    """
+    folder = Path(path).parent.name.lower()
+    for name, clock in SERVER_CLOCKS.items():
+        if folder == name or folder.startswith(f"{name}_"):
+            return clock
+    return LEGACY_HISTORY_CLOCK

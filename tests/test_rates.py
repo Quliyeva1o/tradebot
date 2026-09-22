@@ -1,9 +1,10 @@
 """Unit tests for mt5/rates.py's timezone handling.
 
 Covers two related fixes:
-- BROKER_TZ can be overridden via the MT5_BROKER_TZ env var (it was
-  previously hardcoded to "Europe/Bucharest", verified only for
-  ForexTimeFXTM-Demo02 -- see BROKER_TZ's module-level docstring).
+- BROKER_TZ is the clock of the broker .env names (config/brokers.py
+  SERVER_CLOCKS -- New York close for both), overridable via the
+  MT5_BROKER_TZ env var. It was hardcoded to "Europe/Bucharest" until
+  2026-09-22, which both brokers turned out not to run.
 - rates_to_bars() disambiguates the one ambiguous local hour per year during
   BROKER_TZ's autumn DST fall-back, instead of always picking Python's
   fold=0 default (which silently produces a backwards timestamp jump for the
@@ -11,7 +12,7 @@ Covers two related fixes:
 """
 
 import importlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -41,45 +42,62 @@ def _epoch_for_naive_wallclock(year: int, month: int, day: int, hour: int, minut
 
 
 class TestBrokerTzOverride:
-    def test_defaults_to_europe_bucharest_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @staticmethod
+    def _reloaded(monkeypatch: pytest.MonkeyPatch, **env: str):
+        """mt5.rates re-imported under `env` (MT5_BROKER_TZ cleared unless given)."""
         monkeypatch.delenv("MT5_BROKER_TZ", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        import mt5.rates as rates_module
+
+        return importlib.reload(rates_module)
+
+    @pytest.fixture(autouse=True)
+    def _restore(self, monkeypatch: pytest.MonkeyPatch):
+        yield
+        monkeypatch.undo()
         import mt5.rates as rates_module
 
         importlib.reload(rates_module)
-        try:
-            assert str(rates_module.BROKER_TZ) == "Europe/Bucharest"
-        finally:
-            monkeypatch.delenv("MT5_BROKER_TZ", raising=False)
-            importlib.reload(rates_module)
 
-    def test_env_var_overrides_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MT5_BROKER_TZ", "America/New_York")
-        import mt5.rates as rates_module
+    @pytest.mark.parametrize("server", ["CFI11-Demo", "FundingPips-Trial"])
+    def test_defaults_to_the_brokers_own_clock(self, monkeypatch: pytest.MonkeyPatch, server: str) -> None:
+        """Both brokers' servers were measured to run New York close (config/brokers.py)."""
+        rates_module = self._reloaded(monkeypatch, MT5_SERVER=server)
+        assert str(rates_module.BROKER_TZ) == "America/New_York+7"
 
-        importlib.reload(rates_module)
-        try:
-            assert str(rates_module.BROKER_TZ) == "America/New_York"
-        finally:
-            monkeypatch.delenv("MT5_BROKER_TZ", raising=False)
-            importlib.reload(rates_module)
+    def test_no_broker_at_all_falls_back_to_new_york_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        rates_module = self._reloaded(monkeypatch, MT5_SERVER="")
+        assert str(rates_module.BROKER_TZ) == "America/New_York+7"
+
+    @pytest.mark.parametrize("value", ["America/New_York", "America/New_York+7", "Europe/Bucharest"])
+    def test_env_var_overrides_the_default(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        rates_module = self._reloaded(monkeypatch, MT5_SERVER="CFI11-Demo", MT5_BROKER_TZ=value)
+        assert str(rates_module.BROKER_TZ) == value
 
 
 class TestRatesToBarsDstFallBack:
-    """Europe/Bucharest exits DST on 2026-10-25: local clocks go from 04:00
-    EEST (UTC+3) back to 03:00 EET (UTC+2), so the 03:00-03:59 wall-clock
-    hour is reported by MT5 TWICE in one real H1 bar sequence."""
+    """A server clock's autumn fall-back reports one wall-clock hour TWICE in one real H1 bar
+    sequence. New York close (both brokers) falls back with New York on 2026-11-01, from 09:00
+    UTC+3 to 08:00 UTC+2, so 08:00-08:59 repeats; Europe/Bucharest did the same with 03:00-03:59
+    on 2026-10-25."""
 
-    def test_repeated_hour_resolves_to_strictly_increasing_utc_timestamps(self) -> None:
-        from mt5.rates import rates_to_bars
+    @pytest.mark.parametrize(("clock", "day", "hours"), [
+        ("America/New_York+7", (2026, 11, 1), (7, 8, 8, 9)),
+        ("Europe/Bucharest", (2026, 10, 25), (2, 3, 3, 4)),
+    ])
+    def test_repeated_hour_resolves_to_strictly_increasing_utc_timestamps(
+        self, monkeypatch: pytest.MonkeyPatch, clock: str, day: tuple[int, int, int],
+        hours: tuple[int, ...],
+    ) -> None:
+        import mt5.rates as rates_module
+        from core.broker_clock import BrokerClock
 
-        rows = [
-            (_epoch_for_naive_wallclock(2026, 10, 25, 2, 30), 1, 1, 1, 1, 100, 0),  # unambiguous EEST
-            (_epoch_for_naive_wallclock(2026, 10, 25, 3, 30), 1, 1, 1, 1, 100, 0),  # ambiguous, 1st (EEST)
-            (_epoch_for_naive_wallclock(2026, 10, 25, 3, 30), 1, 1, 1, 1, 100, 0),  # ambiguous, 2nd (EET)
-            (_epoch_for_naive_wallclock(2026, 10, 25, 4, 30), 1, 1, 1, 1, 100, 0),  # unambiguous EET
-        ]
+        monkeypatch.setattr(rates_module, "BROKER_TZ", BrokerClock.parse(clock))
+        # unambiguous summer, ambiguous 1st (summer), ambiguous 2nd (winter), unambiguous winter
+        rows = [(_epoch_for_naive_wallclock(*day, hour, 30), 1, 1, 1, 1, 100, 0) for hour in hours]
 
-        bars = rates_to_bars(_fake_rates(rows), point=0.01)
+        bars = rates_module.rates_to_bars(_fake_rates(rows), point=0.01)
 
         timestamps = [b.timestamp for b in bars]
         assert timestamps == sorted(timestamps)
@@ -88,6 +106,8 @@ class TestRatesToBarsDstFallBack:
         # local hour -- the real-world cadence of consecutive H1 bars.
         deltas = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(3)]
         assert deltas == [3600.0, 3600.0, 3600.0]
+        # the first bar is on the summer offset, UTC+3
+        assert timestamps[0] == datetime(*day, hours[0], 30, tzinfo=UTC) - timedelta(hours=3)
 
     def test_unambiguous_times_are_unaffected(self) -> None:
         from mt5.rates import rates_to_bars

@@ -2,16 +2,18 @@
 
 Written from two real events. On 2026-09-21 at 07:24 UTC the VPS's system clock jumped
 two hours forward and Windows Time pulled it back 2m04s later; logs/trade_events.log
-carries two future-dated polls and nothing else noticed. And mt5/rates.py's BROKER_TZ
-(Europe/Bucharest) leaves DST on 2026-10-25 while New York leaves it on 2026-11-01, so a
-broker keeping US DST sits an hour away from it for that week -- which would build the
-09:30 opening range out of 08:30 bars, silently, for seven trading days.
+carries two future-dated polls and nothing else noticed. And mt5/rates.py's BROKER_TZ was
+Europe/Bucharest until 2026-09-22, while both brokers run New York close: Bucharest leaves
+DST on 2026-10-25, New York on 2026-11-01, so for that week every bar would have been an hour
+off and the 09:30 opening range built out of 08:30 bars.
 """
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import mt5.clock as clock_mod
+from core.broker_clock import BUCHAREST, NEW_YORK_CLOSE
 from mt5.clock import MAX_PLAUSIBLE_HOURS, TOLERANCE_SECONDS, ClockVerdict, measure
 from mt5.rates import BROKER_TZ
 
@@ -50,19 +52,35 @@ def test_the_2026_09_21_two_hour_jump_is_caught() -> None:
     assert "SAAT" in v.detail
 
 
-def test_the_october_dst_divergence_is_caught() -> None:
-    """2026-10-28: Bucharest is already on UTC+2, a US-DST broker is still on UTC+3."""
-    late_october = datetime(2026, 10, 28, 14, 15, tzinfo=UTC)
-    assert late_october.astimezone(BROKER_TZ).utcoffset() == timedelta(hours=2), (
+LATE_OCTOBER = datetime(2026, 10, 28, 14, 15, tzinfo=UTC)  # Bucharest on UTC+2, New York close on UTC+3
+
+
+def _new_york_close_tick(now: datetime) -> int:
+    """The raw MT5 epoch a New York close server -- both real brokers -- reports at `now`."""
+    return int(now.astimezone(NEW_YORK_CLOSE).replace(tzinfo=UTC).timestamp())
+
+
+def test_the_brokers_real_clock_agrees_in_the_week_bucharest_would_not() -> None:
+    """The bug this project had: with the clock set right, 2026-10-28 is an ordinary day."""
+    assert BROKER_TZ == NEW_YORK_CLOSE, "with no .env, and on both brokers, BROKER_TZ is New York close"
+
+    v = measure("XAUUSD_", now=LATE_OCTOBER, tick_time=_new_york_close_tick(LATE_OCTOBER))
+
+    assert (v.wrong, v.hours_off, v.measurable) == (False, 0, True)
+
+
+def test_a_clock_left_on_bucharest_is_caught_in_that_week(monkeypatch) -> None:
+    """2026-10-28: Bucharest is already on UTC+2, the New York close server still on UTC+3."""
+    monkeypatch.setattr(clock_mod, "BROKER_TZ", BUCHAREST)
+    assert LATE_OCTOBER.astimezone(BUCHAREST).utcoffset() == timedelta(hours=2), (
         "this test only means anything while Bucharest has left DST"
     )
-    us_dst_broker = _tick(late_october, timedelta(hours=1))
 
-    v = measure("XAUUSD_", now=late_october, tick_time=us_dst_broker)
+    v = measure("XAUUSD_", now=LATE_OCTOBER, tick_time=_new_york_close_tick(LATE_OCTOBER))
 
     assert v.wrong
     assert v.hours_off == 1
-    assert BROKER_TZ.key in v.detail
+    assert "Europe/Bucharest" in v.detail
 
 
 def test_a_closed_market_is_not_reported_as_a_clock_fault() -> None:

@@ -44,8 +44,8 @@ def test_ticks_are_never_fetched_from_a_terminal_on_another_broker(tmp_path, mon
     assert not any(tmp_path.rglob("*.csv"))
 
 
-def test_ticks_are_fetched_under_the_brokers_own_ticker(tmp_path, monkeypatch) -> None:
-    asked: list[str] = []
-    monkeypatch.setattr(brokers, "mt5_fetch", lambda symbol, a, b: asked.append(symbol) or [])
+def test_ticks_are_fetched_under_the_brokers_own_ticker_and_clock(tmp_path, monkeypatch) -> None:
+    asked: list[tuple] = []
+    monkeypatch.setattr(brokers, "mt5_fetch", lambda symbol, a, b, clock: asked.append((symbol, clock)) or [])
     tick_cache(_cfi_like(tmp_path), logged_into="CFI11-Demo").window("XAUUSD", 1_790_000_000, 60)
-    assert asked == ["XAUUSD_"]
+    assert asked == [("XAUUSD_", machine.SERVER_CLOCKS["cfi"])]

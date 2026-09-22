@@ -87,12 +87,13 @@ def _grace_bars(timeframe_str: str) -> int:
     return max(1, SIGNAL_GRACE_MINUTES // per_bar)
 
 
-# --weekend-flat. FundingPips closes gold at 23:48 broker server time every Friday (measured
-# 2024-09..2026-09): 16:48 New York most weeks, but 17:48 in the weeks when only one side of the
-# Atlantic has changed its clocks -- so the cutoff is in server time, not New York time. 23:40
-# leaves four polls before the close. Early closes before US holidays (12:54 NY on 2026-06-19
-# and 2026-07-03) come before the cutoff, so a position open on those Fridays is still carried
-# over the weekend.
+# --weekend-flat. Friday's last gold bar, in broker server time (measured 2024-09..2026-09):
+# 23:48-23:49 on FundingPips, 23:54-23:57 on CFI. Both servers run New York close (config/brokers.py
+# SERVER_CLOCKS), so that is 16:48-16:57 New York every week. An earlier note here said 17:48 in the
+# weeks when only one side of the Atlantic had changed its clocks; that was the old Europe/Bucharest
+# reading of the same bars. 23:40 leaves four polls before the earlier of the two closes. Early
+# closes before US holidays (12:54 NY on 2026-06-19 and 2026-07-03) come before the cutoff, so a
+# position open on those Fridays is still carried over the weekend.
 WEEKEND_FLAT_CUTOFF = dtime(23, 40)
 
 

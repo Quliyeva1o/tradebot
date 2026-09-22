@@ -1,9 +1,11 @@
 """Bars and FX rates the replay trades on.
 
-The history CSVs hold BID bars whose "time" column is broker server clock (Europe/Bucharest,
-see data/download_history.py's write_bars_csv) and whose "spread" column is already in price
-units (mt5/rates.py multiplies MT5's integer points by the symbol's point size). Everything
-here works in genuine UTC epoch seconds, which is what Bar.timestamp carries live.
+The history CSVs hold BID bars whose "time" column is the broker's server clock (New York close
+for both brokers -- config/brokers.py SERVER_CLOCKS -- see data/download_history.py's
+write_bars_csv) and whose "spread" column is already in price units (mt5/rates.py multiplies MT5's
+integer points by the symbol's point size). Everything here works in genuine UTC epoch seconds,
+which is what Bar.timestamp carries live; a BarFrame keeps the clock its file was written in for
+the few things that happen on the server's clock (swap at server midnight, the Friday cutoff).
 """
 
 from __future__ import annotations
@@ -17,11 +19,13 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from config.brokers import SERVER_CLOCKS, history_clock
+from core.broker_clock import BrokerClock
 from core.models import Bar
 
-BROKER_TZ = ZoneInfo("Europe/Bucharest")
 NY = ZoneInfo("America/New_York")
 DEFAULT_DATA_DIR = Path("data/history/fundingpips")
+DEFAULT_CLOCK = SERVER_CLOCKS["fundingpips"]  # DEFAULT_DATA_DIR's
 
 
 @dataclass
@@ -36,6 +40,7 @@ class BarFrame:
     low: np.ndarray
     close: np.ndarray
     spread: np.ndarray
+    clock: BrokerClock = DEFAULT_CLOCK  # the server clock the source file was written in
     ts_close: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
@@ -54,15 +59,36 @@ class BarFrame:
         return int(np.searchsorted(self.ts_close, epoch, side="right"))
 
 
+def server_wall_to_utc(naive: pd.Series, clock: BrokerClock) -> pd.Series:
+    """Naive server wall-clock readings as real UTC instants.
+
+    pandas cannot localize to a BrokerClock (it re-resolves zones by IANA key), so the reading is
+    moved into the clock's real zone first: New York close 16:30 is New York 09:30. The autumn hour
+    that occurs twice resolves to the first (summer-time) reading, matching
+    scripts/backtest_common.load_m1's datetime.replace(tzinfo=...) (fold=0).
+    """
+    in_zone = naive - pd.Timedelta(hours=clock.shift_hours)
+    return in_zone.dt.tz_localize(clock.zone, ambiguous=np.ones(len(naive), dtype=bool),
+                                  nonexistent="shift_forward").dt.tz_convert("UTC")
+
+
+def server_wall(ts: np.ndarray, clock: BrokerClock) -> pd.DatetimeIndex:
+    """UTC epoch seconds as naive server wall-clock readings -- the inverse of server_wall_to_utc."""
+    utc = pd.DatetimeIndex(pd.to_datetime(ts, unit="s", utc=True))
+    return utc.tz_convert(clock.zone).tz_localize(None) + pd.Timedelta(hours=clock.shift_hours)
+
+
 def load_bars(path: Path, symbol: str, minutes: int, start: datetime | None = None,
-              end: datetime | None = None) -> BarFrame:
-    """Reads one history CSV into a BarFrame."""
+              end: datetime | None = None, clock: BrokerClock | None = None) -> BarFrame:
+    """Reads one history CSV into a BarFrame.
+
+    `clock` is the server clock the file was written in; by default it is read from the broker
+    folder the file sits in (config/brokers.history_clock).
+    """
+    clock = clock if clock is not None else history_clock(path)
     df = pd.read_csv(path)
     naive = pd.to_datetime(df["time"], format="%Y-%m-%d %H:%M:%S")
-    # The autumn hour that occurs twice resolves to the first (summer-time) reading, matching
-    # scripts/backtest_common.load_m1's datetime.replace(tzinfo=...) (fold=0).
-    local = naive.dt.tz_localize(BROKER_TZ, ambiguous=np.ones(len(df), dtype=bool),
-                                 nonexistent="shift_forward")
+    local = server_wall_to_utc(naive, clock)
     # pandas 3 keeps microsecond units; dividing Timedeltas avoids any unit assumption.
     epoch = ((local - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).to_numpy(dtype=np.int64)
     order = np.argsort(epoch, kind="stable")
@@ -75,7 +101,7 @@ def load_bars(path: Path, symbol: str, minutes: int, start: datetime | None = No
     values = {col: df[col].to_numpy(dtype=float)[order][mask] for col in ("open", "high", "low", "close")}
     spread = (df["spread"].fillna(0.0).to_numpy(dtype=float)[order][mask] if "spread" in df
               else np.zeros(int(mask.sum())))
-    return BarFrame(symbol=symbol, minutes=minutes, ts=epoch[mask], spread=spread, **values)
+    return BarFrame(symbol=symbol, minutes=minutes, ts=epoch[mask], spread=spread, clock=clock, **values)
 
 
 def load_m1(symbol: str, data_dir: Path = DEFAULT_DATA_DIR, start: datetime | None = None,
@@ -101,7 +127,8 @@ def trim_to_real_m1(m1: BarFrame, min_bars: int = 200_000) -> BarFrame:
         start = int(year)
     i = int(np.searchsorted(m1.ts, int(datetime(start, 1, 1, tzinfo=UTC).timestamp())))
     return BarFrame(symbol=m1.symbol, minutes=m1.minutes, ts=m1.ts[i:], open=m1.open[i:],
-                    high=m1.high[i:], low=m1.low[i:], close=m1.close[i:], spread=m1.spread[i:])
+                    high=m1.high[i:], low=m1.low[i:], close=m1.close[i:], spread=m1.spread[i:],
+                    clock=m1.clock)
 
 
 def aggregate(m1: BarFrame, minutes: int) -> BarFrame:
@@ -113,10 +140,11 @@ def aggregate(m1: BarFrame, minutes: int) -> BarFrame:
     ends = np.r_[starts[1:], len(bucket)] - 1
     return BarFrame(symbol=m1.symbol, minutes=minutes, ts=bucket[starts], open=m1.open[starts],
                     high=np.maximum.reduceat(m1.high, starts), low=np.minimum.reduceat(m1.low, starts),
-                    close=m1.close[ends], spread=m1.spread[starts])
+                    close=m1.close[ends], spread=m1.spread[starts], clock=m1.clock)
 
 
-def frame_from_bars(symbol: str, minutes: int, bars: Sequence[Bar]) -> BarFrame:
+def frame_from_bars(symbol: str, minutes: int, bars: Sequence[Bar],
+                    clock: BrokerClock = DEFAULT_CLOCK) -> BarFrame:
     """A BarFrame from Bar objects -- for tests and for feeding hand-built sessions."""
     return BarFrame(symbol=symbol, minutes=minutes,
                     ts=np.array([int(b.timestamp.timestamp()) for b in bars], dtype=np.int64),
@@ -124,7 +152,7 @@ def frame_from_bars(symbol: str, minutes: int, bars: Sequence[Bar]) -> BarFrame:
                     high=np.array([b.high for b in bars], dtype=float),
                     low=np.array([b.low for b in bars], dtype=float),
                     close=np.array([b.close for b in bars], dtype=float),
-                    spread=np.array([b.spread for b in bars], dtype=float))
+                    spread=np.array([b.spread for b in bars], dtype=float), clock=clock)
 
 
 @dataclass(frozen=True)

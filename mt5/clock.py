@@ -11,12 +11,12 @@ Two silent failures live behind this check, and neither shows up in any log toda
    a log nobody reads during a session.
 
 2. BROKER_TZ. mt5/rates.py relabels every MT5 bar from the broker's wall clock into real
-   UTC, and the timezone it uses was confirmed once, on an account this project no longer
-   trades (see that module's comment -- it has never been verified for CFI). Europe/
-   Bucharest leaves DST on 2026-10-25; New York leaves it on 2026-11-01. A broker that
-   keeps US DST is an hour away from Bucharest for that whole week, so every bar would be
-   stamped an hour early and the 09:30 opening range would be built from 08:30 bars --
-   for seven trading days, in silence.
+   UTC, and the clock it uses is a claim about the broker (config/brokers.py SERVER_CLOCKS).
+   Until 2026-09-22 that claim was Europe/Bucharest, and both brokers turned out to run
+   New York close instead: the same UTC+2/+3, changing on the American dates. From
+   2026-10-25, when Bucharest leaves DST a week before New York, every bar would have been
+   stamped an hour late and the 09:30 opening range built from 08:30 bars. This check is
+   what would have caught it -- by refusing every entry for that week.
 
 Both are the same measurement: the broker's own wall clock, which MT5 reports raw in
 every tick, against the wall clock BROKER_TZ predicts for right now. Agreement means the
@@ -72,7 +72,8 @@ def _verdict(drift: float, hours: int, ticker: str, offsets: str) -> ClockVerdic
                         f"{ticker}: broker saatı BROKER_TZ-dən {hours:+d} SAAT fərqlidir "
                         f"({offsets}, fərq {drift:+.1f}s). Ya bu maşının saatı sürüşüb, ya da "
                         f"{BROKER_TZ.key} artıq bu brokeri təsvir etmir "
-                        f"(scripts/capture_symbol_specs.py, mt5/rates.py BROKER_TZ).")
+                        f"(config/brokers.py SERVER_CLOCKS; müvəqqəti: .env MT5_BROKER_TZ, "
+                        f"məs. America/New_York+7).")
 
 
 def measure(ticker: str, now: datetime | None = None,

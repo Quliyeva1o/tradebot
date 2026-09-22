@@ -5,9 +5,9 @@ last bar instead of holding over the weekend went from PF 1.18 to 1.26 (t 1.88 -
 was better in 5 of 7 years. It runs as a separate Paper bot first, so the plain 60m/3R bot
 keeps its own record for the A/B.
 
-Why the cutoff is in broker server time: FundingPips closes gold at 23:48 server time every
-Friday (2024-09..2026-09), which is 16:48 New York most weeks but 17:48 in the weeks when only
-one side of the Atlantic has changed its clocks.
+Why the cutoff is in broker server time: the broker closes gold at a fixed server time every
+Friday -- 23:48 on FundingPips, 23:54-23:57 on CFI (2024-09..2026-09). Both servers run New York
+close (config/brokers.py SERVER_CLOCKS), so that is also a fixed New York time, 16:48-16:57.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -44,14 +44,19 @@ class TestWeekendFlatDue:
         assert not runner.weekend_flat_due(_server(2026, 9, 14, 1, 5))
 
     def test_winter_cutoff_is_in_server_time(self) -> None:
-        # 2026-01-16: EET (UTC+2) -- 23:40 server is 21:40 UTC, 16:40 New York.
+        # 2026-01-16: server on UTC+2 -- 23:40 server is 21:40 UTC, 16:40 New York.
         assert runner.weekend_flat_due(datetime(2026, 1, 16, 21, 40, tzinfo=UTC))
         assert not runner.weekend_flat_due(datetime(2026, 1, 16, 21, 39, tzinfo=UTC))
 
-    def test_a_week_when_only_new_york_has_changed_clocks_still_uses_server_time(self) -> None:
-        # 2026-03-20: the US is on summer time, Europe is not -- 23:40 server is 17:40 New York.
-        assert runner.weekend_flat_due(datetime(2026, 3, 20, 21, 40, tzinfo=UTC))
-        assert not runner.weekend_flat_due(datetime(2026, 3, 20, 21, 39, tzinfo=UTC))
+    @pytest.mark.parametrize("friday", [datetime(2026, 3, 20, tzinfo=UTC), datetime(2026, 10, 30, tzinfo=UTC)])
+    def test_in_a_week_only_one_side_of_the_atlantic_has_changed_the_server_follows_new_york(
+        self, friday: datetime
+    ) -> None:
+        # The US is on summer time, Europe is not: New York close is on UTC+3, so 23:40 server is
+        # 20:40 UTC (16:40 New York). Read as Bucharest it was 21:40 UTC -- after CFI's gold had
+        # already shut at 23:57 server, when a position can no longer be closed.
+        assert runner.weekend_flat_due(friday.replace(hour=20, minute=40))
+        assert not runner.weekend_flat_due(friday.replace(hour=20, minute=39))
 
 
 class TestVariantFiles:

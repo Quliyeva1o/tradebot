@@ -19,6 +19,7 @@ from pathlib import Path
 
 import config.brokers as machine
 from backtest.live_replay.specs import SymbolSpec, load_specs
+from core.broker_clock import BrokerClock
 from backtest.live_replay.ticks import TickCache, mt5_fetch
 
 
@@ -28,6 +29,11 @@ class Broker:
     label: str
     data_dir: Path
     specs_file: Path
+
+    @property
+    def clock(self) -> BrokerClock:
+        """The server clock this broker's history files and ticks are stamped in."""
+        return machine.SERVER_CLOCKS[self.name]
 
 
 BROKERS = {
@@ -79,7 +85,8 @@ def tick_cache(broker: Broker, logged_into: str | None) -> TickCache:
         return TickCache(broker.data_dir / "ticks", fetch=None)
     tickers = {s: spec.broker_symbol or s for s, spec in load_specs(broker.specs_file).items()}
     return TickCache(broker.data_dir / "ticks",
-                     fetch=lambda symbol, start, end: mt5_fetch(tickers.get(symbol, symbol), start, end))
+                     fetch=lambda symbol, start, end: mt5_fetch(tickers.get(symbol, symbol), start, end,
+                                                                broker.clock))
 
 
 def deployed_broker(name: str = "") -> Broker:

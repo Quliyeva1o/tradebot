@@ -36,9 +36,10 @@ import pandas as pd
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from backtest.live_replay.brokers import BROKERS, history_path  # noqa: E402
-from backtest.live_replay.market import BROKER_TZ  # noqa: E402
 from backtest.live_replay.pricing import rollover_days, swap_usd  # noqa: E402
 from backtest.live_replay.specs import SymbolSpec, load_specs  # noqa: E402
+from config.brokers import history_clock  # noqa: E402
+from core.broker_clock import BrokerClock  # noqa: E402
 from core.models import Bar, SignalDirection  # noqa: E402
 from scripts.first_fvg_window_backtest import FrameBars, FvgTrade, run_backtest  # noqa: E402
 
@@ -50,15 +51,16 @@ STOP_WINDOWS = (40, 80)
 CHECKPOINT = 40
 
 
-def swap_r(trade: FvgTrade, spec: SymbolSpec, tp_r: float) -> float:
+def swap_r(trade: FvgTrade, spec: SymbolSpec, tp_r: float, clock: BrokerClock) -> float:
     """The swap one trade carries, in the R its lot size was sized on.
 
     The bot sizes on the plan's entry-to-stop distance. A fill through the limit enters at a better
-    price, so that distance is recovered from the stop and target, which stay the plan's.
+    price, so that distance is recovered from the stop and target, which stay the plan's. Swap is
+    charged at each server midnight on `clock`, the broker's server clock.
     """
     plan_risk = abs(trade.target - trade.stop) / (1 + tp_r)
-    days = rollover_days(trade.entry_time.astimezone(BROKER_TZ).date(),
-                         trade.exit_time.astimezone(BROKER_TZ).date(), spec.swap_rollover3days)
+    days = rollover_days(trade.entry_time.astimezone(clock).date(),
+                         trade.exit_time.astimezone(clock).date(), spec.swap_rollover3days)
     direction = SignalDirection.BUY if trade.direction == "LONG" else SignalDirection.SELL
     usd = swap_usd(spec, direction, 1.0, trade.entry, days, usd_per_unit=1.0)
     return usd / (plan_risk * spec.usd_per_price_unit(1.0, 1.0))
@@ -88,7 +90,7 @@ def backtest_trades(bat: Path = LAUNCHER, broker_name: str = "cfi", history: Pat
     trades = run_backtest(signal_bars, FrameBars(m1), cfg, spec.broker_symbol or args.symbol, recent_spread(path))
     frame = pd.DataFrame({"day": [t.day for t in trades], "direction": [t.direction for t in trades],
                           "r_net": [t.r_net for t in trades],
-                          "swap_r": [swap_r(t, spec, cfg.tp_r) for t in trades]})
+                          "swap_r": [swap_r(t, spec, cfg.tp_r, history_clock(path)) for t in trades]})
     frame["r_swap"] = frame["r_net"] + frame["swap_r"]
     return frame
 

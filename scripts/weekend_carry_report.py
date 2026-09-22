@@ -33,7 +33,7 @@ import statistics as st
 import sys
 from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
@@ -43,9 +43,10 @@ import pandas as pd
 from backtest.live_replay.brokers import BROKERS, connected_server, tick_cache
 from backtest.live_replay.configs import BotConfig, scope
 from backtest.live_replay.engine import TradeRecord, run
-from backtest.live_replay.market import BROKER_TZ, DEFAULT_DATA_DIR, load_fx, load_m1
+from backtest.live_replay.market import DEFAULT_DATA_DIR, load_fx, load_m1
 from backtest.live_replay.reversal import REVERSE_SUFFIX
 from backtest.live_replay.specs import load_specs
+from core.broker_clock import BrokerClock
 
 REPORT_PATH = Path("WEEKEND_CARRY_REPORT.md")
 
@@ -60,15 +61,15 @@ class Scored:
     carried: bool  # the hold spans a Saturday in broker time
 
 
-def spans_weekend(trade: TradeRecord) -> bool:
-    """True when a Saturday in broker time falls inside the hold."""
-    a = pd.Timestamp(trade.entry_time).tz_convert(BROKER_TZ)
-    b = pd.Timestamp(trade.exit_time).tz_convert(BROKER_TZ)
-    day = a.normalize()
+def spans_weekend(trade: TradeRecord, clock: BrokerClock) -> bool:
+    """True when a Saturday in broker time (`clock`, the server's) falls inside the hold."""
+    a = trade.entry_time.astimezone(clock).replace(tzinfo=None)
+    b = trade.exit_time.astimezone(clock).replace(tzinfo=None)
+    day = datetime.combine(a.date(), time())
     while day <= b:
-        if day.dayofweek == 5 and day > a:
+        if day.weekday() == 5 and day > a:
             return True
-        day += pd.Timedelta(days=1)
+        day += timedelta(days=1)
     return False
 
 
@@ -102,7 +103,7 @@ def score(configs: list[BotConfig], data_dir: Path) -> tuple[list[Scored], dict[
         trades = run(config, m1, spec, fx, ticks=ticks)
         for t in trades:
             leg = "reverse" if t.setup_id.endswith(REVERSE_SUFFIX) else "breakout"
-            out.append(Scored(config, t, leg, spans_weekend(t)))
+            out.append(Scored(config, t, leg, spans_weekend(t, m1.clock)))
         carried = sum(1 for s in out if s.config is config and s.carried)
         print(f"--- {config.task:<28} trades {len(trades):>5}  carried {carried:>4}", flush=True)
     return out, spans

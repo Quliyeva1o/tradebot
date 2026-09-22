@@ -172,12 +172,25 @@ dayandırmalıdır.
 | OS saatının sıçraması (yuxarıdakı hadisə) | broker saatı proqnozdan tam saat geridə/irəlidə |
 | `BROKER_TZ` köhnəlməsi | eyni əlamət, amma davamlı |
 
-**25 oktyabr 2026 riski:** `Europe/Bucharest` UTC+2-yə keçir, New York isə
-**1 noyabrda**. CFI ABŞ qrafikinə baxırsa, o bir həftə bar vaxtları 1 saat
-sürüşəcək. `mt5/rates.py`-dakı şərh açıq deyir: bu sabit FXTM-dən başqa heç bir
-broker üçün təsdiqlənməyib. Yoxlama indi bunu özü tutacaq — 25 oktyabrdan sonra
-ilk iş günü `preflight.py`-ı qaçırın. Fərq çıxsa, `.env`-ə `MT5_BROKER_TZ=...`
-yazın (kod dəyişikliyi lazım deyil).
+**Brokerin saatı — 2026-09-22-də düzəldildi.** Layihə əvvəldən server saatını
+`Europe/Bucharest` sayırdı. Hər iki brokerin öz M1 tarixçəsində ölçüldü (2019–2026,
+Amerika ilə Avropanın saatı fərqli tarixdə dəyişdiyi bütün həftələr): ikisi də
+**New York close** saatındadır — New York + 7 saat, dəyişmə **ABŞ tarixlərində**
+(09:30 NY açılışı hər həftə server saatı ilə 16:30-da, Bucharest olsaydı 15:30-da
+olardı). Bucharest ildə ~3 həftə (mart ortası–sonu, 25 okt–1 noy) bir saat səhv
+olurdu: bar vaxtları bir saat gec yazılırdı, backtest o həftələrdə opening range-i
+08:30 barlarından qururdu, canlı botlar isə 25 oktyabrdan bir həftə **heç bir giriş
+açmayacaqdı** (saat yoxlaması hər girişi bloklayacaqdı).
+
+İndi saat brokerə görə `config/brokers.py` `SERVER_CLOCKS`-dan gəlir, eyni saat həm
+canlı botlarda, həm backtest-də işlənir (`core/broker_clock.py`). IANA-da New York +
+7 adlı zona yoxdur, ona görə ad `America/New_York+7` formasındadır. Yeni broker
+əlavə edəndə onun saatını eyni üsulla ölçün — ölçülməmiş saat təxmindir.
+
+`.env`-dəki `MT5_BROKER_TZ` hələ də işləyir (müvəqqəti override üçün), eyni formada:
+`MT5_BROKER_TZ=America/New_York+7` və ya adi IANA adı. Normalda boş qalmalıdır.
+25 oktyabrdan sonrakı ilk iş günü `preflight.py`-ı yenə qaçırın — 6-cı bənd
+uyğunluğu təsdiq etməlidir.
 
 **Botlar nə edir:** fərq tam saatdırsa, **yeni giriş açılmır** (log-da
 `entry_blocked_clock_drift`), açıq mövqe isə idarə olunmağa davam edir — onun

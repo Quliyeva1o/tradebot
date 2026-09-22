@@ -36,8 +36,10 @@ import pytest
 
 import scripts.order_flow_bias_backtest as ofb
 import scripts.po3_backtest as po3
-from scripts.backtest_common import BROKER_TZ, NY
+from config.brokers import history_clock
+from scripts.backtest_common import NY
 DATA = Path("data/history/XAUUSD_M1.csv")
+BROKER_TZ = history_clock(DATA)  # the clock load_m1 reads this file in
 MAX_ROWS = 90_000  # ~60 calendar days of M1: enough to warm up the daily/1H/15M votes, fast to load
 
 

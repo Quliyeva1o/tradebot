@@ -22,7 +22,9 @@ def test_the_replay_and_the_runner_agree_on_every_minute() -> None:
     for start in WEEKS:
         moment = start
         while moment < start + timedelta(days=5):
-            assert weekend_flat_due(int(moment.timestamp())) == run_live_nasdaq_orb.weekend_flat_due(moment), moment
+            # the replay reads the clock from its bars' broker, the runner from .env: same clock here
+            replay = weekend_flat_due(int(moment.timestamp()), run_live_nasdaq_orb.BROKER_TZ)
+            assert replay == run_live_nasdaq_orb.weekend_flat_due(moment), moment
             moment += timedelta(minutes=1)
             checked += 1
     assert checked == len(WEEKS) * 5 * 1440

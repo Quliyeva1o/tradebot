@@ -288,11 +288,13 @@ def write_bars_csv(bars: list[Bar], symbol: str, timeframe: str, output_dir: Pat
 
     Bar.timestamp is genuine UTC (see mt5/rates.py's rates_to_bars()), but
     every batch script's own load_bars() (e.g. scripts/first_fvg_backtest.py)
-    expects the CSV's naive "time" column to be BROKER-LOCAL (Europe/
-    Bucharest) wall-clock, matching what MT5 itself reports and what this
-    file format has always contained -- so bars are converted back to
-    Bucharest here before formatting, keeping that existing convention (and
-    every already-downloaded historical CSV) unchanged by the UTC fix.
+    expects the CSV's naive "time" column to be the broker's SERVER wall-clock,
+    matching what MT5 itself reports and what this file format has always
+    contained -- so bars are converted back to the server clock (BROKER_TZ)
+    here before formatting. The round trip is an identity, which is why the
+    files stayed raw server time even while BROKER_TZ wrongly said Bucharest.
+    Readers take the clock from the file's broker folder (config/brokers.
+    history_clock), so write into data/history/<broker>/.
 
     Args:
         bars: Validated bar list to persist.
