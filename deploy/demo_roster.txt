@@ -178,12 +178,34 @@
 # A task listed for both accounts has one line per account below, and each account's weekly report
 # judges its own bots by its own rules.
 
+# 2026-09-23: ON CFI, GER40 MOVES FROM THE SWEEP TO THE 30m BREAKOUT -- THE USER'S CALL.
+# Asked for: where a paper bot has a better backtest than the symbol's Demo bot, swap them, on CFI.
+# Every paper bot was replayed on both brokers (full / 3 years / 1 year / 3 months / 1 month); GER40
+# was the only symbol where the paper candidate was clearly stronger. SPX500 and DJI30 were left on
+# their inverse bots by the user although the breakout wins over FundingPips' longer history.
+#                         CFI 2025-01..2026-09      FundingPips 2022-01..2026-09   last year (CFI)
+#   GER40 breakout  <-    203 tr PF 1.24 +40.3R     609 tr PF 1.29 +142.4R        116 tr PF 0.94 -5.7R
+#         sweep            38 tr PF 1.60 +10.1R     122 tr PF 1.04   +2.9R         26 tr PF 1.21 +2.6R
+# The sweep's edge rests on 38 trades and was +2.9R over nearly five years on FundingPips; the
+# breakout's on 600+, in every year from 2023 to 2025 (+69.0 / +38.3 / +62.4R on FundingPips).
+# KNOW WHAT IT COSTS: it lost 2022 (-19.1R) and is losing 2026 (-8.2R FP, -6.7R CFI), and its
+# drawdowns are several times the sweep's -- 19.9R max on CFI, 34.2R on FundingPips, against 4.1R
+# and 9.7R. The last year still favours the sweep; the swap was made on the longer evidence.
+# Risk 0.25% like every other Demo bot. The sweep keeps running on CFI as a Paper bot, and stays
+# the Demo bot on FundingPips, which this change does not touch.
+#
+# STOP -- take OrbBreakout_GER40_Demo off CFI -- if, from its first live trade, drawdown from peak
+# exceeds 27.5R within 40 trades or 37.9R within 80, or the net is below -14.4R at trade 40.
+# Bootstrap of its full CFI history with today's swap (100000 draws, seed 20260922,
+# scripts/fvg_window_envelope.envelope); deploy/kill_rules.json. Set before deployment; do not loosen.
+# The sweep's CFI rule (12.0 / 14.6 / -1.4) retired with it; its FundingPips rule stands.
+
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
 OrbBreakoutinv_DJI30_Demo    cfi    # CFI US30_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
 OrbBreakoutinv_SPX500_Demo   cfi    # CFI US500_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
-OrbSweep_GER40_Demo          cfi    # CFI GER30_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
+OrbBreakout_GER40_Demo       cfi    # CFI GER30_SPOT, 30m OR / M1 / 4R breakout, 0.25% risk (was the sweep until 2026-09-23)
 OrbSweep_JP225_Demo          cfi    # CFI JPN225_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
 
 OrbBreakoutwf_XAUUSD_Demo    fundingpips    # FundingPips XAUUSD, same launcher

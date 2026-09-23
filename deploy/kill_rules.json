@@ -74,22 +74,22 @@
         "min_net_r": -6.8
       }
     },
-    "OrbSweep_GER40_Demo": {
-      "adopted": "2026-09-22T11:47:35+00:00",
-      "basis": "Fixed before the bot was deployed. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config replayed on CFI GER30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock): 38 trades, PF 1.604, +10.1R -- a small sample, which is why the checkpoint is tight. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. Chosen as GER40's best paper bot over the last year (+2.6R); see deploy/demo_roster.txt.",
+    "OrbBreakout_GER40_Demo": {
+      "adopted": "2026-09-23T10:39:46+00:00",
+      "basis": "Fixed before the bot was deployed, replacing OrbSweep_GER40_Demo on this account (see deploy/demo_roster.txt, 2026-09-23). Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the launcher's config (30m OR / M1 / 4R, 0.25%) replayed on CFI GER30_SPOT, all the real M1 CFI has (2025-01..2026-09, New York close clock), today's swap charged: 203 trades, PF 1.245, +40.3R. Without swap PF 1.331, +52.3R, envelope 26.0R/40 34.9R/80 -12.3R@40; the swap-charged envelope is used, as for every other CFI rule. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net.",
       "stops": [
         {
           "within_trades": 40,
-          "max_drawdown_r": 12.0
+          "max_drawdown_r": 27.5
         },
         {
           "within_trades": 80,
-          "max_drawdown_r": 14.6
+          "max_drawdown_r": 37.9
         }
       ],
       "checkpoint": {
         "at_trades": 40,
-        "min_net_r": -1.4
+        "min_net_r": -14.4
       }
     },
     "OrbSweep_JP225_Demo": {

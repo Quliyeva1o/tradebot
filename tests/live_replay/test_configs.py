@@ -74,8 +74,11 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo", "OrbBreakoutinv_DJI30_Demo",
-             "OrbBreakoutinv_SPX500_Demo", "OrbSweep_GER40_Demo", "OrbSweep_JP225_Demo"}
+SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo", "OrbBreakoutinv_DJI30_Demo",
+                    "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo"}
+DEMO_BOTS_BY_BROKER = {"cfi": SHARED_DEMO_BOTS | {"OrbBreakout_GER40_Demo"},
+                       "fundingpips": SHARED_DEMO_BOTS | {"OrbSweep_GER40_Demo"}}
+DEMO_BOTS = DEMO_BOTS_BY_BROKER["cfi"] | DEMO_BOTS_BY_BROKER["fundingpips"]
 
 
 def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
@@ -83,8 +86,13 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     last 3, so only the weekend-flat XAUUSD bot still placed real orders. 2026-09-22: the NDX100
     First FVG bot joined it, and later that day, on the user's call, every free symbol got its
     best paper bot over the last year -- on CFI first, then on FundingPips, whose own last year
-    picked the same six. The roster file's own comment blocks carry the numbers."""
-    assert load_roster(REPO) == dict.fromkeys(DEMO_BOTS, frozenset({"cfi", "fundingpips"}))
+    picked the same six. 2026-09-23: on CFI only, GER40 moved from the sweep to the 30m breakout,
+    on the longer history. The roster file's own comment blocks carry the numbers."""
+    assert load_roster(REPO) == {
+        **dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"})),
+        "OrbBreakout_GER40_Demo": frozenset({"cfi"}),
+        "OrbSweep_GER40_Demo": frozenset({"fundingpips"}),
+    }
 
 
 def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: Path) -> None:
@@ -96,12 +104,17 @@ def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: 
                                      "OrbSweep_JP225_Demo": {"cfi"}}
 
 
-def test_one_demo_bot_per_symbol() -> None:
-    """Two bots on one symbol read each other's position as foreign and block each other."""
+@pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
+def test_one_demo_bot_per_symbol(broker: str) -> None:
+    """Two bots on one symbol read each other's position as foreign and block each other.
+
+    Per account: GER40 has a different Demo bot on each broker, never two on one."""
+    bots = {task for task, brokers in load_roster(REPO).items() if broker in brokers}
+    assert bots == DEMO_BOTS_BY_BROKER[broker]
     symbols = [launcher_symbol(bat) for bat in [*REPO.glob("run_live_orb_*_demo.bat"),
                                                 *REPO.glob("run_live_fvg_*_demo.bat")]
-               if task_name(bat.name) in DEMO_BOTS]
-    assert sorted(symbols) == sorted(set(symbols)) and len(symbols) == len(DEMO_BOTS)
+               if task_name(bat.name) in bots]
+    assert sorted(symbols) == sorted(set(symbols)) and len(symbols) == len(bots)
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
@@ -110,8 +123,8 @@ def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     # entry, as a twin always has been.
     assert {c.task for c in scope(REPO)} == {
         "OrbBreakoutwf_XAUUSD_Demo", "OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo",
-        "OrbSweep_GER40_Demo", "OrbSweep_JP225_Demo",
-        "OrbBreakout_XAUUSD_Paper", "OrbBreakout_GER40_Paper", "OrbSweep_XAUUSD_Paper",
+        "OrbSweep_GER40_Demo", "OrbBreakout_GER40_Demo", "OrbSweep_JP225_Demo",
+        "OrbBreakout_XAUUSD_Paper", "OrbSweep_XAUUSD_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
         "OrbBreakout_JP225_Paper",
         "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper",

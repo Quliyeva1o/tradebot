@@ -53,10 +53,9 @@ class TestAdoptedRuleIsPinned:
     @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
         ("OrbBreakoutinv_DJI30_Demo", 10.6, 15.7, -7.1),
         ("OrbBreakoutinv_SPX500_Demo", 10.3, 15.0, -6.8),
-        ("OrbSweep_GER40_Demo", 12.0, 14.6, -1.4),
         ("OrbSweep_JP225_Demo", 26.9, 40.8, -19.0),
     ])
-    def test_the_four_bots_added_on_every_free_symbol_are_pinned_too(
+    def test_the_bots_added_on_every_free_symbol_are_pinned_too(
         self, task: str, dd40: float, dd80: float, net40: float
     ) -> None:
         # Full CFI history (2025-01..2026-09), the same bootstrap as the FVG bot, fixed before deployment.
@@ -65,6 +64,17 @@ class TestAdoptedRuleIsPinned:
         assert rule.adopted == datetime(2026, 9, 22, 11, 47, 35, tzinfo=UTC)
         assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
+
+    def test_the_cfi_ger40_breakout_that_replaced_the_sweep_is_pinned(self) -> None:
+        # 2026-09-23: GER40's CFI Demo bot moved from the sweep to the 30m breakout. Full CFI history
+        # with swap, the same bootstrap, fixed before deployment; the sweep's CFI rule retired with it.
+        rules = kr.load_rules("cfi")
+        rule = rules["OrbBreakout_GER40_Demo"]
+
+        assert rule.adopted == datetime(2026, 9, 23, 10, 39, 46, tzinfo=UTC)
+        assert rule.stops == (kr.StopClause(40, 27.5), kr.StopClause(80, 37.9))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.4)
+        assert "OrbSweep_GER40_Demo" not in rules
 
     @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
         ("OrbBreakoutwf_XAUUSD_Demo", 17.6, 22.6, -6.1),
@@ -83,7 +93,7 @@ class TestAdoptedRuleIsPinned:
         assert rule.adopted == datetime(2026, 9, 22, 13, 52, 21, tzinfo=UTC)
         assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
-        assert rule != kr.load_rules("cfi")[task]
+        assert rule != kr.load_rules("cfi").get(task)  # GER40's sweep has no CFI rule since 2026-09-23
 
     @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
     def test_every_rule_names_a_bot_the_roster_deploys_on_that_account(self, broker: str) -> None:
