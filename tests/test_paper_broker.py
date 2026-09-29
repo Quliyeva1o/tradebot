@@ -620,3 +620,33 @@ class TestSlippageLogging:
             broker.place_order(order)
 
         mock_log_fill.assert_not_called()
+
+
+class TestCalculateMargin:
+    """The paper margin ceiling must price margin as the venue does (2026-09-29: CFI JPN225_SPOT)."""
+
+    def _jp225_broker(self) -> PaperBroker:
+        connector = _connector(symbol="JPN225_SPOT")
+        connector.fetch_symbol_info.return_value = SymbolConstraints(
+            symbol="JPN225_SPOT", contract_size=500.0, tick_size=0.01, tick_value=0.01,
+            volume_min=0.01, volume_max=100.0, volume_step=0.01,
+        )
+        connector.fetch_account_info.return_value = Mock(leverage=100)
+        return PaperBroker(connector=connector)
+
+    def test_uses_mt5s_own_margin_not_the_leverage_estimate(self) -> None:
+        broker = self._jp225_broker()
+        with patch.object(paper_broker_module.mt5, "symbol_select", return_value=True), \
+             patch.object(paper_broker_module.mt5, "order_calc_margin", return_value=32.85) as calc:
+            margin = broker.calculate_margin("JPN225_SPOT", OrderType.SELL_MARKET, 0.01, 65_697.73)
+
+        assert margin == 32.85  # the leverage estimate says 3284.89, in yen, 100x over
+        assert calc.call_args[0][0] == paper_broker_module.mt5.ORDER_TYPE_SELL
+
+    def test_falls_back_to_the_estimate_when_mt5_cannot_price_it(self) -> None:
+        broker = self._jp225_broker()
+        with patch.object(paper_broker_module.mt5, "symbol_select", return_value=True), \
+             patch.object(paper_broker_module.mt5, "order_calc_margin", return_value=None):
+            margin = broker.calculate_margin("JPN225_SPOT", OrderType.BUY_MARKET, 0.01, 65_697.73)
+
+        assert margin == pytest.approx(0.01 * 500.0 * 65_697.73 / 100)

@@ -20,6 +20,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import MetaTrader5 as mt5  # noqa: N813 -- only order_calc_margin/symbol_select: read-only
+
 from core.models import AccountInfo, OrderType, SignalDirection, SymbolConstraints
 from core.validation import require_non_negative, require_positive
 from execution.event_log import log_fill
@@ -333,14 +335,22 @@ class PaperBroker(IBroker):
     def calculate_margin(
         self, symbol: str, order_type: OrderType, volume: float, price: float
     ) -> float | None:
-        """Estimates required margin from real symbol metadata and leverage.
+        """The margin the venue would require, from mt5.order_calc_margin().
 
         Paper mode must apply the SAME pre-trade margin ceiling as live (see
         TradeManager.open_trade), otherwise paper results would include
-        entries the real account could never afford. Uses the venue's own
-        contract size with the account's leverage rather than
-        mt5.order_calc_margin(), keeping PaperBroker's rule of touching only
-        read-only MT5 metadata.
+        entries the real account could never afford -- or, as happened here,
+        refuse entries the real account takes. order_calc_margin() only
+        computes; it places nothing, so it keeps PaperBroker's rule of
+        touching only read-only MT5 data, and it is what MT5Broker asks.
+
+        Until 2026-09-29 this was contract size x price / leverage alone. That
+        is in the PROFIT currency and ignores the symbol's margin rate: on
+        CFI's JPN225_SPOT it came to 3284.89 for 0.01 lot where MT5 says
+        32.85, 100x over, so the JP225 paper bot refused all 37 of its
+        signals from 2026-09-21 as breaching the 20% ceiling on a $10,000
+        paper account. The formula stays only as the fallback for when MT5
+        cannot answer (terminal not initialised, unknown symbol).
 
         Args:
             symbol: Trading instrument symbol.
@@ -350,9 +360,16 @@ class PaperBroker(IBroker):
             price: Price to compute the notional at.
 
         Returns:
-            Estimated margin in account currency, or None if the leverage or
-            symbol metadata is unavailable.
+            Margin in account currency, the leverage estimate when MT5 cannot
+            price it, or None if neither is available.
         """
+        mt5_type = mt5.ORDER_TYPE_BUY if order_type.name.startswith("BUY") else mt5.ORDER_TYPE_SELL
+        try:
+            margin = mt5.order_calc_margin(mt5_type, symbol, volume, price) if mt5.symbol_select(symbol, True) else None
+        except Exception:  # terminal gone mid-call -> fall back to the estimate
+            margin = None
+        if margin is not None:
+            return float(margin)
         try:
             constraints = self._connector.fetch_symbol_info(symbol)
             leverage = self._connector.fetch_account_info().leverage
