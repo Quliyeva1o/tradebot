@@ -28,6 +28,7 @@ from data.download_history import (
     validate_bars,
     write_bars_csv,
 )
+from mt5.chunking import TIMEFRAME_DELTA
 from mt5.connector import MT5Connector
 from mt5.rates import BROKER_TZ
 from utils.logging import setup_logger
@@ -67,8 +68,15 @@ def update_symbol(symbol: str, timeframe: str, overlap_days: int, output_dir: Pa
     else:
         raise RuntimeError(f"No existing file at {path} -- use data.download_history for a first full download.")
 
-    new_bars = fetch_symbol_bars_chunked(symbol, timeframe, fetch_start, now)
-    logger.info("[%s %s] Fetched %d bar(s) in the update window.", symbol, timeframe, len(new_bars))
+    # MT5 reads a request bound as the broker's wall clock, not UTC (mt5/rates.py BROKER_TZ), and
+    # both brokers' servers run ahead of UTC -- 3 hours on CFI in summer. Asking up to real "now"
+    # therefore stopped the file 3 hours short: the 2026-09-29 update wrote CFI bars to 11:17
+    # server time when the server clock read 14:17. Nothing is dated in the future, so the bound
+    # is padded by a day, and the bar still forming is dropped instead: Bar timestamps are
+    # genuine UTC (rates_to_bars), so a bar that has not closed yet ends after `now`.
+    new_bars = fetch_symbol_bars_chunked(symbol, timeframe, fetch_start, now + timedelta(days=1))
+    new_bars = [b for b in new_bars if b.timestamp + TIMEFRAME_DELTA[timeframe] <= now]
+    logger.info("[%s %s] Fetched %d closed bar(s) in the update window.", symbol, timeframe, len(new_bars))
 
     combined = existing + new_bars
     validated, report = validate_bars(combined, symbol, timeframe)
