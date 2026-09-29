@@ -146,6 +146,23 @@ Write-Host "Broker  : $broker (.env MT5_SERVER) -> Task Scheduler qovlugu $taskP
 Write-Host "Kadans  : her $IntervalMinutes deqiqe"
 Write-Host "Tapildi : $($bats.Count) launcher`n"
 
+function Get-PollStart {
+    # The first poll: an even minute at :00, at least a minute out (so registration never
+    # races it), and paper 20 s later. It used to be (Get-Date).AddMinutes(1), which kept
+    # whatever second and minute parity the install ran at -- the 2026-09-22 install left
+    # every Demo order filling at :43-:60 while backtest/live_replay/engine.py models a
+    # poll at an even minute :06 (POLL_OFFSET_SECONDS), and a reinstall moved it again.
+    # Parity is taken on the epoch, the same way the replay's poll_time() reads it.
+    # Paper goes second so the Demo polls, which place real orders, are not queued
+    # behind two dozen paper processes starting on the same 4 CPUs.
+    param([bool]$Paper)
+    $epoch = [DateTimeOffset]::Now.ToUnixTimeSeconds() + 60
+    $epoch = $epoch - ($epoch % 60) + 60
+    if ((($epoch / 60) % 2) -ne 0) { $epoch += 60 }
+    if ($Paper) { $epoch += 20 }
+    return [DateTimeOffset]::FromUnixTimeSeconds($epoch).LocalDateTime
+}
+
 $made = 0
 foreach ($bat in $bats) {
     $taskName = Get-TaskNameFromBat $bat.Name
@@ -167,8 +184,7 @@ foreach ($bat in $bats) {
     $action = New-ScheduledTaskAction -Execute 'wscript.exe' `
         -Argument ('"{0}" "{1}"' -f $vbs, $bat.FullName)
 
-    # Start a minute out so registration itself never races the first poll.
-    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-PollStart ($bat.Name -like '*_paper.bat')) `
         -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
 
@@ -284,6 +300,25 @@ if (Test-Path $rosterFile) {
     }
 } else {
     Write-Warning "demo_roster.txt tapilmadi -- Demo tasklar el ile yoxlanmalidir"
+}
+
+# --- paper bots switched off by decision, not by deleting their .bat --------
+# Register-ScheduledTask -Force above re-enables every paper task, so a paper bot
+# that was turned off would come back on the next install. deploy/paper_off.txt
+# keeps that decision in the repo, like the roster does for Demo.
+$paperOffFile = Join-Path $RepoPath 'deploy\paper_off.txt'
+if (Test-Path $paperOffFile) {
+    $paperOff = @(Get-Content $paperOffFile |
+        ForEach-Object { ($_ -split '#')[0].Trim() } |
+        Where-Object { $_ })
+    Write-Host "`nPaper sondurulenler (deploy\paper_off.txt -- $($paperOff.Count)):"
+    foreach ($t in @(Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+                     Where-Object { $_.TaskName -like '*_Paper' -and $paperOff -contains $_.TaskName })) {
+        if ($PSCmdlet.ShouldProcess("$taskPath$($t.TaskName)", 'Disable')) {
+            Disable-ScheduledTask -TaskName $t.TaskName -TaskPath $taskPath | Out-Null
+            Write-Host ("  sondu   {0}" -f $t.TaskName)
+        }
+    }
 }
 Write-Host @"
 

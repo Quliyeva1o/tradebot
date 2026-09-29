@@ -1,0 +1,23 @@
+# Paper tasks install_tasks.ps1 registers DISABLED, on every account. One task name per line.
+#
+# Every launcher gets a task (install_tasks.ps1 derives them from the .bat files), and paper tasks
+# otherwise all run. Listing one here keeps its .bat -- and so its replay config -- in the repo while
+# the VPS stops polling it. Each costs a Python start every two minutes on a 4-CPU box that already
+# queues the Demo orders behind the paper ones (see POLL_OFFSET_SECONDS in backtest/live_replay/engine.py).
+#
+# 2026-09-29, with the roster cut in deploy/demo_roster.txt:
+#   - the six inverse bots: over the full replay window every one is negative on both brokers, and
+#     an inverse paper bot is the exact mirror of its breakout paper twin, so it measures nothing the
+#     twin does not already show.
+#   - JP225 sweep: negative on both brokers, every year on FundingPips.
+#   - OrbBreakout_XAUUSD_Paper: 60m OR / 3R without --weekend-flat, the same strategy as
+#     OrbBreakoutwf_XAUUSD_Paper minus the Friday close, which the replay already measures.
+
+OrbBreakoutinv_DJI30_Paper
+OrbBreakoutinv_JP225_Paper
+OrbBreakoutinv_NDX100_Paper
+OrbBreakoutinv_SPX500_Paper
+OrbBreakoutinv_XAUUSD_Paper
+OrbSweepinv_GER40_Paper
+OrbSweep_JP225_Paper
+OrbBreakout_XAUUSD_Paper

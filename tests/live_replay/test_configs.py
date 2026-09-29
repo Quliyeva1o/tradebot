@@ -74,8 +74,7 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo", "OrbBreakoutinv_DJI30_Demo",
-                    "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo"}
+SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo"}
 DEMO_BOTS_BY_BROKER = {"cfi": SHARED_DEMO_BOTS | {"OrbBreakout_GER40_Demo"},
                        "fundingpips": SHARED_DEMO_BOTS | {"OrbSweep_GER40_Demo"}}
 DEMO_BOTS = DEMO_BOTS_BY_BROKER["cfi"] | DEMO_BOTS_BY_BROKER["fundingpips"]
@@ -87,7 +86,9 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     First FVG bot joined it, and later that day, on the user's call, every free symbol got its
     best paper bot over the last year -- on CFI first, then on FundingPips, whose own last year
     picked the same six. 2026-09-23: on CFI only, GER40 moved from the sweep to the 30m breakout,
-    on the longer history. The roster file's own comment blocks carry the numbers."""
+    on the longer history. 2026-09-29: DJI30 inverse, SPX500 inverse and JP225 sweep left both
+    accounts, negative over the full replay window on both brokers, and their slots stay empty.
+    The roster file's own comment blocks carry the numbers."""
     assert load_roster(REPO) == {
         **dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"})),
         "OrbBreakout_GER40_Demo": frozenset({"cfi"}),
@@ -122,14 +123,24 @@ def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     # A twin -- same CFI ticker, same parameters, only the risk differs -- is covered by its Demo
     # entry, as a twin always has been.
     assert {c.task for c in scope(REPO)} == {
-        "OrbBreakoutwf_XAUUSD_Demo", "OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo",
-        "OrbSweep_GER40_Demo", "OrbBreakout_GER40_Demo", "OrbSweep_JP225_Demo",
+        "OrbBreakoutwf_XAUUSD_Demo", "OrbSweep_GER40_Demo", "OrbBreakout_GER40_Demo",
         "OrbBreakout_XAUUSD_Paper", "OrbSweep_XAUUSD_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
-        "OrbBreakout_JP225_Paper",
-        "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper",
-        "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
+        "OrbBreakout_JP225_Paper", "OrbSweep_JP225_Paper",
+        "OrbBreakoutinv_XAUUSD_Paper", "OrbBreakoutinv_NDX100_Paper", "OrbBreakoutinv_DJI30_Paper",
+        "OrbBreakoutinv_SPX500_Paper", "OrbBreakoutinv_JP225_Paper", "OrbSweepinv_GER40_Paper",
     }
+
+
+def test_every_switched_off_paper_bot_is_a_real_paper_launcher() -> None:
+    """deploy/paper_off.txt disables tasks by name; a typo there would leave the bot running."""
+    lines = (REPO / "deploy" / "paper_off.txt").read_text(encoding="utf-8").splitlines()
+    names = {line.split("#", 1)[0].strip() for line in lines} - {""}
+    paper = {task_name(p.name) for p in [*REPO.glob("run_live_orb_*_paper.bat"),
+                                         *REPO.glob("run_live_fvg_*_paper.bat")]}
+    assert names and names <= paper
+    assert not names & {"OrbBreakoutwf_XAUUSD_Paper", "FvgWindow_NDX100_Paper", "OrbBreakout_GER40_Paper",
+                        "OrbSweep_GER40_Paper"}  # the Demo bots' twins keep running
 
 
 def test_every_live_bot_risks_a_quarter_percent() -> None:

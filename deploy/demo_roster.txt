@@ -200,17 +200,38 @@
 # scripts/fvg_window_envelope.envelope); deploy/kill_rules.json. Set before deployment; do not loosen.
 # The sweep's CFI rule (12.0 / 14.6 / -1.4) retired with it; its FundingPips rule stands.
 
+# 2026-09-29: BACK TO BOTS WITH AN EDGE -- DJI30, SPX500 AND JP225 LEAVE BOTH ACCOUNTS. THE USER'S CALL.
+# Asked for: decide, as a trader, which strategies stay on Demo and which go back to paper, on
+# every variant replayed month by month on both brokers from 2023-10 (CFI indices from 2025-01, the
+# real M1 it has; FundingPips from 2024-01), swap charged, New York close clock. Full period / last
+# 12 months, PF and net R, t = mean R over its standard error:
+#                              CFI                            FundingPips
+#   DJI30  inverse   OUT    87 tr PF 0.88  -2.3R  t -0.47   150 tr PF 0.67 -13.4R  t -1.96
+#   SPX500 inverse   OUT   102 tr PF 0.88  -2.8R  t -0.51   163 tr PF 0.71 -12.3R  t -1.74
+#   JP225  sweep     OUT    50 tr PF 0.81  -6.6R            82 tr PF 0.82  -9.5R, every year negative
+# Every one of the twelve inverse results (six variants x two brokers) is negative over the full
+# window, five with t below -1.7. Their wins over the last three months (+1 to +4R) are the mirror
+# of the breakout's losses in the same weeks: a bet on the current regime, not an edge. No JP225
+# variant reaches PF 1.03 on either broker. The breakouts on DJI30 and SPX500 were positive in their
+# first two years but are PF 0.72-0.80 over the last 12 months, so they stay paper. The three slots
+# stay EMPTY: a bot with negative expectancy is worse than none.
+# Kept, with their stop rules unchanged:
+#   XAUUSD breakout wf  CFI 330 tr PF 1.24 +47.2R, FP 354 tr PF 1.25 +55.2R, positive every year on both.
+#   NDX100 First FVG    CFI 283 tr PF 1.13 +28.4R, FP 284 tr PF 1.07 +15.6R, last 12 months +7.3R / +6.6R.
+#   GER40 breakout CFI  208 tr PF 1.21 +35.1R, but last 12 months PF 0.86 -14.5R: the closest to its stop.
+#   GER40 sweep FP       63 tr PF 1.40 +12.6R, max drawdown 3.9R; last 12 months flat (PF 0.96).
+# CONSIDERED AND REJECTED: XAUUSD 15m/4R (run_live_orb_breakout_xauusd_demo.bat) for FundingPips. It
+# was the strongest variant of the window (FP 435 tr PF 1.26 +87.3R, CFI 449 tr PF 1.24 +84.1R), but
+# over CFI's gold history since 2017 it is 1523 trades, PF 0.97, -33.8R: -80.1R in 2018 and -44.8R in
+# 2021. Its three good years are a regime, and the wf bot's longer record (PF 1.03) is the steadier.
+# Paper bots switched off at the same time are listed in deploy/paper_off.txt.
+# Replay code and the full month-by-month table: the 2026-09-29 session's scratchpad (trades_3y.py).
+
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
-OrbBreakoutinv_DJI30_Demo    cfi    # CFI US30_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
-OrbBreakoutinv_SPX500_Demo   cfi    # CFI US500_SPOT, inverse of 60m OR / M1 / 4R breakout, 0.25% risk
 OrbBreakout_GER40_Demo       cfi    # CFI GER30_SPOT, 30m OR / M1 / 4R breakout, 0.25% risk (was the sweep until 2026-09-23)
-OrbSweep_JP225_Demo          cfi    # CFI JPN225_SPOT, 15m OR sweep / M15 / to 11:00 / 2R, 0.25% risk
 
 OrbBreakoutwf_XAUUSD_Demo    fundingpips    # FundingPips XAUUSD, same launcher
 FvgWindow_NDX100_Demo        fundingpips    # FundingPips NDX100
-OrbBreakoutinv_DJI30_Demo    fundingpips    # FundingPips DJI30
-OrbBreakoutinv_SPX500_Demo   fundingpips    # FundingPips SPX500
 OrbSweep_GER40_Demo          fundingpips    # FundingPips GER40
-OrbSweep_JP225_Demo          fundingpips    # FundingPips JP225

@@ -50,20 +50,14 @@ class TestAdoptedRuleIsPinned:
         assert rule.stops == (kr.StopClause(40, 24.8), kr.StopClause(80, 34.7))
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.1)
 
-    @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
-        ("OrbBreakoutinv_DJI30_Demo", 10.6, 15.7, -7.1),
-        ("OrbBreakoutinv_SPX500_Demo", 10.3, 15.0, -6.8),
-        ("OrbSweep_JP225_Demo", 26.9, 40.8, -19.0),
-    ])
-    def test_the_bots_added_on_every_free_symbol_are_pinned_too(
-        self, task: str, dd40: float, dd80: float, net40: float
-    ) -> None:
-        # Full CFI history (2025-01..2026-09), the same bootstrap as the FVG bot, fixed before deployment.
-        rule = kr.load_rules("cfi")[task]
+    @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
+    def test_the_bots_cut_on_2026_09_29_took_their_rules_with_them(self, broker: str) -> None:
+        # DJI30 inverse, SPX500 inverse and JP225 sweep left both accounts: negative over the full
+        # replay window on both brokers (deploy/demo_roster.txt). A rule outliving its bot would be
+        # judged by the weekly report against trades no bot of that name places any more.
+        rules = kr.load_rules(broker)
 
-        assert rule.adopted == datetime(2026, 9, 22, 11, 47, 35, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
+        assert not {"OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo"} & set(rules)
 
     def test_the_cfi_ger40_breakout_that_replaced_the_sweep_is_pinned(self) -> None:
         # 2026-09-23: GER40's CFI Demo bot moved from the sweep to the 30m breakout. Full CFI history
@@ -79,10 +73,7 @@ class TestAdoptedRuleIsPinned:
     @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
         ("OrbBreakoutwf_XAUUSD_Demo", 17.6, 22.6, -6.1),
         ("FvgWindow_NDX100_Demo", 26.3, 37.9, -15.6),
-        ("OrbBreakoutinv_DJI30_Demo", 11.4, 17.2, -7.8),
-        ("OrbBreakoutinv_SPX500_Demo", 12.0, 18.2, -8.6),
         ("OrbSweep_GER40_Demo", 19.6, 27.8, -11.8),
-        ("OrbSweep_JP225_Demo", 25.3, 38.3, -17.6),
     ])
     def test_the_fundingpips_rules_are_pinned_and_are_not_cfis(
         self, task: str, dd40: float, dd80: float, net40: float
