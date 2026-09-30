@@ -9,6 +9,7 @@ no-double-open guard, and the manual-close path.
 """
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
@@ -351,6 +352,31 @@ class TestOnNewBarHoldAndCloseTP:
         )
 
         action = manager.on_new_bar(_price_bar(low=28_750.0, high=28_950.0))
+
+        assert action is TradeManagerAction.CLOSED_TP
+
+    def test_sell_tp_waits_for_the_ask_not_the_bid(self) -> None:
+        # 2026-09-29, FundingPips SPX500: the bid low touched the target, the overnight ask
+        # (bid + 3) did not, the broker's TP never fired -- and the bot closed at market anyway.
+        broker = _broker(_fill_bar(29_000.0), _fill_bar(28_795.0))
+        manager = TradeManager()
+        manager.open_trade(
+            _setup(direction=SignalDirection.SELL, entry=29_000.0, stop_loss=29_100.0, take_profit=28_800.0),
+            broker,
+        )
+        bid_touch = replace(_price_bar(low=28_799.0, high=28_950.0), spread=3.0)
+        ask_touch = replace(_price_bar(low=28_796.0, high=28_950.0), spread=3.0)
+
+        assert manager.on_new_bar(bid_touch) is TradeManagerAction.HELD
+        assert manager.on_new_bar(ask_touch) is TradeManagerAction.CLOSED_TP
+
+    def test_buy_tp_still_reads_the_bid_high(self) -> None:
+        # A long closes at the bid, which is what the bars are: spread must not delay it.
+        broker = _broker(_fill_bar(29_000.0), _fill_bar(29_205.0))
+        manager = TradeManager()
+        manager.open_trade(_setup(stop_loss=28_900.0, take_profit=29_200.0), broker)
+
+        action = manager.on_new_bar(replace(_price_bar(low=29_100.0, high=29_200.0), spread=3.0))
 
         assert action is TradeManagerAction.CLOSED_TP
 

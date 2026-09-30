@@ -384,7 +384,12 @@ class TradeManager:
             tp_hit = bar.high >= self._take_profit
         else:
             sl_hit = bar.high >= self._stop_loss
-            tp_hit = bar.low <= self._take_profit
+            # A short's take-profit fills at the ASK, and the broker triggers it there; bars are
+            # BID. Reading the bid low alone closed FundingPips position 13635184 (SPX500) at
+            # market on 2026-09-29 03:16 UTC when the bid touched 7664.68 but the overnight ask
+            # never did -- 3 points short of its target. backtest/live_replay prices short exits
+            # on the ask bar too (pricing.exit_on_bar). bar.spread is 0 where no spread is known.
+            tp_hit = bar.low + bar.spread <= self._take_profit
         return sl_hit, tp_hit
 
     def _close(self, action: TradeManagerAction) -> TradeManagerAction:
