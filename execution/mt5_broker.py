@@ -621,6 +621,19 @@ class MT5Broker(IBroker):
             if order.type in _PENDING_TYPE_BY_MT5
         ]
 
+    def get_quote(self, symbol: str) -> tuple[float, float] | None:
+        """READ-ONLY: the symbol's current (bid, ask) from mt5.symbol_info_tick().
+
+        None when MT5 has no usable tick (symbol not selectable, terminal not
+        ready, or a zero price outside trading hours).
+        """
+        if not mt5.symbol_select(symbol, True):
+            return None
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None or not tick.bid or not tick.ask:
+            return None
+        return float(tick.bid), float(tick.ask)
+
     def calculate_margin(
         self, symbol: str, order_type: OrderType, volume: float, price: float
     ) -> float | None:

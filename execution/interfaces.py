@@ -101,6 +101,20 @@ class IBroker(Protocol):
         """
         ...
 
+    def get_quote(self, symbol: str) -> tuple[float, float] | None:
+        """(bid, ask) a market order placed now would fill against.
+
+        Used by TradeManager.open_trade to size a market entry on the price it
+        will really get: a strategy's setup entry can be a level the market has
+        already left (the ORB sweep's FVG retest), and a lot sized on it risks
+        more than the budget once filled.
+
+        Returns:
+            (bid, ask), or None if this venue cannot quote the symbol now
+            (callers then size on the setup's own entry, as before).
+        """
+        ...
+
     def calculate_margin(
         self, symbol: str, order_type: OrderType, volume: float, price: float
     ) -> float | None:

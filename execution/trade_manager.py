@@ -156,6 +156,7 @@ class TradeManager:
 
         entry_price = resolve_entry_price(setup)
         if self._position_sizer is not None:
+            entry_price = self._sizing_price(broker, setup, stop_loss)
             account_info = broker.get_account_info()
             constraints = broker.get_symbol_constraints(setup.symbol)
             volume = self._position_sizer.calculate_size(
@@ -375,6 +376,35 @@ class TradeManager:
         if not self.has_open_trade:
             return TradeManagerAction.HELD
         return self._close(TradeManagerAction.CLOSED_MANUAL)
+
+    @staticmethod
+    def _sizing_price(broker: IBroker, setup: TradeSetup, stop_loss: float) -> float:
+        """The price a market entry is sized (and margin-checked) at: the broker's quote.
+
+        The entry is always a market order, so what it risks runs from the fill to the stop,
+        not from the setup's entry to the stop. The two differ when the setup's entry is a
+        level the market has already left: the ORB sweep enters at an FVG retest level but
+        only sees the signal when its M15 bar closes. Sized on that level, its live stop-outs
+        lost 1.46-1.47x the planned risk (CFI and FundingPips JP225, 2026-09-25), and its
+        replay since 2024 has a median fill risk of 1.29-1.35x the planned.
+
+        Falls back to the setup's own entry when the broker cannot quote, or when the quote is
+        already through the stop (sizing on the wrong side of it means nothing; the broker
+        will judge that order).
+        """
+        planned = resolve_entry_price(setup)
+        get_quote = getattr(broker, "get_quote", None)
+        try:
+            quote = get_quote(setup.symbol) if callable(get_quote) else None
+        except Exception:  # a failed quote must never block the entry itself
+            quote = None
+        if not (isinstance(quote, tuple) and len(quote) == 2
+                and all(isinstance(p, int | float) and not isinstance(p, bool) and p > 0 for p in quote)):
+            return planned
+        bid, ask = quote
+        if setup.direction == SignalDirection.BUY:
+            return float(ask) if ask > stop_loss else planned
+        return float(bid) if bid < stop_loss else planned
 
     def _check_levels(self, bar: Bar) -> tuple[bool, bool]:
         """Direction-aware SL/TP hit check, matching BacktestEngine.run()'s convention."""

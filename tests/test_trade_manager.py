@@ -17,8 +17,8 @@ from unittest.mock import Mock
 import pytest
 
 import execution.paper_broker as paper_broker_module
-from core.models import Bar, SignalDirection, SymbolConstraints, Timeframe
-from execution.models import TradeManagerAction
+from core.models import Bar, OrderType, SignalDirection, SymbolConstraints, Timeframe
+from execution.models import OrderRequest, TradeManagerAction
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
@@ -278,6 +278,49 @@ class TestOpenTradeWithPositionSizer:
         request = broker.place_order.call_args[0][0]
         assert request.volume == pytest.approx(0.25)
         assert request.volume != 5.0
+
+    def test_a_market_entry_is_sized_on_the_quote_not_the_setups_level(self) -> None:
+        # 2026-09-25 JP225 sweep: the setup's entry was an FVG level the market had already left;
+        # sized on it, the stop-out lost 1.47x the budget. Here the SELL fills at the 28_700 bid,
+        # 200 price units from the stop, not the setup's 100.
+        broker = self._mock_broker(balance=10_000.0)
+        broker.get_quote.return_value = (28_700.0, 28_701.0)
+        manager = TradeManager(position_sizer=PositionSizer(risk_per_trade_pct=0.01))
+
+        manager.open_trade(
+            _setup(direction=SignalDirection.SELL, entry=28_800.0, stop_loss=28_900.0, take_profit=28_600.0), broker)
+
+        # risk 100 over the bid's 200 units to the stop (800 ticks of 0.25) -> 0.125 lot, not 0.25
+        request = broker.place_order.call_args[0][0]
+        assert request.volume == pytest.approx(0.12)
+
+    def test_falls_back_to_the_setups_entry_when_there_is_no_quote(self) -> None:
+        broker = self._mock_broker(balance=10_000.0)
+        broker.get_quote.return_value = None
+        manager = TradeManager(position_sizer=PositionSizer(risk_per_trade_pct=0.01))
+
+        manager.open_trade(_setup(entry=29_000.0, stop_loss=28_900.0, take_profit=29_200.0), broker)
+
+        assert broker.place_order.call_args[0][0].volume == pytest.approx(0.25)
+
+    def test_a_quote_already_through_the_stop_is_not_sized_on(self) -> None:
+        broker = self._mock_broker(balance=10_000.0)
+        broker.get_quote.return_value = (28_850.0, 28_851.0)  # BUY ask below its 28_900 stop
+        manager = TradeManager(position_sizer=PositionSizer(risk_per_trade_pct=0.01))
+
+        manager.open_trade(_setup(entry=29_000.0, stop_loss=28_900.0, take_profit=29_200.0), broker)
+
+        assert broker.place_order.call_args[0][0].volume == pytest.approx(0.25)
+
+    def test_the_paper_quote_is_the_paper_fill(self) -> None:
+        bar = replace(_fill_bar(29_000.0), spread=2.0)
+        broker = _broker(bar)
+
+        bid, ask = broker.get_quote("USTEC")
+        broker.place_order(OrderRequest(symbol="USTEC", order_type=OrderType.BUY_MARKET, volume=0.1))
+
+        assert ask == broker.get_open_positions()[0].open_price
+        assert bid < ask
 
     def test_fixed_volume_constructor_path_is_unchanged_without_a_sizer(self) -> None:
         broker = _broker(_fill_bar(29_000.0))

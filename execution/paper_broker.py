@@ -332,6 +332,19 @@ class PaperBroker(IBroker):
         """
         return self._connector.fetch_symbol_info(symbol)
 
+    def get_quote(self, symbol: str) -> tuple[float, float] | None:
+        """(bid, ask) exactly as this paper account would fill a market order now.
+
+        Priced by the same bar and fill_simulator call as _fill_market_order, so
+        sizing on it sizes on the paper fill itself. None if no bar is available.
+        """
+        try:
+            bar = self._connector.fetch_recent_bars(symbol, self._timeframe, count=1)[-1]
+        except Exception:  # no bar -> the caller sizes on the setup's entry instead
+            return None
+        return (simulate_market_fill(OrderType.SELL_MARKET, bar.open, bar.spread, self._slippage),
+                simulate_market_fill(OrderType.BUY_MARKET, bar.open, bar.spread, self._slippage))
+
     def calculate_margin(
         self, symbol: str, order_type: OrderType, volume: float, price: float
     ) -> float | None:
