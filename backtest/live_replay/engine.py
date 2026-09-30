@@ -228,9 +228,6 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         if setup is None or setup.setup_id in traded:
             continue
         usd = fx.usd_per_unit(int(m1.ts[j]))
-        volume = size_position(spec, setup, balance, usd, config.risk_pct)
-        if volume <= 0:
-            continue  # the live sizer would reject it locally and retry at the next poll
         stop, target = resolve_stop_and_target(setup)
         # A poll served by a later bar (its own minute had none) fills at that bar's first tick.
         offset = POLL_OFFSET_SECONDS if poll == int(m1.ts[j]) else 0
@@ -241,6 +238,10 @@ def run(config: BotConfig, m1: BarFrame, spec: SymbolSpec, fx: FxSeries, *,
         else:
             bid, ask = quote
             fill = ask if setup.direction == SignalDirection.BUY and flags.spread else bid
+        # Sized on the fill, as the live bot sizes on its quote (TradeManager._sizing_price).
+        volume = size_position(spec, setup, balance, usd, config.risk_pct, fill=fill)
+        if volume <= 0:
+            continue  # the live sizer would reject it locally and retry at the next poll
         position = _Position(
             setup=setup, direction=setup.direction, entry_index=j, fill=fill, stop=stop,
             target=target, volume=volume,

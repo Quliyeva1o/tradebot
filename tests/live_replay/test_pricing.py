@@ -87,6 +87,18 @@ def test_the_margin_ceiling_scales_an_oversized_entry_down() -> None:
     assert volume == pytest.approx(0.34)
 
 
+def test_a_market_entry_is_sized_on_its_fill() -> None:
+    # The live bot sizes on its quote since 2026-09-30. A fill 197.37 points further from the stop
+    # doubles the distance, so it buys half the lots: 0.0316 -> 0.03.
+    setup = _setup(29048.08, 28850.71, 29837.56)
+    assert size_position(NDX, setup, 50_000.0, 1.0, 0.005, fill=29245.45) == pytest.approx(0.03)
+
+
+def test_a_fill_already_through_the_stop_is_sized_on_the_setup() -> None:
+    setup = _setup(29048.08, 28850.71, 29837.56)
+    assert size_position(NDX, setup, 50_000.0, 1.0, 0.005, fill=28800.0) == pytest.approx(0.06)
+
+
 def test_a_setup_whose_stop_equals_its_entry_cannot_be_sized() -> None:
     assert size_position(NDX, _setup(29048.08, 29048.08, 29100.0), 50_000.0, 1.0, 0.005) == 0.0
 

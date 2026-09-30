@@ -74,13 +74,21 @@ def swap_usd(spec: SymbolSpec, direction: SignalDirection, volume: float, price:
 
 
 def size_position(spec: SymbolSpec, setup: TradeSetup, balance: float, usd_per_unit: float,
-                  risk_pct: float) -> float:
+                  risk_pct: float, fill: float | None = None) -> float:
     """TradeManager.open_trade's sizing: PositionSizer on balance, then the 20% margin ceiling.
 
     A flat bot's equity is its balance, so the ceiling is measured against that.
+
+    `fill` is the price the market entry gets. Since 2026-09-30 the live bot sizes on its quote
+    (TradeManager._sizing_price), and so does this, with the same fallback to the setup's entry
+    when the fill is already through the stop. Before, both sized on the setup's entry, which for
+    the ORB sweep is an FVG level the market has usually left: R was unaffected (it is measured
+    from the fill), but the sweep's dollar figures ran ~1.3x hot.
     """
     entry = resolve_entry_price(setup)
     stop, _ = resolve_stop_and_target(setup)
+    if fill is not None and (fill > stop if setup.direction == SignalDirection.BUY else fill < stop):
+        entry = fill
     volume = PositionSizer(risk_per_trade_pct=risk_pct).calculate_size(
         balance, entry, stop, spec.constraints(usd_per_unit))
     if volume <= 0:
