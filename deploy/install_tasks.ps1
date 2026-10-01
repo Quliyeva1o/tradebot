@@ -12,8 +12,9 @@
     happened once in this project, producing tasks that ran with a missing .bat
     argument.
 
-    This derives the whole set from the run_live_orb_*.bat and run_live_fvg_*.bat
-    files actually present, so the tasks can never drift from the launchers.
+    This derives the whole set from the run_live_orb_*.bat, run_live_fvg_*.bat and
+    run_live_amd_*.bat files actually present, so the tasks can never drift from
+    the launchers.
 
     The live bots do NOT need data/history/*.csv (~1GB): they fetch bars from
     MT5 directly. Only the backtest and analysis scripts read those files, so a
@@ -87,13 +88,15 @@ $vbs = Join-Path $RepoPath 'run_hidden.vbs'
 if (-not (Test-Path $vbs)) { throw "run_hidden.vbs tapilmadi: $vbs -- RepoPath duzgundurmu?" }
 
 $bats = @(Get-ChildItem -Path $RepoPath -Filter 'run_live_orb_*.bat') +
-        @(Get-ChildItem -Path $RepoPath -Filter 'run_live_fvg_*.bat') | Sort-Object Name
+        @(Get-ChildItem -Path $RepoPath -Filter 'run_live_fvg_*.bat') +
+        @(Get-ChildItem -Path $RepoPath -Filter 'run_live_amd_*.bat') | Sort-Object Name
 if ($PaperOnly) { $bats = $bats | Where-Object { $_.Name -like '*_paper.bat' } }
-if (-not $bats) { throw "run_live_orb_*.bat / run_live_fvg_*.bat tapilmadi: $RepoPath" }
+if (-not $bats) { throw "run_live_orb_*.bat / run_live_fvg_*.bat / run_live_amd_*.bat tapilmadi: $RepoPath" }
 
 function Get-TaskNameFromBat {
     # run_live_orb_breakout_xauusd_demo.bat -> OrbBreakout_XAUUSD_Demo
     # run_live_fvg_window_ndx100_paper.bat  -> FvgWindow_NDX100_Paper
+    # run_live_amd_gold_xauusd_paper.bat    -> AmdGold_XAUUSD_Paper
     param([string]$Name)
     $stem = $Name -replace '^run_live_', '' -replace '\.bat$', ''
     $parts = $stem -split '_'
