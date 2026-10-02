@@ -229,9 +229,15 @@
 
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
-FvgWindow_NDX100_Demo        cfi    # CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
-OrbBreakout_GER40_Demo       cfi    # CFI GER30_SPOT, 30m OR / M1 / 4R breakout, 0.25% risk (was the sweep until 2026-09-23)
+
+# 2026-10-02, THE USER'S CALL: FvgWindow_NDX100_Demo and the GER40 Demo bots (CFI breakout, FundingPips
+# sweep) are off the roster. Live went 0/5 on CFI GER40 and 0/5 on CFI FVG, and the live-twin replay
+# reproduced every one of those trades (same days, same stop levels) -- so it is the strategies, not
+# execution: FVG replay PF 0.88 over 6 months and 0.76 over 3, GER40 breakout PF 0.82 over the last year.
+# Their Paper tasks keep running. To bring one back, re-add its line and run deploy/install_tasks.ps1.
+#   FvgWindow_NDX100_Demo        cfi            # was CFI US100_Spot, 10:00 First FVG, M15 limit, 3R, 0.25% risk
+#   OrbBreakout_GER40_Demo       cfi            # was CFI GER30_SPOT, 30m OR / M1 / 4R breakout, 0.25% risk
+#   FvgWindow_NDX100_Demo        fundingpips    # was FundingPips NDX100
+#   OrbSweep_GER40_Demo          fundingpips    # was FundingPips GER40
 
 OrbBreakoutwf_XAUUSD_Demo    fundingpips    # FundingPips XAUUSD, same launcher
-FvgWindow_NDX100_Demo        fundingpips    # FundingPips NDX100
-OrbSweep_GER40_Demo          fundingpips    # FundingPips GER40
