@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Paper trading loop: gold AMD (strategy/gold_amd.py) on PaperBroker.
+"""Gold AMD loop (strategy/gold_amd.py): PaperBroker with --paper, MT5Broker (a DEMO account) without it.
 
-PAPER ONLY. This bot has never traded: the backtest behind it is 74 trades on CFI and 33 on
-FundingPips (see the strategy module's docstring for what is and is not known), so it starts as a
-measurement. It refuses to run without --paper; promoting it to a Demo bot means writing that
-code path on purpose, with a stop rule from deploy/kill_rules.json, not flipping a flag.
+The backtest behind this bot is 74 trades on CFI and 33 on FundingPips (see the strategy module's
+docstring for what is and is not known), so it starts as a measurement and runs --paper. The Demo
+path exists so a promotion is a launcher and a roster line, but nothing enables it yet: it needs
+20-30 live paper trades first, a stop rule in deploy/kill_rules.json fixed before its first order,
+and a roster slot (XAUUSD already has one Demo bot). Without --paper this script places REAL DEMO
+ORDERS, behind the same two demo-account rails as run_live_nasdaq_orb.py.
 
 One poll (every 2 minutes, from a Scheduled Task) does one of three things:
   - a position is open: close it at 15:55 New York (or when it is left over from an earlier day),
@@ -27,10 +29,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import MetaTrader5 as mt5  # noqa: N813
+
 from config.brokers import UnknownBrokerError
-from core.models import Bar, OrderType, SignalDirection
+from config.settings import Settings
+from core.models import AccountInfo, Bar, OrderType, SignalDirection
 from execution.interfaces import IBroker
 from execution.models import Position, TradeManagerAction
+from execution.mt5_broker import MT5Broker
 from execution.order import OrderStatus
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
@@ -39,7 +45,7 @@ from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from risk.daily_risk_tracker import DailyRiskTracker
-from risk.kill_switch import is_trading_halted
+from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.gold_amd import SETUP_TAG, GoldAmdConfig, GoldAmdStrategy
 from strategy.risk_reward import resolve_stop_and_target
 from utils.logging import setup_logger, setup_structured_logger
@@ -60,8 +66,12 @@ MANAGE_LOOKBACK_BARS = 2 * 1440
 _CURRENT_MODE = "paper"
 
 
+class DemoAccountRequiredError(RuntimeError):
+    """Raised when the Demo path is not explicitly and verifiably pointed at a demo account."""
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Gold AMD paper-trading loop (see module docstring).")
+    parser = argparse.ArgumentParser(description="Gold AMD loop: --paper for PaperBroker, otherwise real DEMO orders (see module docstring).")
     parser.add_argument("--symbol", required=True,
                         help="Symbol as THIS REPO names it (XAUUSD); the broker's ticker is resolved from .env")
     parser.add_argument("--tp-r", type=float, default=2.0, help="Take-profit R multiple")
@@ -75,11 +85,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--variant", type=_variant_name, default=None,
                         help="Suffix for this bot's state files (lower-case letters and digits)")
     parser.add_argument("--paper", action="store_true",
-                        help="Required: this bot trades on PaperBroker only")
-    args = parser.parse_args(argv)
-    if not args.paper:
-        parser.error("this bot is paper-only: pass --paper")
-    return args
+                        help="Use PaperBroker (virtual fills against real MT5 prices) instead of placing "
+                             "real orders on the DEMO account")
+    return parser.parse_args(argv)
+
+
+def _ensure_explicit_demo_configuration() -> None:
+    """Identical gate to run_live_nasdaq_orb.py -- see run_live_demo.py for the full rationale."""
+    account_type = Settings.load().MT5_ACCOUNT_TYPE.strip().lower()
+    if account_type != "demo":
+        raise DemoAccountRequiredError(
+            f"MT5_ACCOUNT_TYPE must be explicitly set to 'demo' in .env to run "
+            f"run_live_amd.py without --paper (got {account_type!r}). Refusing to start."
+        )
+
+
+def _ensure_demo_trade_mode(account_info: AccountInfo) -> None:
+    """Identical gate to run_live_nasdaq_orb.py -- see run_live_demo.py for the full rationale."""
+    if account_info.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
+        raise DemoAccountRequiredError(
+            f"Connected MT5 account does not report a DEMO trade_mode "
+            f"(got {account_info.trade_mode!r}, expected "
+            f"{mt5.ACCOUNT_TRADE_MODE_DEMO} = ACCOUNT_TRADE_MODE_DEMO). "
+            "Refusing to trade -- this account may be LIVE."
+        )
+
+
+def _traded_setups_path(risk_dir: Path, tag: str, paper: bool) -> Path:
+    """Where this bot remembers the setups it has opened -- see execution/traded_setups.py.
+
+    The Paper and Demo twins open the same setup ids on purpose, so each keeps its own file.
+    """
+    return risk_dir / f"traded_setups_amd_{tag}{'_paper' if paper else ''}.json"
 
 
 def _variant_name(value: str) -> str:
@@ -268,6 +305,10 @@ def run_once(connector: MT5Connector, broker: IBroker, trade_manager: TradeManag
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+
+    global _CURRENT_MODE
+    _CURRENT_MODE = "paper" if args.paper else "live"
+
     try:
         profile, symbol = resolve_ticker(args.symbol)
     except UnknownBrokerError as exc:
@@ -278,16 +319,33 @@ def main(argv: list[str] | None = None) -> None:
 
     tag = _bot_tag(symbol, args.variant)
     risk_dir = Path(__file__).parent / "risk"
-    kill_switch_flag_path = risk_dir / f"kill_switch_amd_{tag}_paper.flag"
-    daily_risk_tracker = DailyRiskTracker(state_file=risk_dir / f"daily_risk_state_amd_{tag}_paper.json",
-                                          kill_switch_flag_path=kill_switch_flag_path)
+    # Paper keeps its own kill switch and daily-risk state; a Demo bot shares the account-wide ones,
+    # as every other Demo runner does (a None flag path means the global flag).
+    kill_switch_flag_path = risk_dir / f"kill_switch_amd_{tag}_paper.flag" if args.paper else None
+    daily_risk_tracker = (
+        DailyRiskTracker(state_file=risk_dir / f"daily_risk_state_amd_{tag}_paper.json",
+                         kill_switch_flag_path=kill_switch_flag_path)
+        if args.paper else DailyRiskTracker()
+    )
+
+    if not args.paper:
+        try:
+            _ensure_explicit_demo_configuration()
+        except DemoAccountRequiredError as exc:
+            logger.critical("DEMO-ACCOUNT SAFETY RAIL TRIPPED (config): %s", exc)
+            print(f"REFUSING TO START: {exc}")
+            sys.exit(1)
+
     if is_trading_halted(kill_switch_flag_path):
         logger.info("RESULT: TRADING HALTED (kill-switch active)")
         print("TRADING HALTED (kill-switch active)")
         return
 
     connector = MT5Connector()
-    broker = PaperBroker(connector=connector, timeframe="M1", state_file=risk_dir / f"paper_broker_state_amd_{tag}.json")
+    broker = (
+        PaperBroker(connector=connector, timeframe="M1", state_file=risk_dir / f"paper_broker_state_amd_{tag}.json")
+        if args.paper else MT5Broker(connector=connector)
+    )
     if not broker.connect():
         logger.error("Could not connect to MT5.")
         sys.exit(1)
@@ -299,13 +357,24 @@ def main(argv: list[str] | None = None) -> None:
             print(f"REFUSING TO TRADE: {exc}")
             sys.exit(1)
         account_info = broker.get_account_info()
-        logger.info("PAPER mode: balance=%.2f, equity=%.2f (no real orders will be placed).",
-                    account_info.balance, account_info.equity)
+        if not args.paper:
+            try:
+                _ensure_demo_trade_mode(account_info)
+            except DemoAccountRequiredError as exc:
+                logger.critical("DEMO-ACCOUNT SAFETY RAIL TRIPPED (MT5 account): %s", exc)
+                activate_kill_switch(f"run_live_amd.py: {exc}")
+                print(f"REFUSING TO TRADE: {exc}")
+                sys.exit(1)
+            logger.info("Demo-account safety rail passed: trade_mode=%s, currency=%s, equity=%.2f.",
+                        account_info.trade_mode, account_info.currency, account_info.equity)
+        else:
+            logger.info("PAPER mode: balance=%.2f, equity=%.2f (no real orders will be placed).",
+                        account_info.balance, account_info.equity)
         daily_risk_tracker.check_and_update(account_info.equity, account_info.login)
         strategy = GoldAmdStrategy(GoldAmdConfig(tp_r=args.tp_r, min_fvg=args.min_fvg, spread_floor=args.spread_floor))
         trade_manager = TradeManager(volume=args.volume, position_sizer=PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct))
         run_once(connector, broker, trade_manager, strategy, symbol, args.lookback_days, kill_switch_flag_path,
-                 risk_dir / f"traded_setups_amd_{tag}_paper.json")
+                 _traded_setups_path(risk_dir, tag, args.paper))
     finally:
         connector.disconnect()
 

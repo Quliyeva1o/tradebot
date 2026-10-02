@@ -1,4 +1,4 @@
-"""run_live_amd.py: the paper-only gate, the session rules, and one full poll cycle on the synthetic day
+"""run_live_amd.py: the demo-account gates, the session rules, and one full poll cycle on the synthetic day
 from test_gold_amd.py (entry due 11:45 New York, session flat at 15:55)."""
 
 from datetime import UTC, datetime
@@ -11,7 +11,7 @@ import pytest
 
 import run_live_amd as runner
 import strategy.gold_amd as gold_amd
-from core.models import OrderType, SymbolConstraints
+from core.models import AccountInfo, OrderType, SymbolConstraints
 from execution.models import Position
 from execution.paper_broker import PaperBroker
 from execution.position_sizer import PositionSizer
@@ -33,10 +33,41 @@ def position(opened: datetime, comment: str = "setup_amd_20260311_L") -> Positio
                     current_price=100.0, stop_loss=99.0, take_profit=102.0, timestamp=opened, comment=comment)
 
 
-def test_the_bot_refuses_to_start_without_paper(capsys):
-    with pytest.raises(SystemExit):
-        runner.parse_args(["--symbol", "XAUUSD"])
+def test_paper_is_a_choice_and_the_demo_path_is_the_default():
     assert runner.parse_args(["--symbol", "XAUUSD", "--paper"]).paper is True
+    assert runner.parse_args(["--symbol", "XAUUSD"]).paper is False
+
+
+def test_the_demo_path_needs_the_env_to_say_demo(monkeypatch):
+    monkeypatch.setattr(runner.Settings, "load", classmethod(lambda cls: Mock(MT5_ACCOUNT_TYPE="live")))
+    with pytest.raises(runner.DemoAccountRequiredError, match="MT5_ACCOUNT_TYPE"):
+        runner._ensure_explicit_demo_configuration()
+    monkeypatch.setattr(runner.Settings, "load", classmethod(lambda cls: Mock(MT5_ACCOUNT_TYPE="  Demo ")))
+    runner._ensure_explicit_demo_configuration()
+
+
+@pytest.mark.parametrize(("trade_mode", "ok"), [(0, True), (1, False), (2, False)])
+def test_the_demo_path_needs_the_account_to_report_demo(trade_mode, ok):
+    info = AccountInfo(balance=1.0, equity=1.0, margin=0.0, free_margin=1.0, trade_mode=trade_mode)
+    if ok:
+        runner._ensure_demo_trade_mode(info)
+    else:
+        with pytest.raises(runner.DemoAccountRequiredError, match="LIVE"):
+            runner._ensure_demo_trade_mode(info)
+
+
+def test_a_demo_run_refuses_to_start_on_a_live_env_and_connects_to_nothing(monkeypatch):
+    monkeypatch.setattr(runner, "resolve_ticker", lambda s: (Mock(name="cfi", server="CFI11-Demo"), "XAUUSD_"))
+    monkeypatch.setattr(runner.Settings, "load", classmethod(lambda cls: Mock(MT5_ACCOUNT_TYPE="live")))
+    monkeypatch.setattr(runner, "MT5Connector", Mock(side_effect=AssertionError("must not connect")))
+    with pytest.raises(SystemExit):
+        runner.main(["--symbol", "XAUUSD"])
+
+
+def test_paper_and_demo_keep_separate_ledgers(tmp_path):
+    paper = runner._traded_setups_path(tmp_path, "xauusd_", True)
+    demo = runner._traded_setups_path(tmp_path, "xauusd_", False)
+    assert paper != demo and paper.name.endswith("_paper.json") and not demo.name.endswith("_paper.json")
 
 
 @pytest.mark.parametrize(("when", "expected"), [
