@@ -74,9 +74,8 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo", "FvgWindow_NDX100_Demo"}
-DEMO_BOTS_BY_BROKER = {"cfi": SHARED_DEMO_BOTS | {"OrbBreakout_GER40_Demo"},
-                       "fundingpips": SHARED_DEMO_BOTS | {"OrbSweep_GER40_Demo"}}
+SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo"}
+DEMO_BOTS_BY_BROKER = {"cfi": set(SHARED_DEMO_BOTS), "fundingpips": set(SHARED_DEMO_BOTS)}
 DEMO_BOTS = DEMO_BOTS_BY_BROKER["cfi"] | DEMO_BOTS_BY_BROKER["fundingpips"]
 
 
@@ -88,12 +87,11 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     picked the same six. 2026-09-23: on CFI only, GER40 moved from the sweep to the 30m breakout,
     on the longer history. 2026-09-29: DJI30 inverse, SPX500 inverse and JP225 sweep left both
     accounts, negative over the full replay window on both brokers, and their slots stay empty.
-    The roster file's own comment blocks carry the numbers."""
-    assert load_roster(REPO) == {
-        **dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"})),
-        "OrbBreakout_GER40_Demo": frozenset({"cfi"}),
-        "OrbSweep_GER40_Demo": frozenset({"fundingpips"}),
-    }
+    2026-10-02, on the user's call: the First FVG bot and GER40's Demo bots left both accounts,
+    leaving the weekend-flat XAUUSD bot alone -- the live-twin replay had reproduced every one of
+    their losing live trades, so it was the strategies. The roster file's own comment blocks carry
+    the numbers."""
+    assert load_roster(REPO) == dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"}))
 
 
 def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: Path) -> None:
@@ -123,7 +121,7 @@ def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     # A twin -- same CFI ticker, same parameters, only the risk differs -- is covered by its Demo
     # entry, as a twin always has been.
     assert {c.task for c in scope(REPO)} == {
-        "OrbBreakoutwf_XAUUSD_Demo", "OrbSweep_GER40_Demo", "OrbBreakout_GER40_Demo",
+        "OrbBreakoutwf_XAUUSD_Demo", "OrbSweep_GER40_Paper", "OrbBreakout_GER40_Paper",
         "OrbBreakout_XAUUSD_Paper", "OrbSweep_XAUUSD_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
         "OrbBreakout_JP225_Paper", "OrbSweep_JP225_Paper",

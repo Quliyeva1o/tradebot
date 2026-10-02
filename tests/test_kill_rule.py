@@ -40,51 +40,26 @@ class TestAdoptedRuleIsPinned:
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -5.8)
         assert rule.horizon == 80
 
-    def test_the_fvg_bots_numbers_are_the_ones_fixed_before_its_first_trade(self) -> None:
-        # scripts/fvg_window_envelope.py, full CFI history with swap, seed 20260922. Adopted at
-        # 25.1/35.4/-14.3 on Bucharest-read bars; revised the same day, before any live trade, to
-        # the same script on the broker's real clock -- tighter on every clause, never looser.
-        rule = kr.load_rules("cfi")["FvgWindow_NDX100_Demo"]
-
-        assert rule.adopted == datetime(2026, 9, 22, 6, 22, 57, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, 24.8), kr.StopClause(80, 34.7))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.1)
-
     @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
-    def test_the_bots_cut_on_2026_09_29_took_their_rules_with_them(self, broker: str) -> None:
-        # DJI30 inverse, SPX500 inverse and JP225 sweep left both accounts: negative over the full
-        # replay window on both brokers (deploy/demo_roster.txt). A rule outliving its bot would be
-        # judged by the weekly report against trades no bot of that name places any more.
+    def test_the_bots_cut_took_their_rules_with_them(self, broker: str) -> None:
+        # 2026-09-29: DJI30 inverse, SPX500 inverse and JP225 sweep left both accounts. 2026-10-02, on the
+        # user's call: the First FVG bot and GER40's Demo bots (CFI breakout, FundingPips sweep) left too,
+        # after live went 0/5 on CFI GER30 and 0/5 on CFI FVG and the live-twin replay reproduced every
+        # trade (deploy/demo_roster.txt). A rule outliving its bot would be judged by the weekly report
+        # against trades no bot of that name places any more; the numbers stay in git history.
         rules = kr.load_rules(broker)
 
-        assert not {"OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo"} & set(rules)
+        assert not {"OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo",
+                    "FvgWindow_NDX100_Demo", "OrbBreakout_GER40_Demo", "OrbSweep_GER40_Demo"} & set(rules)
 
-    def test_the_cfi_ger40_breakout_that_replaced_the_sweep_is_pinned(self) -> None:
-        # 2026-09-23: GER40's CFI Demo bot moved from the sweep to the 30m breakout. Full CFI history
-        # with swap, the same bootstrap, fixed before deployment; the sweep's CFI rule retired with it.
-        rules = kr.load_rules("cfi")
-        rule = rules["OrbBreakout_GER40_Demo"]
-
-        assert rule.adopted == datetime(2026, 9, 23, 10, 39, 46, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, 27.5), kr.StopClause(80, 37.9))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -14.4)
-        assert "OrbSweep_GER40_Demo" not in rules
-
-    @pytest.mark.parametrize(("task", "dd40", "dd80", "net40"), [
-        ("OrbBreakoutwf_XAUUSD_Demo", 17.6, 22.6, -6.1),
-        ("FvgWindow_NDX100_Demo", 26.3, 37.9, -15.6),
-        ("OrbSweep_GER40_Demo", 19.6, 27.8, -11.8),
-    ])
-    def test_the_fundingpips_rules_are_pinned_and_are_not_cfis(
-        self, task: str, dd40: float, dd80: float, net40: float
-    ) -> None:
-        # The same tasks on FundingPips' own prices, fixed before that account's first order.
-        rule = kr.load_rules("fundingpips")[task]
+    def test_the_fundingpips_rule_is_pinned_and_is_not_cfis(self) -> None:
+        # The same task on FundingPips' own prices, fixed before that account's first order.
+        rule = kr.load_rules("fundingpips")["OrbBreakoutwf_XAUUSD_Demo"]
 
         assert rule.adopted == datetime(2026, 9, 22, 13, 52, 21, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, dd40), kr.StopClause(80, dd80))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, net40)
-        assert rule != kr.load_rules("cfi").get(task)  # GER40's sweep has no CFI rule since 2026-09-23
+        assert rule.stops == (kr.StopClause(40, 17.6), kr.StopClause(80, 22.6))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -6.1)
+        assert rule != kr.load_rules("cfi")["OrbBreakoutwf_XAUUSD_Demo"]
 
     @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
     def test_every_rule_names_a_bot_the_roster_deploys_on_that_account(self, broker: str) -> None:
