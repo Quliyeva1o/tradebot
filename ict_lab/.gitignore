@@ -1,3 +1,6 @@
 out/
 live_state.json
 live_state.tmp
+live_state_cfi.json
+paper_trades.csv
+paper_compare.csv

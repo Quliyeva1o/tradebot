@@ -13,7 +13,7 @@ and `r2` (fixed 2R). One setup per strategy x symbol x window is live at a time:
 opens once the earlier one died WITHOUT filling, which is how the backtest's "first candidate that
 fills" reads when you cannot see the future.
 
-Schedule it every 5 minutes (ict_lab/install_task.ps1). Telegram settings: ICT_TG_TOKEN / ICT_TG_CHAT_ID in .env.
+Schedule it every 2 minutes (ict_lab/install_task.ps1). Telegram settings: ICT_TG_TOKEN / ICT_TG_CHAT_ID in .env.
 """
 from __future__ import annotations
 
@@ -41,12 +41,34 @@ from ict_lab.strategies import CFGS
 
 NY = ZoneInfo("America/New_York")
 BAKU = ZoneInfo("Asia/Baku")
-STATE = Path("ict_lab/live_state.json")
 BARS = 45_000                  # ~32 trading days of M1: the levels need 21 sessions
 ALERT_MAX_AGE_MIN = 45         # a setup older than this when first seen is tracked silently
-FULL_ALERT_GRADES = ("A+",)    # these get one message each; A and B+ go in one digest per scan
-DIGEST_GRADES = ("A", "B+")
-CLOCK = SERVER_CLOCKS["fundingpips"]
+FULL_ALERT_GRADES = ("A+",)    # these get one message each; A goes in one digest per scan
+DIGEST_GRADES = ("A",)          # B+ is still tracked on paper, but never messaged
+
+# Two terminals run on this machine and the bot reads either one (a process can only attach to one terminal, so each
+# feed is its own process: --feed fp | cfi). Each feed keeps its own paper book; ict_lab.report lines them up.
+FEEDS = {
+    "fp": {"path": None, "clock": "fundingpips", "tickers": {}, "floors": {}, "state": "ict_lab/live_state.json"},
+    "cfi": {"path": "C:/Program Files/MetaTrader 5/terminal64.exe", "clock": "cfi",
+            "tickers": {"EURUSD": "EURUSD_", "GBPUSD": "GBPUSD_", "USDJPY": "USDJPY_", "USDCAD": "USDCAD_",
+                        "AUDUSD": "AUDUSD_", "USDCHF": "USDCHF_", "XAUUSD": "XAUUSD_", "NDX100": "US100_Spot",
+                        "SPX500": "US500_SPOT", "XAGUSD": "XAGUSD_"},
+            "floors": {"XAUUSD": 0.15, "NDX100": 0.8}, "state": "ict_lab/live_state_cfi.json"},
+}
+FEED = "fp"
+
+
+def ticker(name: str) -> str:
+    return FEEDS[FEED]["tickers"].get(name, name)
+
+
+def floor_of(name: str) -> float:
+    return FEEDS[FEED]["floors"].get(name, SYMBOLS[name][0])
+
+
+def state_path() -> Path:
+    return Path(FEEDS[FEED]["state"])
 
 # symbol -> (spread floor in price units, SMT partner). Floors are what the backtest charged at minimum.
 SYMBOLS = {
@@ -75,7 +97,7 @@ VARIANTS = ("doc", "r2")
 
 def _frame(df: pd.DataFrame, point: float) -> Frame:
     naive = pd.to_datetime(df["time"], unit="s")
-    utc = server_wall_to_utc(pd.Series(naive.values), CLOCK)
+    utc = server_wall_to_utc(pd.Series(naive.values), SERVER_CLOCKS[FEEDS[FEED]["clock"]])
     ts = ((utc - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).to_numpy(dtype=np.int64)
     order = np.argsort(ts, kind="stable")
     keep = np.r_[True, np.diff(ts[order]) != 0]
@@ -84,18 +106,21 @@ def _frame(df: pd.DataFrame, point: float) -> Frame:
     return Frame(ts[sel], g("open"), g("high"), g("low"), g("close"), df["spread"].to_numpy(dtype=float)[sel] * point)
 
 
-ASOF: int | None = None       # --asof: pretend it is this UTC epoch (replays a past moment on the bars in the terminal)
+OVERNIGHT_UNTIL = 120              # ny_pm setups are carried to 02:00 NY the next day
+PAD_BARS = 2                   # see make_sym
+ASOF: int | None = None      # --asof: pretend it is this UTC epoch (replays a past moment on the bars in the terminal)
 
 
 def fetch(mt5, name: str) -> Frame | None:
-    mt5.symbol_select(name, True)
+    tk = ticker(name)
+    mt5.symbol_select(tk, True)
     rates = None
     for _ in range(4):   # the terminal sometimes answers None while it syncs history
-        rates = mt5.copy_rates_from_pos(name, mt5.TIMEFRAME_M1, 1, BARS)   # pos 1: skip the forming minute
+        rates = mt5.copy_rates_from_pos(tk, mt5.TIMEFRAME_M1, 1, BARS)   # pos 1: skip the forming minute
         if rates is not None and len(rates):
             break
         time.sleep(1.5)
-    info = mt5.symbol_info(name)
+    info = mt5.symbol_info(tk)
     if rates is None or len(rates) < 10_000 or info is None:
         return None
     f = _frame(pd.DataFrame(rates), info.point)
@@ -111,14 +136,33 @@ def fetch(mt5, name: str) -> Frame | None:
 
 
 def make_sym(name: str, frames: dict[str, Frame]) -> Sym:
-    floor, partner = SYMBOLS[name]
+    floor, partner = floor_of(name), SYMBOLS[name][1]
     m1 = frames[name]
     m1.sp = np.maximum(m1.sp, floor)
     m5 = to_m5(m1, floor)
+    real_m1 = m1
+    if PAD_BARS:
+        # build_setups wants one M1 bar AFTER the signal bar (the order goes live on it). Live that bar does not
+        # exist yet, which would delay every alert by a minute; a flat placeholder lets the setup form at the
+        # close. Only detection sees it -- status() reads the real minutes (sym.m1_real).
+        lc = float(m1.c[-1])
+        m1 = Frame(np.r_[m1.ts, m1.ts[-1] + 60], np.r_[m1.o, lc], np.r_[m1.h, lc], np.r_[m1.l, lc],
+                   np.r_[m1.c, lc], np.r_[m1.sp, floor])
+    if PAD_BARS:
+        # core.py will not call an MSS until two more M5 bars exist behind it, which costs 10 minutes live.
+        # Two flat placeholder bars at the last close satisfy that margin; they can never be the MSS bar
+        # (the loop stops short of them) and a setup that leans on one has a signal time in the future,
+        # which build_setups drops until the real bar arrives.
+        k = np.arange(1, PAD_BARS + 1)
+        last = float(m5.c[-1])
+        flat = np.full(PAD_BARS, last)
+        m5 = Frame(np.r_[m5.ts, m5.ts[-1] + 300 * k], np.r_[m5.o, flat], np.r_[m5.h, flat], np.r_[m5.l, flat],
+                   np.r_[m5.c, flat], np.r_[m5.sp, np.full(PAD_BARS, floor)])
     pm5 = to_m5(frames[partner], 0.0)
     pos = np.minimum(np.searchsorted(pm5.ts, m5.ts), len(pm5.ts) - 1)
     ok = pm5.ts[pos] == m5.ts
     sym = Sym(name, floor, m1, m5, np.where(ok, pm5.h[pos], np.nan), np.where(ok, pm5.l[pos], np.nan))
+    sym.m1_real = real_m1
     # today has fewer than 100 M5 bars for most of the session, so Sym leaves it out of tdays; levels() needs it in
     today = int(m5.day[-1])
     if (today + 3) % 7 < 5 and today not in sym.tindex:
@@ -131,19 +175,31 @@ def make_sym(name: str, frames: dict[str, Frame]) -> Sym:
 
 def status(st: Setup, sym: Sym, variant: str) -> dict:
     """Where this setup stands on the bars so far. Mirrors core.simulate bar for bar, but knows 'not yet'."""
-    m1 = sym.m1
+    m1 = getattr(sym, "m1_real", sym.m1)
     n_all = len(m1.ts)
     # st.exp / st.end are M1 indices that sit at the END of the data until their clock time has passed,
     # so "has the deadline come" has to be read off the clock, not off the index
     cfg = CFGS[st.strat]
     wb = next(b for lab, _, b in cfg.windows if lab == st.win)
     last_wall = int(m1.wall[-1])
-    expired = last_wall >= st.day * 1440 + min(wb + cfg.fill_after, FLAT)
-    ended = last_wall >= st.day * 1440 + FLAT
-    a, x = st.a0, min(st.end, n_all)
-    e = min(st.exp, st.end)
+    # New York wall minute the order stops resting / the position is closed. The backtest flattens everything at
+    # 16:00; a ny_pm setup (signal after 13:30) would get under half an hour, so the live book carries it to 02:00 NY next day.
+    if st.win == "ny_pm":
+        exp_to = hold_to = (st.day + 1) * 1440 + OVERNIGHT_UNTIL
+    else:
+        exp_to, hold_to = st.day * 1440 + min(wb + cfg.fill_after, FLAT), st.day * 1440 + FLAT
+    expired = last_wall >= exp_to
+    ended = last_wall >= hold_to
+    end_i = int(np.searchsorted(m1.wall, hold_to))
+    a, x = st.a0, min(end_i, n_all)
+    e = min(int(np.searchsorted(m1.wall, exp_to)), end_i)
     ne = max(0, min(e, n_all) - a)
     o, h, l, c, sp = (v[a:x].tolist() for v in (m1.o, m1.h, m1.l, m1.c, m1.sp))
+    if st.win == "ny_pm":
+        # carrying past 17:00 NY crosses the broker rollover, where the quoted spread blows out for a few minutes.
+        # That is not a cost anyone pays on a resting order, and the backtest never saw it (it flattened at 16:00).
+        floor = floor_of(st.sym)
+        sp = [floor if 1015 <= m <= 1025 else v for m, v in zip((m1.wall[a:x] % 1440).tolist(), sp)]
     n = len(o)
     d = st.d
     fill = fi = None
@@ -188,8 +244,8 @@ def status(st: Setup, sym: Sym, variant: str) -> dict:
     if fill is None:
         return {"state": "dead", "why": "expired"} if expired else {"state": "pending"}
     risk = abs(fill - st.sl)
-    if risk < MIN_RISK_SPREADS * sp[fi] or (fill - st.sl) * d <= 0:
-        return {"state": "dead", "why": "tiny stop"}
+    if (fill - st.sl) * d <= 0:   # no 5-spread minimum here: every fill is shown, tiny stops are flagged in the alert
+        return {"state": "dead", "why": "beyond stop"}
     if variant == "r2":
         tp = fill + d * 2 * risk
     else:
@@ -237,11 +293,16 @@ def tg_call(token: str, method: str, **params):
 
 
 def send(token: str, chat: str, text: str) -> bool:
-    try:
-        return bool(tg_call(token, "sendMessage", chat_id=chat, text=text, disable_web_page_preview="true").get("ok"))
-    except Exception as exc:   # never let a Telegram hiccup stop the paper book
-        print(f"telegram send failed: {type(exc).__name__}", file=sys.stderr)
-        return False
+    """Sends to every chat id in `chat` (comma separated); True if at least one got it."""
+    ok = False
+    for cid in (c.strip() for c in chat.split(",")):
+        if not cid:
+            continue
+        try:
+            ok |= bool(tg_call(token, "sendMessage", chat_id=cid, text=text, disable_web_page_preview="true").get("ok"))
+        except Exception as exc:   # one blocked chat must not stop the others or the paper book
+            print(f"telegram send to {cid} failed: {type(exc).__name__}", file=sys.stderr)
+    return ok
 
 
 # --------------------------------------------------------------------------- messages
@@ -262,6 +323,11 @@ def _doc_tp(st: Setup) -> tuple[float | None, bool]:
     return tp, False
 
 
+def tiny(st: Setup) -> bool:
+    """Stop narrower than 5 spreads: the backtest refused these, a real fill would be at the mercy of slippage."""
+    return abs(st.E - st.sl) < MIN_RISK_SPREADS * floor_of(st.sym)
+
+
 def alert_text(group: list[Setup]) -> str:
     """One message for every model that fired on the same sweep (same symbol, side and window)."""
     st0 = group[0]
@@ -276,10 +342,12 @@ def alert_text(group: list[Setup]) -> str:
         conf = "".join(k[0] if f.get(k) else "-" for k in ("bias", "disp", "pd", "smt", "htf"))
         tp_txt = (f"{'≈' if approx else ''}{fmt(s, tp)} ({abs(tp - st.E) / risk:.1f}R)" if tp else "yoxdur")
         kind = "bazar" if st.mode == "market" else "limit"
-        lines.append(f"• {NAMES[st.strat]} [{conf}]")
+        lines.append(f"• {NAMES[st.strat]} [{conf}]" + ("  ⚠️ stop 5 spreaddən kiçik" if tiny(st) else ""))
         lines.append(f"  {kind} {fmt(s, st.E)} | SL {fmt(s, st.sl)} ({risk / PIP[s]:.1f} {unit})")
         lines.append(f"  TP sənəd {tp_txt} | TP 2R {fmt(s, st.E + st.d * 2 * risk)}")
     lines.append(f"Siqnal {datetime.fromtimestamp(ts, NY).strftime('%H:%M')} NY / {_local(ts)} Bakı · [b=bias d=disp p=pd s=smt h=htf]")
+    if st0.win == "ny_pm":
+        lines.append("⏳ ny_pm: order/mövqe ertəsi gün 02:00 NY (10:00 Bakı) vaxtınadək saxlanılır.")
     lines.append("Paper izlənir. Backtestdə bu qrupun edge-i sübut olunmayıb.")
     return "\n".join(lines)
 
@@ -288,7 +356,7 @@ def line_text(st: Setup) -> str:
     s = st.sym
     tp, approx = _doc_tp(st)
     return (f"{st.grade:>2} {s} {'L' if st.d == 1 else 'S'} {NAMES[st.strat]} | E {fmt(s, st.E)} SL {fmt(s, st.sl)}"
-            + (f" TP {'≈' if approx else ''}{fmt(s, tp)}" if tp else " TP –"))
+            + (f" TP {'≈' if approx else ''}{fmt(s, tp)}" if tp else " TP –") + (" ⚠️" if tiny(st) else ""))
 
 
 def book_summary(state: dict, title: str, since_day: int | None = None) -> str:
@@ -297,7 +365,7 @@ def book_summary(state: dict, title: str, since_day: int | None = None) -> str:
         return f"{title}\nBağlanmış paper trade yoxdur."
     df = pd.DataFrame(rows)
     out = [title]
-    for g in ("A+", "A", "B+"):
+    for g in ("A+", "A"):
         part = df[df.grade == g]
         if part.empty:
             continue
@@ -321,15 +389,15 @@ class Cycle:
 
 
 def load_state() -> dict:
-    if STATE.exists():
-        return json.loads(STATE.read_text(encoding="utf8"))
+    if state_path().exists():
+        return json.loads(state_path().read_text(encoding="utf8"))
     return {"setups": {}, "closed": [], "summary_day": 0}
 
 
 def save_state(state: dict) -> None:
-    tmp = STATE.with_suffix(".tmp")
+    tmp = state_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(state), encoding="utf8")
-    os.replace(tmp, STATE)
+    os.replace(tmp, state_path())
 
 
 def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
@@ -343,6 +411,7 @@ def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
         frames[nm] = fr
     now = ASOF if ASOF is not None else int(datetime.now(timezone.utc).timestamp())
     seen = 0
+    backfill = not cyc.state["setups"]   # a feed's first run also books the previous session, so two books can be compared
     twins: set[str] = set()
     for name in symbols:
         if name not in frames or SYMBOLS[name][1] not in frames:
@@ -373,7 +442,7 @@ def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
                     rec = cyc.state["setups"].get(sid)
                     stats = {v: status(st, sym, v) for v in VARIANTS}
                     if rec is None:
-                        if day != today:
+                        if day != today and not backfill:
                             continue
                         age = (now - st.sig_ts) / 60
                         rec = {"id": sid, "sym": st.sym, "strat": st.strat, "grade": st.grade, "day": st.day, "win": st.win,
@@ -412,6 +481,8 @@ def run(args) -> int:
     from dotenv import dotenv_values
     env = dotenv_values(".env")
     token, chat = env.get("ICT_TG_TOKEN", ""), env.get("ICT_TG_CHAT_ID", "")
+    if args.silent:
+        token = chat = ""        # this feed only keeps its paper book; the other feed does the talking
 
     if args.find_chat:
         for u in tg_call(token, "getUpdates").get("result", []):
@@ -424,40 +495,92 @@ def run(args) -> int:
         return 0
 
     import MetaTrader5 as mt5
-    if not mt5.initialize():
+    path = FEEDS[FEED]["path"]
+    if not (mt5.initialize(path=path) if path else mt5.initialize()):
         print("MT5 initialize failed", mt5.last_error(), file=sys.stderr)
         return 2
     try:
-        symbols = args.symbols or list(SYMBOLS)
-        state = load_state()
-        cyc = Cycle(token, chat, args.dry_run, state, [], [], [])
-        seen = scan(mt5, cyc, symbols)
+        if args.loop:
+            return loop(mt5, args, token, chat)
+        cycle(mt5, args, token, chat)
     finally:
         mt5.shutdown()
+    return 0
+
+
+def cycle(mt5, args, token: str, chat: str) -> int:
+    symbols = args.symbols or list(SYMBOLS)
+    state = load_state()
+    cyc = Cycle(token, chat, args.dry_run, state, [], [], [])
+    seen = scan(mt5, cyc, symbols)
 
     grouped: dict[tuple, list[Setup]] = {}
     for st in cyc.new_full:
         grouped.setdefault((st.sym, st.d, st.win, st.day), []).append(st)
     msgs = [alert_text(g) for g in grouped.values()]
     if cyc.new_digest:
-        msgs.append(f"📋 {len(cyc.new_digest)} yeni A/B+ setup\n" + "\n".join(line_text(st) for st in cyc.new_digest))
+        msgs.append(f"📋 {len(cyc.new_digest)} yeni A setup\n" + "\n".join(line_text(st) for st in cyc.new_digest))
     if cyc.updates:
         msgs.append("\n".join(cyc.updates))
     ny_now = datetime.now(NY)
     today_key = int(datetime(ny_now.year, ny_now.month, ny_now.day).timestamp() // 86400)
     if ny_now.hour >= 16 and ny_now.weekday() < 5 and state.get("summary_day") != today_key and not args.dry_run:
-        msgs.append(book_summary(state, "📊 Ümumi paper nəticə"))
+        msgs.append(book_summary(state, "📊 Paper nəticə · FundingPips"))
+        other = FEEDS["cfi" if FEED == "fp" else "fp"]["state"]
+        if Path(other).exists():
+            msgs.append(book_summary(json.loads(Path(other).read_text(encoding="utf8")), "📊 Paper nəticə · CFI" if FEED == "fp" else "📊 Paper nəticə · FundingPips"))
         state["summary_day"] = today_key
 
-    print(f"{datetime.now():%H:%M:%S} scanned {seen} setups | new full {len(cyc.new_full)} digest {len(cyc.new_digest)} updates {len(cyc.updates)}")
+    print(f"{datetime.now():%H:%M:%S} scanned {seen} setups | new full {len(cyc.new_full)} digest {len(cyc.new_digest)} updates {len(cyc.updates)}", flush=True)
+    # state first: a crash while sending must not re-send the same alert on the next cycle
+    if not args.dry_run:
+        save_state(state)
     for m in msgs:
+        if args.silent:
+            continue
         if args.dry_run or not (token and chat):
             print("----\n" + m)
         else:
             send(token, chat, m)
-    if not args.dry_run:
-        save_state(state)
-    return 0
+    return seen
+
+
+def _latest_bars(mt5) -> tuple:
+    """Open time of the last completed M1 bar of every symbol: changes the moment a new minute closes."""
+    out = []
+    for nm in SYMBOLS:
+        mt5.symbol_select(ticker(nm), True)
+        r = mt5.copy_rates_from_pos(ticker(nm), mt5.TIMEFRAME_M1, 1, 1)
+        out.append(int(r[0]["time"]) if r is not None and len(r) else 0)
+    return tuple(out)
+
+
+def loop(mt5, args, token: str, chat: str) -> int:
+    """Stay resident and scan as soon as a new minute closes (about every 3 s it checks whether one did)."""
+    print(f"{datetime.now():%H:%M:%S} loop started", flush=True)
+    last = None
+    last_scan = 0.0
+    fails = 0
+    while True:
+        try:
+            cur = _latest_bars(mt5)
+            # symbols close their minute at slightly different moments; 12 s apart keeps the CPU quiet
+            if cur != last and time.monotonic() - last_scan >= 12:
+                seen = cycle(mt5, args, token, chat)
+                last_scan = time.monotonic()
+                if seen:                 # an empty scan means the terminal had no bars yet: try again, do not wait a minute
+                    last = cur
+            fails = 0
+        except Exception as exc:   # a bad cycle must not kill the watcher; the next new minute retries it
+            fails += 1
+            print(f"{datetime.now():%H:%M:%S} cycle failed: {type(exc).__name__}: {str(exc)[:120]}", file=sys.stderr, flush=True)
+            if fails >= 5:
+                mt5.shutdown()
+                time.sleep(5)
+                if not mt5.initialize():
+                    time.sleep(20)
+                fails = 0
+        time.sleep(3)
 
 
 def main() -> int:
@@ -466,10 +589,15 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--find-chat", action="store_true")
     ap.add_argument("--ping", action="store_true")
+    ap.add_argument("--loop", action="store_true", help="stay resident, scan on every new closed minute")
     ap.add_argument("--symbols", nargs="*")
+    ap.add_argument("--feed", choices=sorted(FEEDS), default="fp", help="which terminal to read: fp (default) or cfi")
+    ap.add_argument("--silent", action="store_true", help="track the paper book only, send nothing to Telegram")
     ap.add_argument("--max-age", type=int, help="minutes a setup may be old and still alert (testing)")
     ap.add_argument("--asof", help='replay: pretend it is this New York time, "YYYY-MM-DD HH:MM" (implies --dry-run)')
     a = ap.parse_args()
+    global FEED
+    FEED = a.feed
     if a.max_age:
         global ALERT_MAX_AGE_MIN
         ALERT_MAX_AGE_MIN = a.max_age
