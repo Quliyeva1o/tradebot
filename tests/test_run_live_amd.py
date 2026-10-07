@@ -91,9 +91,23 @@ def test_a_position_is_closed_at_the_session_end_or_when_it_is_left_over(opened,
 
 def test_only_this_bots_positions_are_its_own():
     mine, foreign = runner._partition_positions(
-        [position(ny(11, 45)), position(ny(11, 45), comment="setup_nasdaq_orb_m1_XAUUSD_M1_BUY")], "XAUUSD_")
+        [position(ny(11, 45)), position(ny(11, 45), comment="setup_fvg_window_20260311")], "XAUUSD_")
     assert [p.comment for p in mine] == ["setup_amd_20260311_L"]
     assert len(foreign) == 1
+
+
+def test_the_breakout_bots_open_trade_is_neither_ours_nor_a_blocker():
+    # hedging account: the gold breakout bot may hold a trade while this bot enters its own
+    mine, foreign = runner._partition_positions(
+        [position(ny(11, 45), comment="setup_nasdaq_orb_m1_XAUUSD_M1_BUY")], "XAUUSD_")
+    assert mine == [] and foreign == []
+
+
+def test_a_stranger_next_to_the_breakout_bots_trade_still_blocks():
+    mine, foreign = runner._partition_positions(
+        [position(ny(11, 45), comment="setup_nasdaq_orb_m1_XAUUSD_M1_BUY"),
+         position(ny(11, 45), comment="manual")], "XAUUSD_")
+    assert mine == [] and [p.comment for p in foreign] == ["manual"]
 
 
 @pytest.fixture

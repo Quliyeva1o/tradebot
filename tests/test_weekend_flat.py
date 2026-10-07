@@ -166,3 +166,26 @@ class TestRunOnce:
         monkeypatch.setattr(runner, "_evaluate_for_new_trade", lambda *a, **k: calls.append(1))
         _run(_PaperBroker([]), _server(2026, 9, 11, 23, 0), weekend_flat=True, tmp_path=tmp_path)
         assert calls == [1]
+
+
+class TestSiblingPositions:
+    """The gold AMD bot runs beside this one on the same hedging account (SIBLING_TAGS)."""
+
+    @staticmethod
+    def _position(comment: str) -> Position:
+        return Position(id="1", symbol="XAUUSD_", order_type=OrderType.BUY_MARKET, volume=0.01,
+                        open_price=4000.0, current_price=4000.0, stop_loss=3990.0, take_profit=4030.0,
+                        comment=comment)
+
+    def test_an_amd_trade_is_neither_ours_nor_a_blocker(self) -> None:
+        mine, foreign = runner._partition_positions([self._position("setup_amd_20261007_L")], "XAUUSD_")
+        assert mine == [] and foreign == []
+
+    def test_our_own_trade_is_still_ours_beside_an_amd_one(self) -> None:
+        own = self._position("setup_nasdaq_orb_m1_XAUUSD_M1_BUY_20261007")
+        mine, foreign = runner._partition_positions([own, self._position("setup_amd_20261007_L")], "XAUUSD_")
+        assert mine == [own] and foreign == []
+
+    def test_a_stranger_still_blocks(self) -> None:
+        mine, foreign = runner._partition_positions([self._position("manual")], "XAUUSD_")
+        assert mine == [] and len(foreign) == 1
