@@ -43,13 +43,13 @@ NY = ZoneInfo("America/New_York")
 BAKU = ZoneInfo("Asia/Baku")
 BARS = 45_000                  # ~32 trading days of M1: the levels need 21 sessions
 ALERT_MAX_AGE_MIN = 45         # a setup older than this when first seen is tracked silently
-FULL_ALERT_GRADES = ("A+",)    # these get one message each; A goes in one digest per scan
-DIGEST_GRADES = ("A",)          # B+ is still tracked on paper, but never messaged
+FULL_ALERT_GRADES = ("A+",)    # one message per sweep; nothing else is sent
+DIGEST_GRADES = ()
 
 # Two terminals run on this machine and the bot reads either one (a process can only attach to one terminal, so each
 # feed is its own process: --feed fp | cfi). Each feed keeps its own paper book; ict_lab.report lines them up.
 FEEDS = {
-    "fp": {"path": None, "clock": "fundingpips", "tickers": {}, "floors": {}, "state": "ict_lab/live_state.json"},
+    "fp": {"path": "C:/MetaTrader 5 FP/terminal64.exe", "clock": "fundingpips", "tickers": {}, "floors": {}, "state": "ict_lab/live_state.json"},
     "cfi": {"path": "C:/Program Files/MetaTrader 5/terminal64.exe", "clock": "cfi",
             "tickers": {"EURUSD": "EURUSD_", "GBPUSD": "GBPUSD_", "USDJPY": "USDJPY_", "USDCAD": "USDCAD_",
                         "AUDUSD": "AUDUSD_", "USDCHF": "USDCHF_", "XAUUSD": "XAUUSD_", "NDX100": "US100_Spot",
@@ -90,7 +90,8 @@ NAMES = {
     "order_block": "Order Block", "breaker_block": "Breaker Block", "ny_open_cbdr": "NY Open + CBDR",
     "pdh_pdl_raid": "PDH/PDL Raid",
 }
-VARIANTS = ("doc", "r2")
+VARIANTS = ("r2",)               # the book now tracks only the fixed 2R exit
+BOOK_GRADES = ("A+",)           # ... and only A+ setups (others are still built so the one-per-window rule stays honest)
 
 
 # --------------------------------------------------------------------------- data
@@ -173,7 +174,7 @@ def make_sym(name: str, frames: dict[str, Frame]) -> Sym:
 
 # --------------------------------------------------------------------------- paper book
 
-def status(st: Setup, sym: Sym, variant: str) -> dict:
+def status(st: Setup, sym: Sym, variant: str, r_mult: float = 2.0) -> dict:
     """Where this setup stands on the bars so far. Mirrors core.simulate bar for bar, but knows 'not yet'."""
     m1 = getattr(sym, "m1_real", sym.m1)
     n_all = len(m1.ts)
@@ -247,7 +248,7 @@ def status(st: Setup, sym: Sym, variant: str) -> dict:
     if (fill - st.sl) * d <= 0:   # no 5-spread minimum here: every fill is shown, tiny stops are flagged in the alert
         return {"state": "dead", "why": "beyond stop"}
     if variant == "r2":
-        tp = fill + d * 2 * risk
+        tp = fill + d * r_mult * risk
     else:
         tp = tp_fib if (st.mode == "fib" and st.fib_ext and fill is not None) else st.tp.get("doc")
         if tp is None or abs(tp - fill) < 2 * risk or (tp - fill) * d <= 0:
@@ -337,14 +338,12 @@ def alert_text(group: list[Setup]) -> str:
     lines = [f"{'🟢' if st0.d == 1 else '🔴'} {st0.grade} · {s} {'LONG' if st0.d == 1 else 'SHORT'} · {st0.win} · sweep {st0.kind}"]
     for st in sorted(group, key=lambda g: g.strat):
         risk = abs(st.E - st.sl)
-        tp, approx = _doc_tp(st)
         f = st.feats
         conf = "".join(k[0] if f.get(k) else "-" for k in ("bias", "disp", "pd", "smt", "htf"))
-        tp_txt = (f"{'≈' if approx else ''}{fmt(s, tp)} ({abs(tp - st.E) / risk:.1f}R)" if tp else "yoxdur")
         kind = "bazar" if st.mode == "market" else "limit"
         lines.append(f"• {NAMES[st.strat]} [{conf}]" + ("  ⚠️ stop 5 spreaddən kiçik" if tiny(st) else ""))
         lines.append(f"  {kind} {fmt(s, st.E)} | SL {fmt(s, st.sl)} ({risk / PIP[s]:.1f} {unit})")
-        lines.append(f"  TP sənəd {tp_txt} | TP 2R {fmt(s, st.E + st.d * 2 * risk)}")
+        lines.append(f"  TP 2R {fmt(s, st.E + st.d * 2 * risk)}")
     lines.append(f"Siqnal {datetime.fromtimestamp(ts, NY).strftime('%H:%M')} NY / {_local(ts)} Bakı · [b=bias d=disp p=pd s=smt h=htf]")
     if st0.win == "ny_pm":
         lines.append("⏳ ny_pm: order/mövqe ertəsi gün 02:00 NY (10:00 Bakı) vaxtınadək saxlanılır.")
@@ -365,13 +364,11 @@ def book_summary(state: dict, title: str, since_day: int | None = None) -> str:
         return f"{title}\nBağlanmış paper trade yoxdur."
     df = pd.DataFrame(rows)
     out = [title]
-    for g in ("A+", "A"):
-        part = df[df.grade == g]
-        if part.empty:
-            continue
-        doc = part.R_doc.dropna()
-        r2 = part.R_r2.dropna()
-        out.append(f"{g}: {len(part)} trade | doc {doc.sum():+.1f}R (orta {doc.mean():+.2f}) | 2R {r2.sum():+.1f}R (orta {r2.mean():+.2f})")
+    part = df[df.grade == "A+"]
+    if part.empty:
+        return f"{title}\nBağlanmış A+ paper trade yoxdur."
+    r2 = part.R_r2.dropna()
+    out.append(f"A+ 2R: {len(r2)} trade | {r2.sum():+.1f}R (orta {r2.mean():+.2f}) | qazanma {(r2 > 0).mean():.0%}")
     return "\n".join(out)
 
 
@@ -440,6 +437,8 @@ def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
                         continue      # the same zone found again on a later bar: not a new setup
                     twins.add(twin)
                     rec = cyc.state["setups"].get(sid)
+                    if rec is not None and rec["grade"] not in BOOK_GRADES:
+                        rec["scored"] = True      # booked before the book went A+ only: no more updates
                     stats = {v: status(st, sym, v) for v in VARIANTS}
                     if rec is None:
                         if day != today and not backfill:
@@ -447,10 +446,10 @@ def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
                         age = (now - st.sig_ts) / 60
                         rec = {"id": sid, "sym": st.sym, "strat": st.strat, "grade": st.grade, "day": st.day, "win": st.win,
                                "d": st.d, "sig_ts": st.sig_ts, "alerted": age <= ALERT_MAX_AGE_MIN,
-                               "states": {}, "scored": False}
+                               "states": {}, "scored": st.grade not in BOOK_GRADES}
                         if age <= ALERT_MAX_AGE_MIN and st.grade in FULL_ALERT_GRADES + DIGEST_GRADES:
                             (cyc.new_full if st.grade in FULL_ALERT_GRADES else cyc.new_digest).append(st)
-                        if not cyc.dry:
+                        if not cyc.dry and st.grade in BOOK_GRADES:
                             cyc.state["setups"][sid] = rec
                     seen += 1
                     prev = rec["states"]
@@ -464,11 +463,18 @@ def scan(mt5, cyc: Cycle, symbols: list[str]) -> int:
                             if cur["state"] == "closed" and notify:
                                 cyc.updates.append(f"{'✅' if cur['R'] > 0 else '❌'} {st.grade} {st.sym} {NAMES[st.strat]} [{v}]: "
                                                    f"{cur['why'].upper()} {cur['R']:+.2f}R")
+                            if cur["state"] == "dead" and prev.get(v) not in ("open", "closed", "dead") and notify:
+                                # an order the alert told you about that will never fill: say so, or you wait for it
+                                why = {"invalidated": "qiymət zonanı pozdu (şam girişin o biri tərəfində bağlandı)",
+                                       "expired": "vaxtı bitdi, dolmadı",
+                                       "beyond stop": "qiymət stopdan keçdi"}.get(cur.get("why"), cur.get("why", ""))
+                                cyc.updates.append(f"⚪ {st.grade} {st.sym} {NAMES[st.strat]} limiti ləğv olundu: {why} "
+                                                   f"(giriş {fmt(st.sym, st.E)})")
                             prev[v] = cur["state"]
                     closed_all = all(stats[v]["state"] in ("closed", "dead", "skip") for v in VARIANTS)
                     if closed_all and not rec["scored"] and any(stats[v]["state"] == "closed" for v in VARIANTS):
                         cyc.state["closed"].append({"id": sid, "sym": st.sym, "strat": st.strat, "grade": st.grade, "day": st.day,
-                                                    "R_doc": stats["doc"].get("R"), "R_r2": stats["r2"].get("R")})
+                                                    "R_doc": None, "R_r2": stats["r2"].get("R")})
                         rec["scored"] = True
                     if any(stats[v]["state"] in ("pending", "open") for v in VARIANTS):
                         break           # an earlier candidate is still live: later ones in the group wait
@@ -525,10 +531,7 @@ def cycle(mt5, args, token: str, chat: str) -> int:
     ny_now = datetime.now(NY)
     today_key = int(datetime(ny_now.year, ny_now.month, ny_now.day).timestamp() // 86400)
     if ny_now.hour >= 16 and ny_now.weekday() < 5 and state.get("summary_day") != today_key and not args.dry_run:
-        msgs.append(book_summary(state, "📊 Paper nəticə · FundingPips"))
-        other = FEEDS["cfi" if FEED == "fp" else "fp"]["state"]
-        if Path(other).exists():
-            msgs.append(book_summary(json.loads(Path(other).read_text(encoding="utf8")), "📊 Paper nəticə · CFI" if FEED == "fp" else "📊 Paper nəticə · FundingPips"))
+        msgs.append(book_summary(state, f"📊 Paper nəticə · {FEED.upper()}"))
         state["summary_day"] = today_key
 
     print(f"{datetime.now():%H:%M:%S} scanned {seen} setups | new full {len(cyc.new_full)} digest {len(cyc.new_digest)} updates {len(cyc.updates)}", flush=True)

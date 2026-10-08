@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Tasks (folder \tradebot\ict\):
-        ict_signals      run_ict_signals.bat      python -m ict_lab.live --loop              FundingPips terminal, talks to Telegram
-        ict_signals_cfi  run_ict_signals_cfi.bat  python -m ict_lab.live --loop --feed cfi --silent   CFI terminal, paper book only
+        ict_signals      run_ict_signals.bat      FundingPips feed - DISABLED since 2026-10-08 (kept for reference)
+        ict_signals_cfi  run_ict_signals_cfi.bat  python -m ict_lab.live --loop --feed cfi   CFI terminal, talks to Telegram
     Both go through run_hidden.vbs (no console flash). Each loop scans the moment a new minute closes. The task
     trigger (every 5 minutes) is only a watchdog: while the loop runs MultipleInstances IgnoreNew drops the extra
     start, and if the loop dies the next trigger brings it back.
@@ -14,7 +14,8 @@
 #>
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$bats = @{ 'ict_signals' = 'run_ict_signals.bat'; 'ict_signals_cfi' = 'run_ict_signals_cfi.bat' }
+# Since 2026-10-08 only the CFI feed is live (it talks to Telegram). The FundingPips task is left DISABLED, not removed.
+$bats = @{ 'ict_signals_cfi' = 'run_ict_signals_cfi.bat' }
 foreach ($name in $bats.Keys) {
     $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}\run_hidden.vbs" "{0}\{1}"' -f $repo, $bats[$name]) -WorkingDirectory $repo
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 5)

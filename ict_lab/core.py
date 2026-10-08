@@ -385,7 +385,8 @@ def _smt(sym: Sym, mir: Mirror, s: int, j: int, xb: int) -> bool:
     return bool(np.nanmin(now) > np.nanmin(prior))
 
 
-def simulate(st: Setup, sym: Sym, variant: str):
+def simulate(st: Setup, sym: Sym, variant: str, r_mult: float = 2.0, be_at_r: float | None = None,
+             be_after: int | None = None):
     """Fill the setup on M1 bid/ask and trade it out; (R, fill_idx, exit_idx, why) or None if never filled."""
     m1 = sym.m1
     d = st.d
@@ -447,22 +448,30 @@ def simulate(st: Setup, sym: Sym, variant: str):
     if risk < MIN_RISK_SPREADS * sp[fi] or (fill - SL) * d <= 0:
         return None
     if variant == "r2":
-        tp = fill + d * 2 * risk
+        tp = fill + d * r_mult * risk
     else:
         tp = tp_doc
         if tp is None or abs(tp - fill) < 2 * risk or (tp - fill) * d <= 0:
             return "skip"
+    sl_now = SL
     for i in range(fi, n):
         if d == 1:
-            if l[i] <= SL:
-                return (-(fill - SL) / risk, fi, i, "sl")
+            if l[i] <= sl_now:
+                return (-(fill - sl_now) / risk, fi, i, "sl" if sl_now == SL else "be")
             if h[i] >= tp:
                 return ((tp - fill) / risk, fi, i, "tp")
+            # a stop moved to breakeven works from the NEXT bar: what happened first inside this one is unknown
+            if sl_now == SL and ((be_at_r is not None and h[i] >= fill + be_at_r * risk)
+                                 or (be_after is not None and i - fi >= be_after and c[i] > fill)):
+                sl_now = fill
         else:
-            if h[i] + sp[i] >= SL:
-                return (-(SL - fill) / risk, fi, i, "sl")
+            if h[i] + sp[i] >= sl_now:
+                return (-(sl_now - fill) / risk, fi, i, "sl" if sl_now == SL else "be")
             if l[i] + sp[i] <= tp:
                 return ((fill - tp) / risk, fi, i, "tp")
+            if sl_now == SL and ((be_at_r is not None and l[i] + sp[i] <= fill - be_at_r * risk)
+                                 or (be_after is not None and i - fi >= be_after and c[i] + sp[i] < fill)):
+                sl_now = fill
     last = n - 1
     px = c[last] if d == 1 else c[last] + sp[last]
     return ((px - fill) * d / risk, fi, last, "time")
