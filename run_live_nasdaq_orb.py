@@ -251,16 +251,22 @@ def _traded_setups_path(risk_dir: Path, symbol_tag: str, paper: bool) -> Path:
     return risk_dir / f"traded_setups_nasdaq_orb_{symbol_tag}{'_paper' if paper else ''}.json"
 
 
+# Positions of the bots this one runs beside on the same hedging account: the gold AMD bot
+# (SETUP_TAG in strategy/gold_amd.py). Neither blocks the other and neither manages the other's
+# trade. Written out rather than imported so this runner does not depend on the AMD strategy.
+SIBLING_TAGS = ("setup_amd",)
+
+
 def _partition_positions(
-    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG
+    positions: list[Position], symbol: str, tag: str = STRATEGY_TAG, siblings: tuple[str, ...] = SIBLING_TAGS
 ) -> tuple[list[Position], list[Position]]:
     """Splits this symbol's open positions into (ours, someone-else's) --
     see run_live_sr_bias.py's identical function for the full multi-bot-on-
-    one-account rationale.
+    one-account rationale. A sibling bot's position (SIBLING_TAGS) is neither.
     """
     same_symbol = [p for p in positions if p.symbol == symbol]
     mine = [p for p in same_symbol if p.comment.startswith(tag)]
-    foreign = [p for p in same_symbol if not p.comment.startswith(tag)]
+    foreign = [p for p in same_symbol if not p.comment.startswith(tag) and not p.comment.startswith(siblings)]
     return mine, foreign
 
 

@@ -146,12 +146,18 @@ def _attach_to_open_position(trade_manager: TradeManager, broker: IBroker, posit
     trade_manager._take_profit = position.take_profit
 
 
-def _partition_positions(positions: list[Position], symbol: str,
-                         tag: str = SETUP_TAG) -> tuple[list[Position], list[Position]]:
-    """This symbol's open positions split into (ours, someone else's)."""
+# Positions of the bots this one runs beside on the same hedging account: the XAUUSD breakout bot
+# (STRATEGY_TAG in run_live_nasdaq_orb.py). Neither blocks the other and neither manages the
+# other's trade; the account is HEDGING, so both may be open at once.
+SIBLING_TAGS = ("setup_nasdaq_orb_m1",)
+
+
+def _partition_positions(positions: list[Position], symbol: str, tag: str = SETUP_TAG,
+                         siblings: tuple[str, ...] = SIBLING_TAGS) -> tuple[list[Position], list[Position]]:
+    """This symbol's open positions split into (ours, someone else's); a sibling bot's are neither."""
     same_symbol = [p for p in positions if p.symbol == symbol]
     return ([p for p in same_symbol if p.comment.startswith(tag)],
-            [p for p in same_symbol if not p.comment.startswith(tag)])
+            [p for p in same_symbol if not p.comment.startswith(tag) and not p.comment.startswith(siblings)])
 
 
 def in_entry_window(ny_now: datetime, config: GoldAmdConfig) -> bool:
