@@ -243,7 +243,11 @@ def status(st: Setup, sym: Sym, variant: str, r_mult: float = 2.0) -> dict:
         if fill is not None and variant == "doc" and st.fib_ext:
             tp_fib = Y + d * st.fib_ext * abs(Y - X)
     if fill is None:
-        return {"state": "dead", "why": "expired"} if expired else {"state": "pending"}
+        if expired:
+            return {"state": "dead", "why": "expired"}
+        # the price a resting order would sit at right now (the order bot, ict_lab/execute.py, places it there)
+        limit = st.E if st.mode == "limit" else Y - d * st.fib_r * abs(Y - X) if st.mode == "fib" else None
+        return {"state": "pending", "limit": limit}
     risk = abs(fill - st.sl)
     if (fill - st.sl) * d <= 0:   # no 5-spread minimum here: every fill is shown, tiny stops are flagged in the alert
         return {"state": "dead", "why": "beyond stop"}
