@@ -90,6 +90,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def launcher_args(bat: Path) -> argparse.Namespace:
+    """The arguments a run_live_amd_*.bat launcher starts this bot with, read by this bot's parser.
+
+    For the reports and the stop-rule envelope, so they describe the bot that is really deployed.
+    """
+    import shlex
+
+    line = next(line for line in bat.read_text(encoding="utf-8").splitlines() if Path(__file__).name in line)
+    argv = shlex.split(line, posix=False)
+    return parse_args(argv[argv.index(Path(__file__).name) + 1:])
+
+
 def _ensure_explicit_demo_configuration() -> None:
     """Identical gate to run_live_nasdaq_orb.py -- see run_live_demo.py for the full rationale."""
     account_type = Settings.load().MT5_ACCOUNT_TYPE.strip().lower()

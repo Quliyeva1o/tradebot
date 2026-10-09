@@ -18,6 +18,24 @@
         "at_trades": 40,
         "min_net_r": -5.8
       }
+    },
+    "AmdGold_XAUUSD_Demo": {
+      "adopted": "2026-10-09T08:20:00+00:00",
+      "basis": "Fixed before the bot places its first Demo order (the user's call on 2026-10-09, ahead of the 20-30 paper trades the module docstring asked for, so the rule is deliberately tight). Bootstrap envelope (100000 draws, seed 20261009, scripts/amd_backtest.envelope) of scripts/amd_backtest.py on CFI's XAUUSD_ history, 2024-01-29..2026-10-06: 66 trades, PF 2.249, +26.4R, launcher flags (2R, min FVG 0.5, spread floor 0.15). The bot trades about two setups a month, so the windows are 20 and 40 trades, not the breakout bot's 40 and 80: p99 max drawdown 7.1R/20 and 8.6R/40, p05 net -0.4R at trade 20; the adopted values are rounded down to 7.0, 8.5 and -0.4 (stricter). Costs: spread charged, no swap (flat 15:55 New York), no commission on CFI. The 2024 sub-period alone is PF 1.10 (20 trades) and 2025-26 carries the edge, so a bad first 20 live trades is a real possibility, not a tail event.",
+      "stops": [
+        {
+          "within_trades": 20,
+          "max_drawdown_r": 7.0
+        },
+        {
+          "within_trades": 40,
+          "max_drawdown_r": 8.5
+        }
+      ],
+      "checkpoint": {
+        "at_trades": 20,
+        "min_net_r": -0.4
+      }
     }
   },
   "fundingpips": {

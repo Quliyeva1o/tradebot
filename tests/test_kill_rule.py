@@ -40,6 +40,16 @@ class TestAdoptedRuleIsPinned:
         assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -5.8)
         assert rule.horizon == 80
 
+    def test_the_gold_amd_rule_is_pinned_at_its_own_pace(self) -> None:
+        # ~2 setups a month, so 20 and 40 trades rather than 40 and 80; fixed before its first Demo order.
+        rule = kr.load_rules("cfi")["AmdGold_XAUUSD_Demo"]
+
+        assert rule.adopted == datetime(2026, 10, 9, 8, 20, tzinfo=UTC)
+        assert rule.stops == (kr.StopClause(20, 7.0), kr.StopClause(40, 8.5))
+        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (20, -0.4)
+        assert rule.horizon == 40
+        assert "AmdGold_XAUUSD_Demo" not in kr.load_rules("fundingpips")
+
     @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
     def test_the_bots_cut_took_their_rules_with_them(self, broker: str) -> None:
         # 2026-09-29: DJI30 inverse, SPX500 inverse and JP225 sweep left both accounts. 2026-10-02, on the

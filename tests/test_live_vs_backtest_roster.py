@@ -44,7 +44,8 @@ def test_every_bot_in_the_real_roster_has_a_deployed_bat():
     """A roster name the report cannot map to a .bat would silently drop out of the report."""
     names = report._roster(REPO / "deploy" / "demo_roster.txt")
     bats = {report._task_name(b.name) for b in [*REPO.glob("run_live_orb_*_demo.bat"),
-                                                *REPO.glob("run_live_fvg_*_demo.bat")]}
+                                                *REPO.glob("run_live_fvg_*_demo.bat"),
+                                                *REPO.glob("run_live_amd_*_demo.bat")]}
 
     assert names, "the real roster should not be empty"
     assert names <= bats
@@ -67,6 +68,7 @@ def test_reverse_trades_are_labelled_apart_from_their_bots_own():
     assert report._strategy_label("setup_nasdaq_orb_m1_sar884987") == "Breakout reversal"
     assert report._strategy_label("setup_xauusd_orb_sar12884987") == "Sweep reversal"
     assert report._strategy_label("setup_fvg_window_US1_1a2b3c4d") == "FvgWindow"
+    assert report._strategy_label("setup_amd_20261009_L") == "GoldAmd"
     assert report._strategy_label("manual") is None
 
 
@@ -76,7 +78,8 @@ def test_the_report_sees_every_bot_the_roster_deploys():
     bot is not an ORB config at all, so it is seen through its own launchers."""
     roster = report._roster(REPO / "deploy" / "demo_roster.txt")
     seen = ({c.task for c in report.deployed_configs()}
-            | {report._task_name(b.name) for b in report.deployed_fvg_launchers()})
+            | {report._task_name(b.name) for b in report.deployed_fvg_launchers()}
+            | {report._task_name(b.name) for b in report.deployed_amd_launchers()})
 
     assert roster <= seen
 

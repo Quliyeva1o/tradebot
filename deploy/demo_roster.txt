@@ -230,6 +230,16 @@
 # --- the bots allowed to place real orders ---
 OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 
+# 2026-10-09, THE USER'S CALL: the gold AMD bot takes a Demo slot on CFI beside the breakout bot, XAUUSD twice.
+# "One bot per symbol" exists because two bots on a symbol blocked each other (foreign_position_blocks_entry);
+# run_live_amd.py and run_live_nasdaq_orb.py now list each other's comment tag as a sibling, so on this HEDGING
+# account neither blocks the other and neither manages the other's trade (18 of 25 replayed AMD entries overlap
+# a breakout trade). Evidence, scripts/amd_backtest.py (find_entry, CFI XAUUSD_, 2024-01-29..2026-10-06): 66
+# trades, WR 59%, PF 2.25, +26.4R, max DD 3.4R; last 12 months PF 2.16 (25 trades); FundingPips 31 trades PF 2.40.
+# Weak spots, taken knowingly: 2024 alone PF 1.10, longs carry ~75% of the profit in a gold bull market, ~2
+# trades a month, best of ~100 cells. The stop rule (deploy/kill_rules.json) is tight for that reason.
+AmdGold_XAUUSD_Demo          cfi    # CFI XAUUSD_, NY-open sweep / 15m FVG / 5m MSS, 2R, flat 15:55 NY, 0.25% risk
+
 # 2026-10-02, THE USER'S CALL: FvgWindow_NDX100_Demo and the GER40 Demo bots (CFI breakout, FundingPips
 # sweep) are off the roster. Live went 0/5 on CFI GER40 and 0/5 on CFI FVG, and the live-twin replay
 # reproduced every one of those trades (same days, same stop levels) -- so it is the strategies, not

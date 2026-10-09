@@ -40,6 +40,7 @@ sys.path.append(str(Path(__file__).parent.parent.resolve()))
 import MetaTrader5 as mt5  # noqa: N813
 
 import config.brokers as machine
+import run_live_amd as amd_runner
 import run_live_first_fvg_window as fvg_runner
 from backtest.live_replay.brokers import deployed_broker, history_path
 from backtest.live_replay.configs import BotConfig, parse_bat, task_name
@@ -58,6 +59,8 @@ BREAKOUT_TAG = "setup_nasdaq_orb_m1"     # STRATEGY_TAG in run_live_nasdaq_orb.p
 SWEEP_TAG = "setup_xauusd_orb"           # STRATEGY_TAG in run_live_xauusd_orb.py
 FVG_TAG = "setup_fvg_window"             # STRATEGY_TAG in strategy/first_fvg_window.py
 FVG_FAMILY = "FvgWindow"
+AMD_TAG = "setup_amd"                    # SETUP_TAG in strategy/gold_amd.py
+AMD_FAMILY = "GoldAmd"
 
 
 def _strategy_label(comment: str) -> str | None:
@@ -71,6 +74,8 @@ def _strategy_label(comment: str) -> str | None:
             return f"{family} reversal" if is_reverse(comment, tag) else family
     if comment.startswith(FVG_TAG):
         return FVG_FAMILY
+    if comment.startswith(AMD_TAG):
+        return AMD_FAMILY
     return None
 
 
@@ -106,6 +111,28 @@ def deployed_fvg_launchers() -> list[Path]:
     """Every First FVG Demo launcher. The ORB replay cannot model this strategy, so these are
     reported beside deployed_configs() rather than parsed into BotConfigs."""
     return sorted(REPO.glob("run_live_fvg_*_demo.bat"))
+
+
+def deployed_amd_launchers() -> list[Path]:
+    """Every gold AMD Demo launcher (the Paper twin is run_live_amd_*_paper.bat and never matches)."""
+    return sorted(REPO.glob("run_live_amd_*_demo.bat"))
+
+
+def amd_baseline() -> dict:
+    """What the gold AMD backtest (scripts/amd_backtest.py, find_entry over this machine's broker) expects,
+    or {} without history."""
+    from scripts.amd_backtest import backtest_trades
+
+    frame = backtest_trades(deployed_broker().name)
+    if frame.empty:
+        return {}
+    t = list(zip(frame["day"], frame["r"]))
+    n, wr, pf, net = agg([v for _, v in t])
+    since = date.today() - timedelta(days=365)
+    n1, wr1, pf1, net1 = agg([v for d, v in t if d >= since])
+    span_months = max((max(d for d, _ in t) - min(d for d, _ in t)).days / 30.4, 1)
+    return dict(n=n, wr=wr, pf=pf, net=net, wr_1y=wr1, pf_1y=pf1,
+                green=consistency(t)["green_pct"], per_month=len(t) / span_months)
 
 
 def fvg_baseline() -> dict:
@@ -334,6 +361,23 @@ def main() -> None:
         if task in rules:
             rule = rules[task]
             for line in kill_rule.report_lines(rule, kill_rule.fetch_live_trades(rule, ticker, FVG_TAG)):
+                print(line)
+
+    for bat in deployed_amd_launchers():
+        task = _task_name(bat.name)
+        if roster is not None and task not in roster:
+            print(f"\n### {task}   -- {profile.name} hesabinin rosterinde yoxdur, atlanir")
+            continue
+        args = amd_runner.launcher_args(bat)
+        ticker = profile.ticker(args.symbol)
+        rows = [r for r in live.get(ticker, []) if r["strategy"] == AMD_FAMILY]
+        label = f"NY-open sweep / 15m FVG / 5m MSS / {args.tp_r:g}R"
+        n, pnl = _report_bot(ticker, AMD_FAMILY, label, args.risk_per_trade_pct, rows, amd_baseline())
+        total_n += n
+        total_profit += pnl
+        if task in rules:
+            rule = rules[task]
+            for line in kill_rule.report_lines(rule, kill_rule.fetch_live_trades(rule, ticker, AMD_TAG)):
                 print(line)
 
     print("\n" + "-" * 104)

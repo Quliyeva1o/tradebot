@@ -75,7 +75,9 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
 
 
 SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo"}
-DEMO_BOTS_BY_BROKER = {"cfi": set(SHARED_DEMO_BOTS), "fundingpips": set(SHARED_DEMO_BOTS)}
+# 2026-10-09, on the user's call: the gold AMD bot joins the breakout bot on CFI XAUUSD (siblings, see run_live_amd.SIBLING_TAGS)
+CFI_ONLY_DEMO_BOTS = {"AmdGold_XAUUSD_Demo"}
+DEMO_BOTS_BY_BROKER = {"cfi": set(SHARED_DEMO_BOTS) | CFI_ONLY_DEMO_BOTS, "fundingpips": set(SHARED_DEMO_BOTS)}
 DEMO_BOTS = DEMO_BOTS_BY_BROKER["cfi"] | DEMO_BOTS_BY_BROKER["fundingpips"]
 
 
@@ -91,7 +93,8 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     leaving the weekend-flat XAUUSD bot alone -- the live-twin replay had reproduced every one of
     their losing live trades, so it was the strategies. The roster file's own comment blocks carry
     the numbers."""
-    assert load_roster(REPO) == dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"}))
+    assert load_roster(REPO) == {**dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"})),
+                                 **dict.fromkeys(CFI_ONLY_DEMO_BOTS, frozenset({"cfi"}))}
 
 
 def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: Path) -> None:
@@ -105,15 +108,16 @@ def test_a_task_may_be_rostered_on_both_accounts_each_on_its_own_line(tmp_path: 
 
 @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
 def test_one_demo_bot_per_symbol(broker: str) -> None:
-    """Two bots on one symbol read each other's position as foreign and block each other.
+    """Two bots of one runner on one symbol read each other's position as foreign and block each other.
+    The gold AMD bot is exempt on purpose: it and the breakout bot list each other as siblings.
 
     Per account: GER40 has a different Demo bot on each broker, never two on one."""
     bots = {task for task, brokers in load_roster(REPO).items() if broker in brokers}
     assert bots == DEMO_BOTS_BY_BROKER[broker]
     symbols = [launcher_symbol(bat) for bat in [*REPO.glob("run_live_orb_*_demo.bat"),
                                                 *REPO.glob("run_live_fvg_*_demo.bat")]
-               if task_name(bat.name) in bots]
-    assert sorted(symbols) == sorted(set(symbols)) and len(symbols) == len(bots)
+               if task_name(bat.name) in bots - CFI_ONLY_DEMO_BOTS]
+    assert sorted(symbols) == sorted(set(symbols)) and len(symbols) == len(bots - CFI_ONLY_DEMO_BOTS)
 
 
 def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
@@ -147,7 +151,7 @@ def test_every_live_bot_risks_a_quarter_percent() -> None:
     Every Demo bot since has evidence no stronger, so none risks more -- see the roster."""
     live = [c for c in scope(REPO) if not c.paper]
     assert {(c.task, c.risk_pct) for c in live} == {
-        (task, 0.0025) for task in DEMO_BOTS if task != "FvgWindow_NDX100_Demo"}
+        (task, 0.0025) for task in DEMO_BOTS - CFI_ONLY_DEMO_BOTS if task != "FvgWindow_NDX100_Demo"}  # AMD: tests/test_amd_backtest.py reads its launcher
 
 
 def test_no_bot_that_places_real_orders_reverses_on_a_stop() -> None:
