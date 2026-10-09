@@ -50,6 +50,7 @@ from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
 from mt5.rates import BROKER_TZ
+from notifications.demo_alert import send_alert
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
@@ -219,6 +220,23 @@ def _attach_to_open_position(trade_manager: TradeManager, broker: IBroker, posit
 
 def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
+    _telegram_alert(event, fields)
+
+
+# Only Demo bots talk: the paper twins would double every message.
+_ALERT_TITLES = {
+    "trade_opened": "ORB: trade opened",
+    "closed": "ORB: trade closed",
+    "closed_weekend_flat": "ORB: closed for the weekend",
+    "trade_open_rejected": "ORB: ORDER REJECTED",
+    "close_failed": "ORB: CLOSE FAILED",
+    "signal_blocked_kill_switch": "ORB: signal blocked by the kill switch",
+}
+
+
+def _telegram_alert(event: str, fields: dict) -> None:
+    if _CURRENT_MODE == "live" and event in _ALERT_TITLES:
+        send_alert(_ALERT_TITLES[event], fields)
 
 
 # Every setup_id NasdaqOrbM1BreakoutStrategy emits starts with this (see
@@ -463,7 +481,7 @@ def _evaluate_for_new_trade(
         # compute this trade's real R-multiple; the broker's own close comment
         # only carries whichever level was hit, which is not enough on its own.
         sl, tp = resolve_stop_and_target(setup)
-        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id,
+        _log_trade_event("trade_opened", symbol=symbol, direction=setup.direction.name, setup_id=setup.setup_id,
                          order_id=order.order_id, fill_price=order.fill_price,
                          stop_loss=sl, take_profit=tp,
                          bars_since_signal=bars_since_signal)

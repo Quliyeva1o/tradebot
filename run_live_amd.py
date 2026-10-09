@@ -44,6 +44,7 @@ from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
+from notifications.demo_alert import send_alert
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.gold_amd import SETUP_TAG, GoldAmdConfig, GoldAmdStrategy
@@ -144,6 +145,24 @@ def _bot_tag(symbol: str, variant: str | None) -> str:
 
 def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
+    _telegram_alert(event, fields)
+
+
+# Only the Demo bot talks: the paper twins would double every message.
+_ALERT_TITLES = {
+    "trade_opened": "AMD gold: trade opened",
+    "closed": "AMD gold: trade closed",
+    "closed_session_end": "AMD gold: closed at the session end",
+    "trade_open_rejected": "AMD gold: ORDER REJECTED",
+    "close_failed": "AMD gold: CLOSE FAILED",
+    "signal_blocked_kill_switch": "AMD gold: signal blocked by the kill switch",
+}
+
+
+def _telegram_alert(event: str, fields: dict) -> None:
+    if _CURRENT_MODE != "live" or event not in _ALERT_TITLES:
+        return
+    send_alert(_ALERT_TITLES[event], fields)
 
 
 def _direction_from_order_type(order_type: OrderType) -> SignalDirection:
@@ -279,7 +298,7 @@ def _open_if_signal(trade_manager: TradeManager, broker: IBroker, strategy: Gold
         record_traded(traded_setups_path, setup.setup_id)
         sl, tp = resolve_stop_and_target(setup)
         logger.info("Trade opened for %s: order_id=%s fill_price=%.5f", symbol, order.order_id, order.fill_price)
-        _log_trade_event("trade_opened", symbol=symbol, setup_id=setup.setup_id, order_id=order.order_id,
+        _log_trade_event("trade_opened", symbol=symbol, direction=setup.direction.name, setup_id=setup.setup_id, order_id=order.order_id,
                          fill_price=order.fill_price, stop_loss=sl, take_profit=tp, seconds_since_signal=age)
         _log_sizing(symbol, trade_manager, setup.setup_id)
     else:
