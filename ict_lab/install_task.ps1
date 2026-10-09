@@ -15,7 +15,8 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 # Since 2026-10-08 only the CFI feed is live (it talks to Telegram). The FundingPips task is left DISABLED, not removed.
-$bats = @{ 'ict_signals_cfi' = 'run_ict_signals_cfi.bat' }
+# 2026-10-09 (the user's call): ict_exec_cfi places the A+ setups as real orders on the CFI DEMO account, US100 only.
+$bats = @{ 'ict_signals_cfi' = 'run_ict_signals_cfi.bat'; 'ict_exec_cfi' = 'run_ict_execute_demo_cfi.bat' }
 foreach ($name in $bats.Keys) {
     $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}\run_hidden.vbs" "{0}\{1}"' -f $repo, $bats[$name]) -WorkingDirectory $repo
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 5)
