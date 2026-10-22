@@ -164,6 +164,29 @@ def test_never_places_the_same_setup_twice(tmp_path):
     assert len(broker.placed) == 1
 
 
+TWIN = "NDX100|pdh_pdl_raid|20733|ny_am|1|pdl|1791383100"
+
+
+def test_two_models_on_the_same_zone_place_one_order(tmp_path):
+    ex, broker = make(tmp_path)
+    ex.reconcile([cand(), cand(sid=TWIN, strat="pdh_pdl_raid")], NOW)
+    ex.reconcile([cand(), cand(sid=TWIN, strat="pdh_pdl_raid")], NOW + timedelta(minutes=1))
+    assert len(broker.placed) == 1
+    assert [f["reason"] for k, f in events if k == "skip"] == ["same_trade_as_other_model"]   # reported once
+    # a different stop is a different trade
+    ex.reconcile([cand(sid=TWIN + "x", strat="pdh_pdl_raid", sl=30_340.0)], NOW + timedelta(minutes=2))
+    assert len(broker.placed) == 2
+
+
+def test_the_twin_takes_the_trade_when_the_first_model_dies(tmp_path):
+    ex, broker = make(tmp_path)
+    ex.reconcile([cand(), cand(sid=TWIN, strat="pdh_pdl_raid")], NOW)
+    ex.reconcile([cand(state="dead", why="zone broken"), cand(sid=TWIN, strat="pdh_pdl_raid")], NOW + timedelta(minutes=1))
+    ex.reconcile([cand(state="dead"), cand(sid=TWIN, strat="pdh_pdl_raid")], NOW + timedelta(minutes=2))
+    assert len(broker.placed) == 2 and broker.placed[1].comment == E.tag_of(TWIN)
+    assert len(broker.pending) == 1
+
+
 def test_a_setup_first_seen_late_is_not_chased(tmp_path):
     ex, broker = make(tmp_path)
     ex.reconcile([cand(sig_ts=int((NOW - timedelta(minutes=40)).timestamp()))], NOW)
@@ -209,7 +232,7 @@ def test_the_minimum_lot_may_not_overshoot_the_risk(tmp_path):
 def test_the_total_risk_cap_stops_a_pile_up(tmp_path):
     ex, broker = make(tmp_path, max_total_risk_pct=0.004)                    # room for one 0.25% trade only
     first = cand()
-    second = cand(sid="NDX100|model_2022|20733|ny_am|1|swing|1791383100", strat="model_2022")
+    second = cand(sid="NDX100|model_2022|20733|ny_am|1|swing|1791383100", strat="model_2022", sl=30_345.0)
     ex.reconcile([first, second], NOW)
     assert len(broker.placed) == 1
     assert any(k == "skip" and f["reason"] == "risk_cap" for k, f in events)

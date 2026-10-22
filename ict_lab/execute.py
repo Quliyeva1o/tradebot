@@ -199,6 +199,7 @@ class Executor:
         self.state = self._load()
         self._report = report or self._default_report
         self.sizer = PositionSizer(risk_per_trade_pct=args.risk_per_trade_pct)
+        self._dup_reported: set[str] = set()
 
     # ------------------------------------------------------------------ state / events
     def _load(self) -> dict:
@@ -336,6 +337,15 @@ class Executor:
             self.event("skip", sid=c.sid, reason="limit_beyond_stop", limit=limit, sl=sl)
             self.state["setups"][c.sid] = self._skipped(c, "limit_beyond_stop")
             return
+        twin = self._same_trade(c, limit, sl)
+        if twin is not None:
+            # Several models often find the same zone (2026-10-13: ny_open_cbdr and pdh_pdl_raid sent two identical
+            # US100 orders, double the risk on one idea). Not recorded as skipped: if the twin's order is cancelled,
+            # this setup may still take the trade on a later cycle.
+            if c.sid not in self._dup_reported:
+                self._dup_reported.add(c.sid)
+                self.event("skip", sid=c.sid, reason="same_trade_as_other_model", twin=twin, limit=limit, sl=sl)
+            return
         quote = self.market.quote(c.ticker)
         if quote is None:
             self.event("skip", sid=c.sid, reason="no_quote")
@@ -391,6 +401,14 @@ class Executor:
                    strat=c.strat, win=c.win, side="BUY" if c.d == 1 else "SELL", limit=limit, sl=sl, tp=tp, volume=volume,
                    risk_money=round(sizing.actual_risk, 2), risk_multiple=round(sizing.risk_multiple, 2),
                    age_min=round(age_min, 1), retcode=result.retcode, comment=result.comment)
+
+    def _same_trade(self, c: Candidate, limit: float, sl: float) -> str | None:
+        """Another setup's live order or position with this symbol, side, limit and stop -- the same trade twice."""
+        for sid, rec in self.state["setups"].items():
+            if (sid != c.sid and rec.get("status") in ("pending", "filled") and rec.get("ticker") == c.ticker
+                    and rec.get("d") == c.d and rec.get("limit") == limit and rec.get("sl") == sl):
+                return sid
+        return None
 
     @staticmethod
     def _skipped(c: Candidate, reason: str) -> dict:
