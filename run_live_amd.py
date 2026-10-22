@@ -149,6 +149,8 @@ def _log_trade_event(event: str, **fields: object) -> None:
 
 
 # Only the Demo bot talks: the paper twins would double every message.
+# The red heart marks the AMD bot's messages in a chat the paper bots now share (the user's call, 2026-10-22).
+AMD_MARK = "❤️"
 _ALERT_TITLES = {
     "trade_opened": "AMD gold: trade opened",
     "closed": "AMD gold: trade closed",
@@ -162,7 +164,7 @@ _ALERT_TITLES = {
 def _telegram_alert(event: str, fields: dict) -> None:
     if _CURRENT_MODE != "live" or event not in _ALERT_TITLES:
         return
-    send_alert(_ALERT_TITLES[event], fields)
+    send_alert(f"{AMD_MARK} {_ALERT_TITLES[event]}", fields)
 
 
 def _direction_from_order_type(order_type: OrderType) -> SignalDirection:
