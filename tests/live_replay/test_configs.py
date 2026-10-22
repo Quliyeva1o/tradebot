@@ -74,7 +74,8 @@ def test_a_weekend_flat_twin_is_a_different_configuration(tmp_path: Path) -> Non
     assert plain.key != flat.key
 
 
-SHARED_DEMO_BOTS = {"OrbBreakoutwf_XAUUSD_Demo"}
+# 2026-10-22, on the user's call: the weekend-flat XAUUSD breakout bot left both accounts; it trades on paper.
+SHARED_DEMO_BOTS: set[str] = set()
 # 2026-10-09, on the user's call: the gold AMD bot joins the breakout bot on CFI XAUUSD (siblings, see run_live_amd.SIBLING_TAGS)
 CFI_ONLY_DEMO_BOTS = {"AmdGold_XAUUSD_Demo"}
 DEMO_BOTS_BY_BROKER = {"cfi": set(SHARED_DEMO_BOTS) | CFI_ONLY_DEMO_BOTS, "fundingpips": set(SHARED_DEMO_BOTS)}
@@ -91,8 +92,9 @@ def test_the_roster_lists_the_demo_bots_that_may_trade() -> None:
     accounts, negative over the full replay window on both brokers, and their slots stay empty.
     2026-10-02, on the user's call: the First FVG bot and GER40's Demo bots left both accounts,
     leaving the weekend-flat XAUUSD bot alone -- the live-twin replay had reproduced every one of
-    their losing live trades, so it was the strategies. The roster file's own comment blocks carry
-    the numbers."""
+    their losing live trades, so it was the strategies. 2026-10-22, on the user's call: the XAUUSD
+    bot left too, and the gold AMD bot on CFI is the only Demo bot. The roster file's own comment
+    blocks carry the numbers."""
     assert load_roster(REPO) == {**dict.fromkeys(SHARED_DEMO_BOTS, frozenset({"cfi", "fundingpips"})),
                                  **dict.fromkeys(CFI_ONLY_DEMO_BOTS, frozenset({"cfi"}))}
 
@@ -124,8 +126,9 @@ def test_scope_is_every_distinct_configuration_the_repo_deploys() -> None:
     # The deployed ORB Demo bots, plus every Paper configuration that is not one of their twins.
     # A twin -- same CFI ticker, same parameters, only the risk differs -- is covered by its Demo
     # entry, as a twin always has been.
+    # Since 2026-10-22 no ORB bot holds a Demo slot, so the XAUUSD weekend-flat bot is its Paper launcher.
     assert {c.task for c in scope(REPO)} == {
-        "OrbBreakoutwf_XAUUSD_Demo", "OrbSweep_GER40_Paper", "OrbBreakout_GER40_Paper",
+        "OrbBreakoutwf_XAUUSD_Paper", "OrbSweep_GER40_Paper", "OrbBreakout_GER40_Paper",
         "OrbBreakout_XAUUSD_Paper", "OrbSweep_XAUUSD_Paper",
         "OrbBreakout_NDX100_Paper", "OrbBreakout_SPX500_Paper", "OrbBreakout_DJI30_Paper",
         "OrbBreakout_JP225_Paper", "OrbSweep_JP225_Paper",
@@ -156,7 +159,7 @@ def test_every_live_bot_risks_a_quarter_percent() -> None:
 
 def test_no_bot_that_places_real_orders_reverses_on_a_stop() -> None:
     """--reverse-on-stop 0.5 risks 1R to make 0.5R: it needs 66.7% wins and gets 62.3%."""
-    assert {c.reverse_on_stop_r for c in scope(REPO) if not c.paper} == {None}
+    assert {c.reverse_on_stop_r for c in scope(REPO) if not c.paper} <= {None}   # empty since 2026-10-22
     assert not any("--reverse-on-stop" in p.read_text(encoding="utf-8")
                    for p in REPO.glob("run_live_orb_*.bat"))
 

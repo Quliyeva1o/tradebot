@@ -57,6 +57,7 @@ from execution.position_sizer import PositionSizer
 from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
+from notifications.demo_alert import send_alert
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.first_fvg_window import (
@@ -97,6 +98,18 @@ class Quote:
 
 def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
+    if event in _ALERT_TITLES:
+        send_alert(_ALERT_TITLES[event], fields, paper=_CURRENT_MODE != "live")
+
+
+# The stop and the target live on the order, so there is no close event to report.
+_ALERT_TITLES = {
+    "order_placed": "First FVG: limit order placed",
+    "entered_at_market": "First FVG: entered at market",
+    "order_cancelled": "First FVG: order cancelled",
+    "order_rejected": "First FVG: ORDER REJECTED",
+    "signal_blocked_kill_switch": "First FVG: signal blocked by the kill switch",
+}
 
 
 def _todays_plan(connector: MT5Connector, symbol: str, cfg: FirstFvgWindowConfig, now: datetime) -> FvgPlan | None:

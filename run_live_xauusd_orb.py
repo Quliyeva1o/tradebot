@@ -59,6 +59,7 @@ from execution.trade_manager import TradeManager
 from execution.traded_setups import already_traded, record_traded
 from mt5 import clock
 from mt5.connector import MT5Connector, WrongBrokerError, ensure_logged_into, resolve_ticker
+from notifications.demo_alert import send_alert
 from risk.daily_risk_tracker import DailyRiskTracker
 from risk.kill_switch import activate_kill_switch, is_trading_halted
 from strategy.diagnostics import top_rejection_reasons
@@ -200,6 +201,17 @@ def _attach_to_open_position(trade_manager: TradeManager, broker: IBroker, posit
 
 def _log_trade_event(event: str, **fields: object) -> None:
     trade_events_logger.info({"event_type": event, "mode": _CURRENT_MODE, **fields})
+    if event in _ALERT_TITLES:
+        send_alert(_ALERT_TITLES[event], fields, paper=_CURRENT_MODE != "live")
+
+
+_ALERT_TITLES = {
+    "trade_opened": "ORB sweep: trade opened",
+    "closed": "ORB sweep: trade closed",
+    "trade_open_rejected": "ORB sweep: ORDER REJECTED",
+    "close_failed": "ORB sweep: CLOSE FAILED",
+    "signal_blocked_kill_switch": "ORB sweep: signal blocked by the kill switch",
+}
 
 
 # Every setup_id XauusdOrbLiquiditySweepStrategy emits starts with this (see

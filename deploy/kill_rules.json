@@ -1,24 +1,5 @@
 {
   "cfi": {
-    "OrbBreakoutwf_XAUUSD_Demo": {
-      "adopted": "2026-09-21T06:59:21+00:00",
-      "basis": "Fixed before the first live trade, in commit 0abd3a5 (whose timestamp is 'adopted'). Bootstrap envelopes of the 1-year CFI replay of the Paper twin, artifacts/orb_1y/cfi/OrbBreakoutwf_XAUUSD_Paper_trades.csv: 125 trades, +34.5R. Each stop is the p99 max drawdown of the full-year envelope over that many trades; the checkpoint is its p05 net. See deploy/demo_roster.txt.",
-      "rechecked": "2026-09-22, after the broker clock fix (core/broker_clock.py): that replay was read on Europe/Bucharest time, an hour off the server's New York close time for about three weeks a year. Re-replayed on the right clock, same window (2025-09-19..2026-09-18): 119 trades, +31.5R, PF 1.473. scripts/fvg_window_envelope.envelope (100000 draws, seed 20260922) gives p99 DD 17.4R/40 and 22.3R/80, p05 net -5.9R@40 -- against 17.3/22.2/-5.8 from the same method on the old replay. Within bootstrap noise, so the adopted whole-R values stand; raising them after a live trade would be loosening a pre-registered rule.",
-      "stops": [
-        {
-          "within_trades": 40,
-          "max_drawdown_r": 17.0
-        },
-        {
-          "within_trades": 80,
-          "max_drawdown_r": 22.0
-        }
-      ],
-      "checkpoint": {
-        "at_trades": 40,
-        "min_net_r": -5.8
-      }
-    },
     "AmdGold_XAUUSD_Demo": {
       "adopted": "2026-10-09T08:20:00+00:00",
       "basis": "Fixed before the bot places its first Demo order (the user's call on 2026-10-09, ahead of the 20-30 paper trades the module docstring asked for, so the rule is deliberately tight). Bootstrap envelope (100000 draws, seed 20261009, scripts/amd_backtest.envelope) of scripts/amd_backtest.py on CFI's XAUUSD_ history, 2024-01-29..2026-10-06: 66 trades, PF 2.249, +26.4R, launcher flags (2R, min FVG 0.5, spread floor 0.15). The bot trades about two setups a month, so the windows are 20 and 40 trades, not the breakout bot's 40 and 80: p99 max drawdown 7.1R/20 and 8.6R/40, p05 net -0.4R at trade 20; the adopted values are rounded down to 7.0, 8.5 and -0.4 (stricter). Costs: spread charged, no swap (flat 15:55 New York), no commission on CFI. The 2024 sub-period alone is PF 1.10 (20 trades) and 2025-26 carries the edge, so a bad first 20 live trades is a real possibility, not a tail event.",
@@ -38,24 +19,5 @@
       }
     }
   },
-  "fundingpips": {
-    "OrbBreakoutwf_XAUUSD_Demo": {
-      "adopted": "2026-09-22T13:52:21+00:00",
-      "basis": "Fixed before the bot placed any order on the FundingPips account. Bootstrap envelopes (100000 draws, seed 20260922, scripts/fvg_window_envelope.envelope) of the 1-year FundingPips replay of the Paper twin, 2025-09-19..2026-09-18 (artifacts/orb_1y/fundingpips): 118 trades, PF 1.463, +31.1R -- the same basis as this task's CFI rule, on FundingPips' own prices, spread, swap and commission. Each stop is the p99 max drawdown over that many trades; the checkpoint is the p05 net. See deploy/demo_roster.txt.",
-      "stops": [
-        {
-          "within_trades": 40,
-          "max_drawdown_r": 17.6
-        },
-        {
-          "within_trades": 80,
-          "max_drawdown_r": 22.6
-        }
-      ],
-      "checkpoint": {
-        "at_trades": 40,
-        "min_net_r": -6.1
-      }
-    }
-  }
+  "fundingpips": {}
 }

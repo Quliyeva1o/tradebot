@@ -32,14 +32,6 @@ def _trades(rs: list[float]) -> list[kr.LiveTrade]:
 
 
 class TestAdoptedRuleIsPinned:
-    def test_the_live_bots_numbers_are_the_ones_fixed_before_its_first_trade(self) -> None:
-        rule = kr.load_rules("cfi")["OrbBreakoutwf_XAUUSD_Demo"]
-
-        assert rule.adopted == datetime(2026, 9, 21, 6, 59, 21, tzinfo=UTC)   # commit 0abd3a5
-        assert rule.stops == (kr.StopClause(40, 17.0), kr.StopClause(80, 22.0))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -5.8)
-        assert rule.horizon == 80
-
     def test_the_gold_amd_rule_is_pinned_at_its_own_pace(self) -> None:
         # ~2 setups a month, so 20 and 40 trades rather than 40 and 80; fixed before its first Demo order.
         rule = kr.load_rules("cfi")["AmdGold_XAUUSD_Demo"]
@@ -55,21 +47,14 @@ class TestAdoptedRuleIsPinned:
         # 2026-09-29: DJI30 inverse, SPX500 inverse and JP225 sweep left both accounts. 2026-10-02, on the
         # user's call: the First FVG bot and GER40's Demo bots (CFI breakout, FundingPips sweep) left too,
         # after live went 0/5 on CFI GER30 and 0/5 on CFI FVG and the live-twin replay reproduced every
-        # trade (deploy/demo_roster.txt). A rule outliving its bot would be judged by the weekly report
+        # trade (deploy/demo_roster.txt). 2026-10-22, the user's call: the XAUUSD breakout wf bot left both
+        # accounts, AMD gold is the only Demo bot. A rule outliving its bot would be judged by the weekly report
         # against trades no bot of that name places any more; the numbers stay in git history.
         rules = kr.load_rules(broker)
 
         assert not {"OrbBreakoutinv_DJI30_Demo", "OrbBreakoutinv_SPX500_Demo", "OrbSweep_JP225_Demo",
-                    "FvgWindow_NDX100_Demo", "OrbBreakout_GER40_Demo", "OrbSweep_GER40_Demo"} & set(rules)
-
-    def test_the_fundingpips_rule_is_pinned_and_is_not_cfis(self) -> None:
-        # The same task on FundingPips' own prices, fixed before that account's first order.
-        rule = kr.load_rules("fundingpips")["OrbBreakoutwf_XAUUSD_Demo"]
-
-        assert rule.adopted == datetime(2026, 9, 22, 13, 52, 21, tzinfo=UTC)
-        assert rule.stops == (kr.StopClause(40, 17.6), kr.StopClause(80, 22.6))
-        assert (rule.checkpoint_at, rule.checkpoint_min_net_r) == (40, -6.1)
-        assert rule != kr.load_rules("cfi")["OrbBreakoutwf_XAUUSD_Demo"]
+                    "FvgWindow_NDX100_Demo", "OrbBreakout_GER40_Demo", "OrbSweep_GER40_Demo",
+                    "OrbBreakoutwf_XAUUSD_Demo"} & set(rules)
 
     @pytest.mark.parametrize("broker", ["cfi", "fundingpips"])
     def test_every_rule_names_a_bot_the_roster_deploys_on_that_account(self, broker: str) -> None:

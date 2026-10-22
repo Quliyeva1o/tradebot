@@ -223,7 +223,7 @@ def _log_trade_event(event: str, **fields: object) -> None:
     _telegram_alert(event, fields)
 
 
-# Only Demo bots talk: the paper twins would double every message.
+# Since 2026-10-22 no ORB bot holds a Demo slot, so the Paper bots talk too (titled PAPER).
 _ALERT_TITLES = {
     "trade_opened": "ORB: trade opened",
     "closed": "ORB: trade closed",
@@ -235,8 +235,8 @@ _ALERT_TITLES = {
 
 
 def _telegram_alert(event: str, fields: dict) -> None:
-    if _CURRENT_MODE == "live" and event in _ALERT_TITLES:
-        send_alert(_ALERT_TITLES[event], fields)
+    if event in _ALERT_TITLES:
+        send_alert(_ALERT_TITLES[event], fields, paper=_CURRENT_MODE != "live")
 
 
 # Every setup_id NasdaqOrbM1BreakoutStrategy emits starts with this (see

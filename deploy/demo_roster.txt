@@ -228,7 +228,12 @@
 # Replay code and the full month-by-month table: the 2026-09-29 session's scratchpad (trades_3y.py).
 
 # --- the bots allowed to place real orders ---
-OrbBreakoutwf_XAUUSD_Demo    cfi    # CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
+# 2026-10-22, THE USER'S CALL: only the gold AMD bot keeps Demo orders; everything else goes back to paper.
+# A one-month live-twin replay (21.09-21.10, CFI prices) reproduced every live trade where the bots were up --
+# the losses are the strategies', not execution's: XAUUSD breakout wf -3.3R over the month (13 trades, 2 TP),
+# CFI last 6 months PF 0.95. Its Paper twin (OrbBreakoutwf_XAUUSD_Paper) keeps running. The ICT A+ demo order bot
+# (ict_exec_cfi, not a roster task) was disabled the same day; the ict_signals_cfi paper book keeps running.
+#   OrbBreakoutwf_XAUUSD_Demo    cfi    # was CFI XAUUSD_, 60m OR / M1 / 3R, weekend-flat, no reverse, 0.25% risk
 
 # 2026-10-09, THE USER'S CALL: the gold AMD bot takes a Demo slot on CFI beside the breakout bot, XAUUSD twice.
 # "One bot per symbol" exists because two bots on a symbol blocked each other (foreign_position_blocks_entry);
@@ -250,4 +255,4 @@ AmdGold_XAUUSD_Demo          cfi    # CFI XAUUSD_, NY-open sweep / 15m FVG / 5m 
 #   FvgWindow_NDX100_Demo        fundingpips    # was FundingPips NDX100
 #   OrbSweep_GER40_Demo          fundingpips    # was FundingPips GER40
 
-OrbBreakoutwf_XAUUSD_Demo    fundingpips    # FundingPips XAUUSD, same launcher
+#   OrbBreakoutwf_XAUUSD_Demo    fundingpips    # was FundingPips XAUUSD, same launcher (off 2026-10-22, see above)

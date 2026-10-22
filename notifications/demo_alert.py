@@ -1,4 +1,4 @@
-"""Telegram alerts for the Demo runners' trade events.
+"""Telegram alerts for the runners' trade events, Demo and Paper (a Paper alert says PAPER in its title).
 
 Sends to DEMO_TG_CHAT_ID (and DEMO_TG_TOKEN, else the ICT bot's ICT_TG_TOKEN, the only Telegram bot in .env that works).
 Sending never raises: an alert must not break a poll.
@@ -12,10 +12,10 @@ from utils.logging import setup_logger
 
 logger = setup_logger("demo_alert")
 
-_FIELDS = ("symbol", "direction", "fill_price", "stop_loss", "take_profit", "outcome", "reason")
+_FIELDS = ("symbol", "direction", "fill_price", "limit", "stop_loss", "take_profit", "outcome", "reason")
 
 
-def send_alert(title: str, fields: dict) -> None:
+def send_alert(title: str, fields: dict, paper: bool = False) -> None:
     if "PYTEST_CURRENT_TEST" in os.environ:   # the runners' module default mode is "live"; tests must stay silent
         return
     try:
@@ -28,6 +28,8 @@ def send_alert(title: str, fields: dict) -> None:
         chat = env.get("DEMO_TG_CHAT_ID") or env.get("ICT_TG_CHAT_ID", "")
         if not (token and chat):
             return
+        if paper:
+            title = f"PAPER · {title}"
         try:
             from config.brokers import local
             title = f"{title} [{local().name}]"
